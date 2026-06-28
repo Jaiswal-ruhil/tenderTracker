@@ -1,0 +1,84 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      - name: Build Windows executable
+        shell: cmd
+        run: |
+          pyinstaller --onefile --name "TenderTracker" --hidden-import pandas --hidden-import openpyxl --hidden-import openpyxl.styles --hidden-import openpyxl.utils --noconsole main.py
+
+      - name: Sign executable (self-signed — Ruhil Jaiswal)
+        shell: powershell
+        run: |
+          $cert = New-SelfSignedCertificate `
+            -Type CodeSigning `
+            -Subject "CN=Ruhil Jaiswal, O=Ruhil Jaiswal, L=India" `
+            -FriendlyName "Ruhil Jaiswal Code Signing" `
+            -CertStoreLocation Cert:\CurrentUser\My `
+            -HashAlgorithm SHA256 `
+            -NotAfter (Get-Date).AddYears(5)
+          Set-AuthenticodeSignature `
+            -FilePath "dist\TenderTracker.exe" `
+            -Certificate $cert `
+            -HashAlgorithm SHA256
+          Write-Host "Signed as: $($cert.Subject)"
+
+      - name: Verify build
+        shell: cmd
+        run: dir dist\
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: TenderTracker-Windows
+          path: dist\TenderTracker.exe
+          retention-days: 30
+
+      - name: Create Release (on push to main)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: "Windows Build #${{ github.run_number }}"
+          body: |
+            Automated Windows build from commit ${{ github.sha }}
+
+            **Publisher:** Ruhil Jaiswal
+
+            **How to use:**
+            1. Download `TenderTracker.exe`
+            2. If Windows SmartScreen appears, click **More info → Run anyway**
+               (one-time only — self-signed certificate)
+            3. Double-click to launch, or drag PDF files onto it
+          files: dist\TenderTracker.exe
+          draft: false
+          prerelease: false
