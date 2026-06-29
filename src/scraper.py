@@ -63,7 +63,7 @@ def _find_text(driver, label):
     except: pass
     return ""
 
-def scrape_bid_page(url, log_fn=None):
+def scrape_bid_page(url, log_fn=None, headless=False):
     """
     Open the GeM bid document page with Selenium and extract all available fields.
     Returns a dict of extra fields to merge into the record.
@@ -83,8 +83,8 @@ def scrape_bid_page(url, log_fn=None):
     opts.add_argument("--start-maximized")
     opts.add_argument("--no-sandbox")
     opts.add_argument("--disable-dev-shm-usage")
-    # Comment the next line to see the browser window
-    # opts.add_argument("--headless=new")
+    if headless:
+        opts.add_argument("--headless=new")
 
     extra = {}
     driver = None

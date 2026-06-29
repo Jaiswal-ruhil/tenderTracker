@@ -16,6 +16,7 @@ from config import (
 from excel import financial_year, xl_path, ensure_workbook, xl_append
 from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium
+import db
 
 class TenderApp(tk.Tk):
     def __init__(self):
@@ -39,6 +40,7 @@ class TenderApp(tk.Tk):
 
         self._style()
         self._build()
+        self._load_from_db()
         self._fy_tick()
 
     # ── styles ────────────────────────────────────────────────────────────────
@@ -73,16 +75,7 @@ class TenderApp(tk.Tk):
         tk.Label(top, text="GEM Tender Logger", font=FT, bg=PANEL, fg=TEXT).pack(side="left")
         self.fy_lbl = tk.Label(top, text="", font=FL, bg=ACCENT2, fg=TEXT, padx=10, pady=3)
         self.fy_lbl.pack(side="right", padx=(6,0))
-
-        # folder bar
-        fbar = tk.Frame(self, bg=BG, pady=5, padx=14)
-        fbar.pack(fill="x")
-        tk.Label(fbar, text="Save to:", font=FL, bg=BG, fg=MUTED).pack(side="left")
-        tk.Entry(fbar, textvariable=self.save_folder, bg=CARD, fg=TEXT,
-                 insertbackground=TEXT, relief="flat", font=FL,
-                 highlightthickness=1, highlightbackground="#30363D",
-                 highlightcolor=ACCENT2, width=60).pack(side="left", padx=(6,4))
-        self._btn(fbar, "Browse", self._browse, bg=CARD).pack(side="left")
+        self._btn(top, "⚙ Settings", self._show_settings, bg=CARD).pack(side="right")
 
         # paned: left = paste+log, right = table
         pane = tk.PanedWindow(self, orient="horizontal", bg=BG,
@@ -256,10 +249,278 @@ class TenderApp(tk.Tk):
         self.fy_lbl.configure(text=f"FY {financial_year(datetime.now())}")
         self.after(60000, self._fy_tick)
 
-    def _browse(self):
-        d = filedialog.askdirectory(title="Select output folder",
-                                    initialdir=self.save_folder.get())
-        if d: self.save_folder.set(d)
+    def _load_from_db(self):
+        # Resolve DB path on first run
+        cfg_path = db.get_configured_db_path()
+        if not cfg_path:
+            self._log("info", "First run detected: Prompting for database storage location.")
+            selected_dir = filedialog.askdirectory(
+                title="First Run: Select folder to store database (tenders_db.json)",
+                parent=self
+            )
+            if selected_dir:
+                db_path = os.path.join(os.path.abspath(selected_dir), "tenders_db.json")
+                db.save_configured_db_path(db_path)
+                db.init_db_path(db_path)
+                self._log("ok", f"Database configured at: {db_path}")
+            else:
+                db_path = db.DEFAULT_DB_FILE
+                messagebox.showwarning(
+                    "No Folder Selected",
+                    f"No folder was selected. The database will be stored in the default location:\n\n{db_path}",
+                    parent=self
+                )
+                db.save_configured_db_path(db_path)
+                db.init_db_path(db_path)
+                self._log("warn", f"Prompt cancelled. Defaulting database to: {db_path}")
+        else:
+            db.init_db_path()
+
+        # Load Excel save folder setting if configured
+        settings = db.load_settings()
+        saved_excel_folder = settings.get("excel_save_folder")
+        if saved_excel_folder and os.path.exists(saved_excel_folder):
+            self.save_folder.set(saved_excel_folder)
+        else:
+            db.save_setting("excel_save_folder", self.save_folder.get())
+
+        self._set_status("Loading tenders from database...", MUTED)
+        try:
+            self._records = db.load_all_tenders()
+            for rec in self._records:
+                self._tv_insert(rec)
+            self._refresh_alt()
+            self.count_lbl.configure(text=f"{len(self._records)} rows")
+            
+            display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
+            self._set_status(f"Database: {display_path}", SUCCESS)
+            self._log("info", f"Loaded {len(self._records)} historical tender(s) from database: {db.DB_FILE}")
+        except Exception as e:
+            self._log("err", f"Failed to load tenders from database: {e}")
+            self._set_status("Database error", ERR)
+
+    def _change_db_location(self, parent_win=None):
+        parent = parent_win or self
+        old_path = db.DB_FILE
+        new_dir = filedialog.askdirectory(
+            title="Select new folder to store tenders_db.json",
+            parent=parent
+        )
+        if not new_dir:
+            return
+            
+        new_path = os.path.join(os.path.abspath(new_dir), "tenders_db.json")
+        if os.path.abspath(new_path) == os.path.abspath(old_path):
+            return
+            
+        move_data = messagebox.askyesnocancel(
+            "Move Database",
+            "Do you want to move your existing tenders data to the new location?\n\n"
+            f"From: {old_path}\n"
+            f"To: {new_path}",
+            parent=parent
+        )
+        
+        if move_data is None:
+            return
+            
+        if move_data:
+            if os.path.exists(old_path):
+                try:
+                    import shutil
+                    shutil.move(old_path, new_path)
+                    self._log("ok", f"Moved database file to: {new_path}")
+                except Exception as e:
+                    self._log("err", f"Failed to move database file: {e}")
+                    messagebox.showerror("Error Moving File", f"Failed to move database file:\n\n{e}", parent=parent)
+                    return
+            else:
+                self._log("info", "No existing database file found to move.")
+        
+        db.save_configured_db_path(new_path)
+        db.init_db_path(new_path)
+        
+        try:
+            self._records = db.load_all_tenders()
+            for child in self.tv.get_children():
+                self.tv.delete(child)
+            for rec in self._records:
+                self._tv_insert(rec)
+            self._refresh_alt()
+            self.count_lbl.configure(text=f"{len(self._records)} rows")
+            
+            display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
+            self._set_status(f"Database: {display_path}", SUCCESS)
+            self._log("ok", f"Database successfully relocated to: {db.DB_FILE}")
+            
+            try:
+                if self.notebook.index(self.notebook.select()) == 1:
+                    self._update_calendar()
+                    self._update_details()
+            except:
+                pass
+        except Exception as e:
+            self._log("err", f"Failed to load tenders from new database location: {e}")
+            self._set_status("Database error", ERR)
+
+    def _show_settings(self):
+        win = tk.Toplevel(self)
+        win.grab_set()
+        win.transient(self)
+        win.title("Settings")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+
+        x = self.winfo_x() + (self.winfo_width() - 600) // 2
+        y = self.winfo_y() + (self.winfo_height() - 480) // 2
+        win.geometry(f"600x480+{max(0, x)}+{max(0, y)}")
+
+        # Title Label
+        tk.Label(win, text="Application Settings", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+
+        # DB Frame
+        db_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        db_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(db_frame, text="Local Database Storage Location:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
+        
+        db_path_var = tk.StringVar(value=db.DB_FILE.replace(os.path.expanduser("~"), "~"))
+        db_lbl = tk.Label(db_frame, textvariable=db_path_var, font=FL, bg=PANEL, fg=TEXTSUB, anchor="w")
+        db_lbl.pack(fill="x", pady=(4, 4))
+        
+        def run_db_change():
+            self._change_db_location(parent_win=win)
+            db_path_var.set(db.DB_FILE.replace(os.path.expanduser("~"), "~"))
+            
+        btn_db_row = tk.Frame(db_frame, bg=PANEL)
+        btn_db_row.pack(fill="x", pady=(4, 0))
+        self._btn(btn_db_row, "Relocate Database...", run_db_change, bg=CARD).pack(side="left", padx=(0, 6))
+        self._btn(btn_db_row, "Backup Database...", lambda: self._backup_db(win), bg=CARD).pack(side="left", padx=6)
+        self._btn(btn_db_row, "Clear Database", lambda: self._clear_db(win), bg=CARD, fg=ERR).pack(side="right")
+
+        # Excel Frame
+        ex_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        ex_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(ex_frame, text="Excel Export Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
+        
+        ex_path_var = tk.StringVar(value=self.save_folder.get().replace(os.path.expanduser("~"), "~"))
+        ex_lbl = tk.Label(ex_frame, textvariable=ex_path_var, font=FL, bg=PANEL, fg=TEXTSUB, anchor="w")
+        ex_lbl.pack(side="left", fill="x", expand=True, pady=(4, 0))
+        
+        def run_ex_change():
+            d = filedialog.askdirectory(title="Select folder for Excel Tenders Sheets", initialdir=self.save_folder.get(), parent=win)
+            if d:
+                resolved_dir = os.path.abspath(d)
+                self.save_folder.set(resolved_dir)
+                db.save_setting("excel_save_folder", resolved_dir)
+                ex_path_var.set(resolved_dir.replace(os.path.expanduser("~"), "~"))
+                self._log("ok", f"Excel export folder changed to: {resolved_dir}")
+                
+        self._btn(ex_frame, "Change Folder...", run_ex_change, bg=CARD).pack(side="right")
+
+        # Excel Pattern Frame
+        pat_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        pat_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(pat_frame, text="Excel Filename Pattern:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
+        
+        current_pattern = db.load_settings().get("excel_filename_pattern", "GEM_Tenders_FY_{fy}")
+        pattern_var = tk.StringVar(value=current_pattern)
+        
+        pat_entry = tk.Entry(pat_frame, textvariable=pattern_var, bg=CARD, fg=TEXT,
+                             insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D",
+                             highlightcolor=ACCENT2)
+        pat_entry.pack(fill="x", pady=(4, 2))
+        
+        tk.Label(pat_frame, text="Variables: {fy} (Financial Year), {date} (Date DD-MM-YYYY)",
+                 font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w")
+
+        # Options Frame
+        opt_frame = tk.Frame(win, bg=PANEL, padx=12, pady=8, highlightthickness=1, highlightbackground="#30363D")
+        opt_frame.pack(fill="x", padx=15, pady=6)
+        
+        headless_var = tk.BooleanVar(value=db.load_settings().get("selenium_headless", False))
+        chk = tk.Checkbutton(opt_frame, text="Run Chrome in Headless (Silent) Mode for Selenium fetching",
+                             variable=headless_var, bg=PANEL, fg=TEXT, selectcolor=BG,
+                             activebackground=PANEL, activeforeground=TEXT,
+                             font=FL, relief="flat", highlightthickness=0)
+        chk.pack(anchor="w")
+
+        # Bottom Close Button
+        def save_and_close():
+            db.save_setting("excel_filename_pattern", pattern_var.get().strip())
+            db.save_setting("selenium_headless", headless_var.get())
+            self._log("info", "Settings saved successfully.")
+            win.destroy()
+            
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=12)
+        self._btn(btn_fr, "  Close  ", save_and_close, bg=ACCENT2).pack(anchor="center")
+        
+        win.protocol("WM_DELETE_WINDOW", save_and_close)
+
+    def _backup_db(self, parent_win=None):
+        parent = parent_win or self
+        if not os.path.exists(db.DB_FILE):
+            messagebox.showwarning("Backup Failed", "No database file exists yet to back up.", parent=parent)
+            return
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        default_name = f"tenders_db_backup_{timestamp}.json"
+        
+        dest_path = filedialog.asksaveasfilename(
+            title="Backup Database",
+            initialfile=default_name,
+            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            parent=parent
+        )
+        if not dest_path:
+            return
+            
+        try:
+            import shutil
+            shutil.copy2(db.DB_FILE, dest_path)
+            self._log("ok", f"Database backup saved to: {dest_path}")
+            messagebox.showinfo("Backup Successful", f"Database successfully backed up to:\n\n{dest_path}", parent=parent)
+        except Exception as e:
+            self._log("err", f"Backup failed: {e}")
+            messagebox.showerror("Backup Error", f"Failed to backup database:\n\n{e}", parent=parent)
+
+    def _clear_db(self, parent_win=None):
+        parent = parent_win or self
+        confirm = messagebox.askyesno(
+            "Clear Database",
+            "Are you sure you want to permanently clear the local database?\n\n"
+            "This will delete ALL tenders from the treeview and database file.",
+            parent=parent
+        )
+        if not confirm:
+            return
+            
+        try:
+            # Clear GUI
+            for child in self.tv.get_children():
+                self.tv.delete(child)
+            self._records.clear()
+            self._refresh_alt()
+            self.count_lbl.configure(text="0 rows")
+            
+            # Write empty list to DB
+            db.save_all_tenders([])
+            self._log("ok", "Database cleared successfully.")
+            messagebox.showinfo("Database Cleared", "The database has been successfully cleared.", parent=parent)
+            
+            try:
+                if self.notebook.index(self.notebook.select()) == 1:
+                    self._update_calendar()
+                    self._update_details()
+            except:
+                pass
+        except Exception as e:
+            self._log("err", f"Clear database failed: {e}")
+            messagebox.showerror("Error Clearing Database", f"Failed to clear database:\n\n{e}", parent=parent)
 
     # ── Step 1 — parse paste blocks ───────────────────────────────────────────
     def _do_parse(self):
@@ -347,6 +608,7 @@ class TenderApp(tk.Tk):
                 added_count += 1
 
         self._refresh_alt()
+        db.save_all_tenders(self._records)
         self.count_lbl.configure(text=f"{len(self._records)} rows")
         skipped = total - (added_count + updated_count)
         msg = f"Parsed {total} block(s): {added_count} added"
@@ -419,6 +681,7 @@ class TenderApp(tk.Tk):
 
                 if extra:
                     rec.update(extra)
+                    rec["is_fetched"] = True
                     # update treeview cells
                     def update_tv(i=iid, r=rec):
                         if i:
@@ -426,6 +689,7 @@ class TenderApp(tk.Tk):
                                 if cid in r:
                                     self.tv.set(i, cid, r[cid])
                             self.tv.item(i, tags=("fetched",))
+                        db.save_all_tenders(self._records)
                     self.after(0, update_tv)
                     self._log("ok", f"[{n}/{total}] {bid} — merged {len(extra)} extra fields")
                 else:
@@ -453,7 +717,12 @@ class TenderApp(tk.Tk):
     # ── table helpers ─────────────────────────────────────────────────────────
     def _tv_insert(self, rec):
         vals = tuple(rec.get(c,"") for c in TV_IDS)
-        return self.tv.insert("","end", values=vals)
+        tags = []
+        if rec.get("is_saved"):
+            tags.append("saved")
+        elif rec.get("is_fetched"):
+            tags.append("fetched")
+        return self.tv.insert("","end", values=vals, tags=tuple(tags))
 
     def _refresh_alt(self):
         for i, iid in enumerate(self.tv.get_children()):
@@ -494,6 +763,7 @@ class TenderApp(tk.Tk):
             idx = self.tv.index(iid)
             if idx < len(self._records): self._records[idx][col_id]=nv
             e.destroy(); self._editing=None
+            db.save_all_tenders(self._records)
             try:
                 if self.notebook.index(self.notebook.select()) == 1:
                     self._update_calendar()
@@ -522,6 +792,7 @@ class TenderApp(tk.Tk):
         self._refresh_alt()
         self.count_lbl.configure(text=f"{len(self._records)} rows")
         self._log("info", f"Deleted {len(sel)} row(s).")
+        db.save_all_tenders(self._records)
         try:
             if self.notebook.index(self.notebook.select()) == 1:
                 self._update_calendar()
@@ -549,6 +820,10 @@ class TenderApp(tk.Tk):
             msg = f"Saved {len(snos)} row(s) → {os.path.basename(path)}  (S.No {snos[0]}–{snos[-1]})"
             self._log("ok", msg); self._set_status(msg, SUCCESS); self._fy_tick()
             for iid in sel: self.tv.item(iid, tags=("saved",))
+            for idx in [self.tv.index(iid) for iid in sel]:
+                if idx < len(self._records):
+                    self._records[idx]["is_saved"] = True
+            db.save_all_tenders(self._records)
         except Exception as ex:
             self._log("err", f"Save error: {ex}")
             messagebox.showerror("Save Error", str(ex))

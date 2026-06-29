@@ -31,8 +31,14 @@ def financial_year(dt):
     return f"{dt.year}-{str(dt.year+1)[-2:]}" if dt.month >= 4 \
            else f"{dt.year-1}-{str(dt.year)[-2:]}"
 
-def xl_path(folder, fy):
-    return os.path.join(folder, f"GEM_Tenders_FY_{fy}.xlsx")
+def xl_path(folder, fy, pattern=None):
+    if not pattern:
+        pattern = "GEM_Tenders_FY_{fy}"
+    now_str = datetime.now().strftime("%d-%m-%Y")
+    filename = pattern.replace("{fy}", fy).replace("{date}", now_str)
+    if not filename.lower().endswith(".xlsx"):
+        filename += ".xlsx"
+    return os.path.join(folder, filename)
 
 def ensure_workbook(path):
     if os.path.exists(path): return
