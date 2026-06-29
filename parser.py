@@ -1,16 +1,16 @@
 import re
 
 def split_blocks(text):
-    parts = re.split(r'(?=BID\s*NO\s*:)', text, flags=re.IGNORECASE)
+    parts = re.split(r'(?=BID\s*NO(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
 
 def parse_one(text):
     r = {}
-    m = re.search(r"BID\s*NO\s*:\s*\[([^\]]+)\]\((https?://[^)]+)\)", text, re.I)
+    m = re.search(r"BID\s*NO(?:\.|\b)\s*:\s*\[([^\]]+)\]\((https?://[^)]+)\)", text, re.I)
     if m:
         r["bid_no"]=m.group(1).strip(); r["bid_url"]=m.group(2).strip()
     else:
-        m2 = re.search(r"BID\s*NO\s*:\s*(.+)", text, re.I)
+        m2 = re.search(r"BID\s*NO(?:\.|\b)\s*:\s*(.+)", text, re.I)
         if m2: r["bid_no"]=m2.group(1).strip()
 
     # Clean up bid_no if it contains extra text (e.g., "View Corrigendum")

@@ -107,8 +107,25 @@ class TenderApp(tk.Tk):
                   bg=CARD).pack(side="left")
 
         # log
-        tk.Label(left, text="Log", font=("Segoe UI",9,"bold"),
-                 bg=BG, fg=MUTED).pack(anchor="w", pady=(0,2))
+        log_hdr = tk.Frame(left, bg=BG)
+        log_hdr.pack(fill="x", pady=(0, 2))
+        tk.Label(log_hdr, text="Log", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg=MUTED).pack(side="left")
+        
+        def copy_log():
+            try:
+                self.clipboard_clear()
+                self.clipboard_append(self.log_txt.get("1.0", "end-1c"))
+                self._log("info", "Log copied to clipboard.")
+            except Exception as e:
+                self._log("err", f"Failed to copy log: {e}")
+                
+        copy_btn = tk.Button(log_hdr, text="📋 Copy", command=copy_log,
+                             bg=CARD, fg=TEXTSUB, relief="flat", font=("Segoe UI", 8),
+                             padx=4, pady=0, activebackground=ACCENT2, activeforeground=TEXT,
+                             cursor="hand2")
+        copy_btn.pack(side="right")
+
         log_fr = tk.Frame(left, bg=CARD,
                           highlightthickness=1, highlightbackground="#30363D")
         log_fr.pack(fill="both", expand=True)
@@ -182,7 +199,14 @@ class TenderApp(tk.Tk):
     def _log(self, level, msg):
         self.log_txt.configure(state="normal")
         ts = datetime.now().strftime("%H:%M:%S")
-        self.log_txt.insert("end", f"[{ts}] {msg}\n", level)
+        icons = {
+            "ok": "✓ ",
+            "warn": "⚠ ",
+            "err": "✗ ",
+            "info": "ℹ "
+        }
+        icon = icons.get(level, "")
+        self.log_txt.insert("end", f"[{ts}] {icon}{msg}\n", level)
         self.log_txt.see("end")
         self.log_txt.configure(state="disabled")
         self.update_idletasks()
@@ -231,15 +255,50 @@ class TenderApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _add_rows(self, recs, total):
+        added_count = 0
+        updated_count = 0
+        
+        children = self.tv.get_children()
+        records_by_bid = {}
+        for iid in children:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                matched_rec = None
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        matched_rec = r
+                        break
+                if matched_rec:
+                    records_by_bid[bid_no] = (matched_rec, iid)
+
         for rec in recs:
-            self._records.append(rec)
-            self._tv_insert(rec)
+            bid_no = rec.get("bid_no")
+            if bid_no in records_by_bid:
+                existing_rec, iid = records_by_bid[bid_no]
+                merged_fields = []
+                for k, v in rec.items():
+                    if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
+                        existing_rec[k] = v
+                        self.tv.set(iid, k, v)
+                        merged_fields.append(k)
+                if merged_fields:
+                    updated_count += 1
+                    self.tv.item(iid, tags=("fetched",))
+            else:
+                self._records.append(rec)
+                self._tv_insert(rec)
+                added_count += 1
+
         self._refresh_alt()
         self.count_lbl.configure(text=f"{len(self._records)} rows")
-        skipped = total - len(recs)
-        msg = f"Parsed {total} block(s): {len(recs)} added" + (f", {skipped} skipped" if skipped else "")
+        skipped = total - (added_count + updated_count)
+        msg = f"Parsed {total} block(s): {added_count} added"
+        if updated_count:
+            msg += f", {updated_count} updated"
+        if skipped > 0:
+            msg += f", {skipped} skipped"
         self._log("info", msg)
-        self._set_status(msg, SUCCESS if recs else WARN)
+        self._set_status(msg, SUCCESS if (added_count or updated_count) else WARN)
         self._set_prog(100, "Done.")
         if recs: self.paste_txt.delete("1.0","end")
 
