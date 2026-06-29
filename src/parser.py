@@ -78,6 +78,8 @@ def parse_one(text):
     if m: r["exp_years"] = m.group(1).strip()
     m = re.search(r"Contract\s*Duration\s*:\s*(.+)", text, re.I)
     if m: r["contract_dur"] = m.group(1).strip()
+    m = re.search(r"Location\s*:\s*(.+)", text, re.I)
+    if m: r["location"] = m.group(1).strip()
 
     return r
 
@@ -133,6 +135,71 @@ def convert_pdf_text_to_markdown(pdf_text):
     exp_years = re.search(r"Years\s*of\s*Past\s*Experience[\s\S]*?(?::|\n)\s*([0-9][^\n]*)", pdf_text, re.I)
     contract_dur = re.search(r"Contract\s*(?:Duration|Period)[\s\S]*?(?::|\n)\s*([0-9][^\n]*)", pdf_text, re.I)
 
+    # Consignee / Delivery Location
+    location = ""
+    idx = pdf_text.lower().find("consignee")
+    if idx == -1:
+        idx = pdf_text.lower().find("reporting/officer")
+    if idx == -1:
+        idx = pdf_text.lower().find("/address")
+        
+    if idx != -1:
+        sub = pdf_text[idx:]
+        sub_lines = sub.splitlines()
+        start_idx = 0
+        for i, line in enumerate(sub_lines):
+            cleaned = line.strip()
+            if cleaned == "1":
+                start_idx = i + 1
+                break
+        else:
+            header_keywords = [
+                "consignee", "reporting", "officer", "address", "estimated", "quantity", 
+                "requirement", "परे षती", "Tरपो@टgग", "अिधकार", "पता", "संसाधन", "मात्रा", 
+                "अतिरिक्त", "आवश्यकता", "=.सं.", "s.n", "o."
+            ]
+            for i, line in enumerate(sub_lines):
+                cleaned = line.strip().lower()
+                if not cleaned:
+                    continue
+                is_header = any(kw in cleaned for kw in header_keywords)
+                if not is_header:
+                    start_idx = i
+                    break
+                    
+        data_lines = []
+        for line in sub_lines[start_idx:]:
+            cleaned = line.strip()
+            if not cleaned:
+                continue
+            if cleaned in ("2", "3", "4", "5") or "buyer added" in cleaned.lower() or "disclaimer" in cleaned.lower():
+                break
+            data_lines.append(cleaned)
+            
+        qty_idx = -1
+        for i in range(len(data_lines) - 1, -1, -1):
+            if data_lines[i].isdigit():
+                qty_idx = i
+                break
+                
+        if qty_idx != -1:
+            row_content_lines = data_lines[:qty_idx]
+            addr_start_idx = -1
+            for idx_c, line in enumerate(row_content_lines):
+                if re.search(r'\b\d{6}\b', line):
+                    addr_start_idx = idx_c
+                    break
+                cleaned_line = line.lower()
+                if "address" in cleaned_line or "pin code" in cleaned_line or "pincode" in cleaned_line:
+                    addr_start_idx = idx_c
+                    break
+            if addr_start_idx == -1:
+                if len(row_content_lines) > 2:
+                    addr_start_idx = 2
+                else:
+                    addr_start_idx = min(1, len(row_content_lines))
+            location = " ".join(row_content_lines[addr_start_idx:]).strip()
+
     lines = []
     if bid_no:
         lines.append(f"BID NO: {bid_no.group(1).strip()}")
@@ -179,5 +246,7 @@ def convert_pdf_text_to_markdown(pdf_text):
         lines.append(f"Experience Required (Yrs): {exp_years.group(1).strip()}")
     if contract_dur:
         lines.append(f"Contract Duration: {contract_dur.group(1).strip()}")
+    if location:
+        lines.append(f"Location: {location}")
         
     return "\n".join(lines)

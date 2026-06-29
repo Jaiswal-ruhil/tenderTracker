@@ -133,6 +133,48 @@ class TestParser(unittest.TestCase):
         self.assertEqual(r["min_turnover"], "1 Lakh (s)")
         self.assertEqual(r["exp_years"], "2 Year (s)")
         self.assertEqual(r["contract_dur"], "1 Year(s) 3 Day(s)")
+        self.assertEqual(r["location"], "Address Block Details")
+
+    def test_convert_pdf_text_to_markdown_with_pincode_address(self):
+        pdf_text = """
+        Bid Number: GEM/2026/B/9520877
+        Item Category: Refilling of Industrial Gases
+        Ministry/State Name: Uttar Pradesh
+        Department Name: Uttar Pradesh Cooperative Sugar
+        Organisation Name: N/a
+        Office Name: Lucknow
+        Dated: 25-06-2026
+        Bid End Date/Time: 06-07-2026 15:00:00
+        Consignee
+        Reporting/Officer
+        पता
+        /Address
+        संसाधनH क मा ा
+        / Estimated
+        Quantity (as
+        per Unit of
+        Measuremen
+        t selected by
+        buyer )
+        अितTरd आव:यकता
+        /Additional
+        Requirement
+        1
+        Rahul Prakash
+        Yadav
+        276404,The Kisan Sahakari
+        chini mill Sathiaon, Azamgarh
+        (U.P) Pin Code -276406 GST
+        NO-09AAAAK0204B1ZI Contact
+        no -6389025002,9910729844
+        700
+        N/A
+        """
+        md = parser.convert_pdf_text_to_markdown(pdf_text)
+        r = parser.parse_one(md)
+        self.assertEqual(r["bid_no"], "GEM/2026/B/9520877")
+        self.assertEqual(r["quantity"], "700")
+        self.assertEqual(r["location"], "276404,The Kisan Sahakari chini mill Sathiaon, Azamgarh (U.P) Pin Code -276406 GST NO-09AAAAK0204B1ZI Contact no -6389025002,9910729844")
 
 if __name__ == '__main__':
     unittest.main()
