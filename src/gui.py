@@ -222,6 +222,9 @@ class TenderApp(tk.Tk):
                          cursor="hand2")
 
     def _log(self, level, msg):
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self._log(level, msg))
+            return
         self.log_txt.configure(state="normal")
         ts = datetime.now().strftime("%H:%M:%S")
         icons = {
@@ -237,10 +240,16 @@ class TenderApp(tk.Tk):
         self.update_idletasks()
 
     def _set_status(self, msg, color=MUTED):
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self._set_status(msg, color))
+            return
         self.status.configure(text=msg, fg=color)
         self.update_idletasks()
 
     def _set_prog(self, val, label=""):
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self._set_prog(val, label))
+            return
         self.progress["value"] = val
         self.prog_lbl.configure(text=label)
         self.update_idletasks()
@@ -566,9 +575,9 @@ class TenderApp(tk.Tk):
                     try:
                         import urllib.request
                         doc_id = line_clean.rstrip('/').split('/')[-1]
-                        dl_dir = self.save_folder.get() or "."
+                        dl_dir = os.path.dirname(db.DB_FILE)
                         filename = f"GeM-Bidding-{doc_id}.pdf"
-                        dest_path = os.path.join(dl_dir, filename)
+                        dest_path = os.path.abspath(os.path.join(dl_dir, filename))
                         
                         req = urllib.request.Request(
                             line_clean,
@@ -580,7 +589,7 @@ class TenderApp(tk.Tk):
                             with open(dest_path, 'wb') as out_file:
                                 out_file.write(response.read())
                                 
-                        self.after(0, lambda fn=filename: self._log("ok", f"PDF downloaded to: {fn}"))
+                        self.after(0, lambda fn=dest_path: self._log("ok", f"PDF downloaded to: {fn}"))
                         
                         reader = pypdf.PdfReader(dest_path)
                         pdf_text = ""
@@ -597,7 +606,7 @@ class TenderApp(tk.Tk):
                 elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
                     self.after(0, lambda bn=line_val: self._log("info", f"Bid Number detected: {bn}. Running portal search to download PDF..."))
                     try:
-                        dl_dir = self.save_folder.get() or "."
+                        dl_dir = os.path.dirname(db.DB_FILE)
                         headless_opt = db.load_settings().get("selenium_headless", False)
                         dest_path = download_tender_pdf(line_val, dl_dir, log_fn=self._log, headless=headless_opt)
                         
@@ -661,7 +670,8 @@ class TenderApp(tk.Tk):
                 for k, v in rec.items():
                     if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
                         existing_rec[k] = v
-                        self.tv.set(iid, k, v)
+                        if k in TV_IDS:
+                            self.tv.set(iid, k, v)
                         merged_fields.append(k)
                 if merged_fields:
                     updated_count += 1

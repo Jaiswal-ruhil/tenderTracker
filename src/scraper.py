@@ -275,7 +275,7 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
         filename = f"GeM-Bidding-{bid_no.replace('/', '_')}.pdf"
         dest_path = os.path.join(download_dir, filename)
         
-        if log_fn: log_fn("info", f"[{bid_no}] Downloading PDF to {filename}...")
+        if log_fn: log_fn("info", f"[{bid_no}] Downloading PDF to {dest_path}...")
         
         req = urllib.request.Request(
             doc_url,
@@ -287,7 +287,7 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
             with open(dest_path, 'wb') as out_file:
                 out_file.write(response.read())
                 
-        if log_fn: log_fn("ok", f"[{bid_no}] PDF successfully downloaded.")
+        if log_fn: log_fn("ok", f"[{bid_no}] PDF successfully downloaded to {dest_path}")
         return dest_path
     except Exception as e:
         if log_fn: log_fn("err", f"[{bid_no}] Failed to download PDF: {e}")
