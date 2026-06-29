@@ -28,7 +28,7 @@ def parse_one(text):
         else:
             id_match = re.search(r"(\d+)$", r["bid_no"])
             if id_match:
-                r["bid_url"] = f"https://bidplus.gem.gov.in/showbiddocument/{id_match.group(1)}"
+                r["bid_url"] = f"https://bidplus.gem.gov.in/showbidDocument/{id_match.group(1)}"
     m=re.search(r"Items?\s*:\s*(.+)", text, re.I)
     if m: r["items"]=m.group(1).strip()
     m=re.search(r"Quantit[yi]\w*\s*:\s*(\S+)", text, re.I)

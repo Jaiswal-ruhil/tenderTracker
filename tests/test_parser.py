@@ -21,7 +21,7 @@ class TestParser(unittest.TestCase):
 
     def test_parse_one_standard(self):
         text = """
-        BID NO: [GEM/2026/B/7526729](https://bidplus.gem.gov.in/showbiddocument/7526729)
+        BID NO: [GEM/2026/B/7526729](https://bidplus.gem.gov.in/showbidDocument/7526729)
         Items: Computer System
         Quantity: 58
         Department Name And Address:
@@ -31,7 +31,7 @@ class TestParser(unittest.TestCase):
         """
         r = parser.parse_one(text)
         self.assertEqual(r["bid_no"], "GEM/2026/B/7526729")
-        self.assertEqual(r["bid_url"], "https://bidplus.gem.gov.in/showbiddocument/7526729")
+        self.assertEqual(r["bid_url"], "https://bidplus.gem.gov.in/showbidDocument/7526729")
         self.assertEqual(r["items"], "Computer System")
         self.assertEqual(r["quantity"], "58")
         self.assertEqual(r["dept"], "Ministry of Mines")
