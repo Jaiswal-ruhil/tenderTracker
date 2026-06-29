@@ -12,6 +12,12 @@ Run:
     python main.py
 """
 
+import os
+import sys
+
+# Ensure src/ is in python path
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+
 from gui import TenderApp
 
 if __name__ == "__main__":

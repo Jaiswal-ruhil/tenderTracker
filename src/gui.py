@@ -11,7 +11,7 @@ from config import (
     FH, FB, FL, FT, TV_COLS, TV_IDS
 )
 from excel import financial_year, xl_path, ensure_workbook, xl_append
-from parser import split_blocks, parse_one
+from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium
 
 class TenderApp(tk.Tk):
@@ -234,10 +234,35 @@ class TenderApp(tk.Tk):
         raw = self.paste_txt.get("1.0","end").strip()
         if not raw: self._log("warn","Paste area is empty."); return
         self._log("info", f"--- Parse started {datetime.now().strftime('%H:%M:%S')} ---")
-        self._set_prog(0,"Splitting blocks…")
+        self._set_prog(0,"Processing input…")
 
         def worker():
-            blocks = split_blocks(raw)
+            import pypdf
+            
+            lines = raw.splitlines()
+            processed_text = ""
+            for line in lines:
+                line_clean = line.strip().strip('"\'')
+                if line_clean.lower().endswith(".pdf") and os.path.exists(line_clean):
+                    self.after(0, lambda f=line_clean: self._log("info", f"Reading PDF: {os.path.basename(f)}"))
+                    try:
+                        reader = pypdf.PdfReader(line_clean)
+                        pdf_text = ""
+                        for page in reader.pages:
+                            t = page.extract_text()
+                            if t:
+                                pdf_text += t + "\n"
+                        # Convert extracted text to clean markdown block
+                        md_text = convert_pdf_text_to_markdown(pdf_text)
+                        processed_text += md_text + "\n"
+                    except Exception as ex:
+                        import traceback
+                        tb = traceback.format_exc()
+                        self.after(0, lambda f=line_clean, err=ex, trace=tb: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}\n{trace}"))
+                else:
+                    processed_text += line + "\n"
+
+            blocks = split_blocks(processed_text)
             total  = len(blocks)
             self._log("info", f"Found {total} block(s).")
             recs = []

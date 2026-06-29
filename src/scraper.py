@@ -202,7 +202,9 @@ def scrape_bid_page(url, log_fn=None):
             log_fn("ok", f"  Scraped {len(extra)} extra fields: {', '.join(extra.keys())}")
 
     except Exception as e:
-        if log_fn: log_fn("err", f"  Selenium error: {e}")
+        if log_fn:
+            import traceback
+            log_fn("err", f"  Selenium error: {e}\n{traceback.format_exc()}")
     finally:
         if driver:
             try: driver.quit()
