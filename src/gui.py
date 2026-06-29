@@ -15,7 +15,7 @@ from config import (
 )
 from excel import financial_year, xl_path, ensure_workbook, xl_append
 from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
-from scraper import scrape_bid_page, _try_import_selenium
+from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf
 import db
 
 class TenderApp(tk.Tk):
@@ -536,6 +536,14 @@ class TenderApp(tk.Tk):
             processed_text = ""
             for line in lines:
                 line_clean = line.strip().strip('"\'')
+                if not line_clean:
+                    continue
+                    
+                # Clean prefix/suffix from bid number if copied from web page header
+                line_val = re.sub(r"^(?:BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*)", "", line_clean, flags=re.I).strip()
+                line_val = re.sub(r"\s+View\s+Corrigendum.*$", "", line_val, flags=re.I).strip()
+                
+                # Case A: PDF file path on disk
                 if line_clean.lower().endswith(".pdf") and os.path.exists(line_clean):
                     self.after(0, lambda f=line_clean: self._log("info", f"Reading PDF: {os.path.basename(f)}"))
                     try:
@@ -545,13 +553,69 @@ class TenderApp(tk.Tk):
                             t = page.extract_text()
                             if t:
                                 pdf_text += t + "\n"
-                        # Convert extracted text to clean markdown block
                         md_text = convert_pdf_text_to_markdown(pdf_text)
                         processed_text += md_text + "\n"
                     except Exception as ex:
                         import traceback
                         tb = traceback.format_exc()
                         self.after(0, lambda f=line_clean, err=ex, trace=tb: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}\n{trace}"))
+                
+                # Case B: GeM showbidDocument URL
+                elif "showbidDocument" in line_clean:
+                    self.after(0, lambda url=line_clean: self._log("info", f"URL detected: {url}. Downloading PDF..."))
+                    try:
+                        import urllib.request
+                        doc_id = line_clean.rstrip('/').split('/')[-1]
+                        dl_dir = self.save_folder.get() or "."
+                        filename = f"GeM-Bidding-{doc_id}.pdf"
+                        dest_path = os.path.join(dl_dir, filename)
+                        
+                        req = urllib.request.Request(
+                            line_clean,
+                            headers={
+                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                            }
+                        )
+                        with urllib.request.urlopen(req) as response:
+                            with open(dest_path, 'wb') as out_file:
+                                out_file.write(response.read())
+                                
+                        self.after(0, lambda fn=filename: self._log("ok", f"PDF downloaded to: {fn}"))
+                        
+                        reader = pypdf.PdfReader(dest_path)
+                        pdf_text = ""
+                        for page in reader.pages:
+                            t = page.extract_text()
+                            if t:
+                                pdf_text += t + "\n"
+                        md_text = convert_pdf_text_to_markdown(pdf_text)
+                        processed_text += md_text + "\n"
+                    except Exception as ex:
+                        self.after(0, lambda url=line_clean, err=ex: self._log("err", f"Failed to download/parse URL {url}: {err}"))
+                        
+                # Case C: GeM Bid Number (e.g. GEM/2026/B/7647078)
+                elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
+                    self.after(0, lambda bn=line_val: self._log("info", f"Bid Number detected: {bn}. Running portal search to download PDF..."))
+                    try:
+                        dl_dir = self.save_folder.get() or "."
+                        headless_opt = db.load_settings().get("selenium_headless", False)
+                        dest_path = download_tender_pdf(line_val, dl_dir, log_fn=self._log, headless=headless_opt)
+                        
+                        if dest_path and os.path.exists(dest_path):
+                            reader = pypdf.PdfReader(dest_path)
+                            pdf_text = ""
+                            for page in reader.pages:
+                                t = page.extract_text()
+                                if t:
+                                    pdf_text += t + "\n"
+                            md_text = convert_pdf_text_to_markdown(pdf_text)
+                            processed_text += md_text + "\n"
+                        else:
+                            self.after(0, lambda bn=line_val: self._log("err", f"Failed to download PDF for {bn}"))
+                    except Exception as ex:
+                        self.after(0, lambda bn=line_val, err=ex: self._log("err", f"Failed to process {bn}: {err}"))
+                
+                # Case D: Raw pasted text block
                 else:
                     processed_text += line + "\n"
 

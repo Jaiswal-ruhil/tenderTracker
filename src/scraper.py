@@ -211,3 +211,88 @@ def scrape_bid_page(url, log_fn=None, headless=False):
             except: pass
 
     return extra
+
+def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
+    """
+    Open the GeM portal, search for the bid number, locate the PDF document link, 
+    and download it to the specified download directory.
+    Returns the absolute path to the downloaded PDF file or None.
+    """
+    import os
+    import urllib.request
+    
+    mods = _try_import_selenium()
+    if not mods:
+        if log_fn: log_fn("err", "Selenium not installed. Cannot search portal.")
+        return None
+        
+    webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
+    
+    opts = Options()
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_argument("--start-maximized")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    if headless:
+        opts.add_argument("--headless=new")
+        
+    driver = None
+    try:
+        if log_fn: log_fn("info", f"[{bid_no}] Searching GeM portal for PDF document...")
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=opts)
+        driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+        
+        driver.get("https://bidplus.gem.gov.in/all-bids")
+        
+        # Wait for search input
+        search_input = WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.ID, "searchBid"))
+        )
+        search_input.clear()
+        search_input.send_keys(bid_no)
+        
+        # Click search button
+        search_btn = driver.find_element(By.ID, "searchBidRA")
+        search_btn.click()
+        
+        # Wait for search results
+        time.sleep(5)
+        
+        # Find document link containing showbidDocument
+        links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
+        if not links:
+            if log_fn: log_fn("err", f"[{bid_no}] PDF document link not found on GeM search results.")
+            return None
+            
+        doc_url = links[0].get_attribute("href")
+        if log_fn: log_fn("info", f"[{bid_no}] Found document URL: {doc_url}")
+        
+        # Download PDF
+        os.makedirs(download_dir, exist_ok=True)
+        filename = f"GeM-Bidding-{bid_no.replace('/', '_')}.pdf"
+        dest_path = os.path.join(download_dir, filename)
+        
+        if log_fn: log_fn("info", f"[{bid_no}] Downloading PDF to {filename}...")
+        
+        req = urllib.request.Request(
+            doc_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+        )
+        with urllib.request.urlopen(req) as response:
+            with open(dest_path, 'wb') as out_file:
+                out_file.write(response.read())
+                
+        if log_fn: log_fn("ok", f"[{bid_no}] PDF successfully downloaded.")
+        return dest_path
+    except Exception as e:
+        if log_fn: log_fn("err", f"[{bid_no}] Failed to download PDF: {e}")
+        return None
+    finally:
+        if driver:
+            try: driver.quit()
+            except: pass
