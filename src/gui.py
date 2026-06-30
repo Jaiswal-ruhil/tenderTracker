@@ -45,6 +45,7 @@ class TenderApp(tk.Tk):
         self._load_from_db()
         self._fy_tick()
         self._poll_log_queue()
+        self._bind_shortcuts()
 
     # ── styles ────────────────────────────────────────────────────────────────
     def _style(self):
@@ -268,11 +269,11 @@ class TenderApp(tk.Tk):
         self.search_var = tk.StringVar()
         self.search_var.trace_add("write", lambda *args: self._refresh_table_view())
         
-        search_ent = tk.Entry(filter_fr, textvariable=self.search_var, bg=CARD, fg=TEXT,
+        self.search_ent = tk.Entry(filter_fr, textvariable=self.search_var, bg=CARD, fg=TEXT,
                               insertbackground=TEXT, relief="flat", font=FL, width=22,
                               highlightthickness=1, highlightbackground="#30363D",
                               highlightcolor=ACCENT2)
-        search_ent.pack(side="left", padx=(4, 15))
+        self.search_ent.pack(side="left", padx=(4, 15))
 
         # View dropdown
         tk.Label(filter_fr, text="Category View:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
@@ -347,6 +348,16 @@ class TenderApp(tk.Tk):
         # Initialize detail text state
         self._clear_detail_panel()
 
+        # Bind MouseWheel events for self.detail_txt
+        def on_detail_mousewheel(event):
+            if event.num == 5 or event.delta < 0:
+                self.detail_txt.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:
+                self.detail_txt.yview_scroll(-1, "units")
+        self.detail_txt.bind("<MouseWheel>", on_detail_mousewheel)
+        self.detail_txt.bind("<Button-4>", on_detail_mousewheel)
+        self.detail_txt.bind("<Button-5>", on_detail_mousewheel)
+
         self.tv.tag_configure("alt",     background="#1C2128")
         self.tv.tag_configure("fetched", background="#1A2E1A", foreground=SUCCESS)
         self.tv.tag_configure("saved",   background="#1A3A2A", foreground=SUCCESS)
@@ -392,11 +403,22 @@ class TenderApp(tk.Tk):
 
     # ── widget helpers ────────────────────────────────────────────────────────
     def _btn(self, parent, text, cmd, bg=CARD, fg=TEXT, pad=6):
-        return tk.Button(parent, text=text, command=cmd,
-                         bg=bg, fg=fg, relief="flat", font=FL,
-                         padx=pad, pady=4,
-                         activebackground=ACCENT2, activeforeground=TEXT,
-                         cursor="hand2")
+        btn = tk.Button(parent, text=text, command=cmd,
+                        bg=bg, fg=fg, relief="flat", font=FL,
+                        padx=pad, pady=4,
+                        activebackground=ACCENT2, activeforeground=TEXT,
+                        cursor="hand2")
+                        
+        hover_colors = {
+            CARD: "#30363D",
+            ACCENT2: "#388BFD",
+            BG: "#161B22"
+        }
+        hover_bg = hover_colors.get(bg, "#30363D")
+        
+        btn.bind("<Enter>", lambda e: btn.configure(bg=hover_bg))
+        btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
+        return btn
 
     def _log(self, level, msg):
         import logger
@@ -804,6 +826,8 @@ class TenderApp(tk.Tk):
                             if rec.get("bid_no"):
                                 self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
                                 return rec
+                            else:
+                                self.after(0, lambda f=blk: self._log("warn", f"Failed to find Bid Number in PDF: {os.path.basename(f)}"))
                         except Exception as ex:
                             self.after(0, lambda f=blk, err=ex: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}"))
                         return None
@@ -911,11 +935,17 @@ class TenderApp(tk.Tk):
                     return rec
                     
             with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = {executor.submit(process_one, idx, blk): blk for idx, blk in enumerate(blocks_to_process, 1)}
-                for fut in as_completed(futures):
-                    res_rec = fut.result()
-                    if res_rec:
-                        recs.append(res_rec)
+                futures = {executor.submit(process_one, idx, blk): (idx, blk) for idx, blk in enumerate(blocks_to_process, 1)}
+                for fut in futures:
+                    idx, blk = futures[fut]
+                    try:
+                        res_rec = fut.result(timeout=15.0)
+                        if res_rec:
+                            recs.append(res_rec)
+                    except (TimeoutError, Exception) as e:
+                        filename = os.path.basename(blk) if blk.lower().endswith(".pdf") else blk[:20]
+                        self.after(0, lambda fn=filename, err=e: self._log("err", f"[{idx}/{total}] PDF read timed out or failed (skipped): {fn}"))
+                    
                     completed_count += 1
                     prog_val = int(completed_count / total * 100)
                     self.after(0, lambda p=prog_val, c=completed_count: self._set_prog(p, f"Processed {c}/{total}…"))
@@ -1514,13 +1544,29 @@ class TenderApp(tk.Tk):
         self.cal_details_fr = tk.Frame(self.cal_scroll_canvas, bg=PANEL)
         self.cal_scroll_canvas.create_window((0, 0), window=self.cal_details_fr, anchor="nw", tags="self.cal_details_fr")
         
-        # Bind Canvas resizing
-        self.cal_details_fr.bind("<Configure>", lambda e: self.cal_scroll_canvas.configure(
-            scrollregion=self.cal_scroll_canvas.bbox("all")
-        ))
-        self.cal_scroll_canvas.bind("<Configure>", lambda e: self.cal_scroll_canvas.itemconfig(
-            "self.cal_details_fr", width=e.width
-        ))
+        # Guard against calendar scroll configure loop recursion
+        self._updating_cal_scroll = False
+        def on_cal_details_configure(e):
+            if self._updating_cal_scroll:
+                return
+            self._updating_cal_scroll = True
+            try:
+                self.cal_scroll_canvas.configure(scrollregion=self.cal_scroll_canvas.bbox("all"))
+            finally:
+                self._updating_cal_scroll = False
+
+        self._configuring_cal_canvas = False
+        def on_cal_canvas_configure(e):
+            if self._configuring_cal_canvas:
+                return
+            self._configuring_cal_canvas = True
+            try:
+                self.cal_scroll_canvas.itemconfig("self.cal_details_fr", width=e.width)
+            finally:
+                self._configuring_cal_canvas = False
+
+        self.cal_details_fr.bind("<Configure>", on_cal_details_configure)
+        self.cal_scroll_canvas.bind("<Configure>", on_cal_canvas_configure)
 
         # Mouse wheel support
         def _on_mousewheel(event):
@@ -2373,12 +2419,29 @@ class TenderApp(tk.Tk):
         self.deadlines_inner_fr = tk.Frame(self.deadlines_list, bg=PANEL)
         self.deadlines_list.create_window((0, 0), window=self.deadlines_inner_fr, anchor="nw", tags="self.deadlines_inner_fr")
         
-        self.deadlines_inner_fr.bind("<Configure>", lambda e: self.deadlines_list.configure(
-            scrollregion=self.deadlines_list.bbox("all")
-        ))
-        self.deadlines_list.bind("<Configure>", lambda e: self.deadlines_list.itemconfig(
-            "self.deadlines_inner_fr", width=e.width
-        ))
+        # Guard against infinite configure loop
+        self._updating_deadlines_scroll = False
+        def on_inner_configure(e):
+            if self._updating_deadlines_scroll:
+                return
+            self._updating_deadlines_scroll = True
+            try:
+                self.deadlines_list.configure(scrollregion=self.deadlines_list.bbox("all"))
+            finally:
+                self._updating_deadlines_scroll = False
+
+        self._configuring_deadlines_canvas = False
+        def on_canvas_configure(e):
+            if self._configuring_deadlines_canvas:
+                return
+            self._configuring_deadlines_canvas = True
+            try:
+                self.deadlines_list.itemconfig("self.deadlines_inner_fr", width=e.width)
+            finally:
+                self._configuring_deadlines_canvas = False
+
+        self.deadlines_inner_fr.bind("<Configure>", on_inner_configure)
+        self.deadlines_list.bind("<Configure>", on_canvas_configure)
         
         self.deadlines_scroll.pack(side="right", fill="y")
         self.deadlines_list.pack(side="left", fill="both", expand=True)
@@ -2430,16 +2493,38 @@ class TenderApp(tk.Tk):
         else:
             max_count = sorted_mins[0][1]
             canvas_w = self.chart_canvas.winfo_width() or 300
-            bar_max_w = max(100, canvas_w - 180)
+            bar_max_w = max(100, canvas_w - 200)
             
+            # Draw background grid lines and labels
+            for ratio in [0.25, 0.5, 0.75, 1.0]:
+                grid_x = 130 + int(ratio * bar_max_w)
+                grid_val = int(ratio * max_count)
+                # Draw vertical grid line
+                self.chart_canvas.create_line(grid_x, 15, grid_x, 240, fill="#21262D", dash=(3, 3))
+                # Label at bottom
+                self.chart_canvas.create_text(grid_x, 248, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
+                
             for idx, (min_name, count) in enumerate(sorted_mins):
-                y_offset = idx * 50 + 25
-                disp_name = min_name[:20] + "..." if len(min_name) > 20 else min_name
+                y_offset = idx * 46 + 32
+                disp_name = min_name[:18] + "..." if len(min_name) > 18 else min_name
+                
+                # Draw label
                 self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w")
                 
                 bar_w = int((count / max_count) * bar_max_w)
-                self.chart_canvas.create_rectangle(130, y_offset - 10, 130 + bar_w, y_offset + 10, fill=ACCENT2, outline="")
-                self.chart_canvas.create_text(130 + bar_w + 10, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
+                bar_w = max(4, bar_w)
+                
+                # Color coding: top gets bright blue, others get standard accent blue
+                bar_color = "#388BFD" if idx == 0 else "#1F6FEB"
+                
+                # Draw drop shadow (offset by 2px down/right)
+                self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13")
+                
+                # Draw rounded bar
+                self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color)
+                
+                # Draw count label
+                self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
 
         # Update deadlines
         for child in self.deadlines_inner_fr.winfo_children():
@@ -2588,3 +2673,41 @@ class TenderApp(tk.Tk):
                 start = end
                 
         self.detail_txt.configure(state="disabled")
+
+    def _bind_shortcuts(self):
+        self.bind("<Control-f>", lambda e: self._shortcut_focus_search())
+        self.bind("<Control-s>", lambda e: self._shortcut_focus_search())
+        self.bind("<Control-v>", lambda e: self._shortcut_clipboard_parse())
+        self.bind("<Control-r>", lambda e: self._reload())
+        self.bind("<Control-Alt-s>", lambda e: self._show_settings())
+        self.bind("<Delete>", lambda e: self._shortcut_delete_selected())
+        self.bind("<Escape>", lambda e: self._cancel_edit())
+
+    def _shortcut_focus_search(self):
+        try:
+            self.notebook.select(0)
+            self.search_ent.focus_set()
+            self.search_ent.selection_range(0, "end")
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_clipboard_parse(self):
+        try:
+            clipboard = self.clipboard_get()
+            if clipboard:
+                self.notebook.select(2)
+                self.paste_txt.delete("1.0", "end")
+                self.paste_txt.insert("1.0", clipboard)
+                self._do_parse()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_delete_selected(self):
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self._delete_selected()
+        except Exception:
+            pass
+        return "break"
