@@ -235,10 +235,12 @@ class TenderApp(tk.Tk):
         self.tab_table = tk.Frame(self.notebook, bg=BG)
         self.tab_calendar = tk.Frame(self.notebook, bg=BG)
         self.tab_matrix = tk.Frame(self.notebook, bg=BG)
+        self.tab_analytics = tk.Frame(self.notebook, bg=BG)
         
         self.notebook.add(self.tab_table, text="  Table View  ")
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
         self.notebook.add(self.tab_matrix, text="  Matrix View  ")
+        self.notebook.add(self.tab_analytics, text="  Analytics View  ")
 
         # Table Tab Header (formerly right header)
         hdr = tk.Frame(self.tab_table, bg=BG)
@@ -339,6 +341,9 @@ class TenderApp(tk.Tk):
         # Build Matrix tab layouts
         self._build_matrix_tab()
 
+        # Build Analytics tab layouts
+        self._build_analytics_tab()
+
         # Bind notebook tab change event to refresh calendar if switched to it
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
 
@@ -372,6 +377,60 @@ class TenderApp(tk.Tk):
         self.log_txt.see("end")
         self.log_txt.configure(state="disabled")
         self.update_idletasks()
+
+    def _show_toast(self, title, message, level="info"):
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, lambda: self._show_toast(title, message, level))
+            return
+            
+        toast = tk.Toplevel(self)
+        toast.overrideredirect(True)
+        toast.attributes("-topmost", True)
+        
+        color_map = {
+            "ok": SUCCESS,
+            "err": ERR,
+            "warn": WARN,
+            "info": TEXT
+        }
+        accent_color = color_map.get(level, TEXT)
+        toast.configure(bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
+        
+        # Position bottom right of screen
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        w, h = 320, 80
+        x = screen_w - w - 20
+        y = screen_h - h - 65
+        toast.geometry(f"{w}x{h}+{x}+{y}")
+        
+        stripe = tk.Frame(toast, bg=accent_color, width=6)
+        stripe.pack(side="left", fill="y")
+        
+        content = tk.Frame(toast, bg=PANEL, padx=12, pady=10)
+        content.pack(side="left", fill="both", expand=True)
+        
+        lbl_title = tk.Label(content, text=title, font=("Segoe UI", 10, "bold"), bg=PANEL, fg=TEXT)
+        lbl_title.pack(anchor="w")
+        
+        lbl_msg = tk.Label(content, text=message, font=FL, bg=PANEL, fg=MUTED, wraplength=285, justify="left")
+        lbl_msg.pack(anchor="w", pady=(2, 0))
+        
+        def fade_out(alpha=1.0):
+            if alpha > 0.0:
+                alpha -= 0.1
+                try:
+                    toast.attributes("-alpha", alpha)
+                    self.after(50, lambda: fade_out(alpha))
+                except Exception:
+                    pass
+            else:
+                try:
+                    toast.destroy()
+                except Exception:
+                    pass
+                    
+        self.after(3000, fade_out)
 
     def _set_status(self, msg, color=MUTED):
         if threading.current_thread() is not threading.main_thread():
@@ -647,6 +706,7 @@ class TenderApp(tk.Tk):
 
         def worker():
             import pypdf
+            from concurrent.futures import ThreadPoolExecutor, as_completed
             
             # Step 1: Split raw text into initial blocks.
             initial_blocks = split_blocks(raw)
@@ -667,9 +727,9 @@ class TenderApp(tk.Tk):
             self._log("info", f"Found {total} item(s) to process.")
             
             recs = []
-            for i, blk in enumerate(blocks_to_process, 1):
-                self._set_prog(int((i-1)/total*100), f"Processing {i}/{total}…")
-                
+            completed_count = 0
+            
+            def process_one(i, blk):
                 # Check if block is a local PDF path on disk
                 if blk.lower().endswith(".pdf") and os.path.exists(blk):
                     self.after(0, lambda f=blk: self._log("info", f"[{i}/{total}] Reading PDF: {os.path.basename(f)}"))
@@ -683,11 +743,11 @@ class TenderApp(tk.Tk):
                         md_text = convert_pdf_text_to_markdown(pdf_text)
                         rec = parse_one(md_text)
                         if rec.get("bid_no"):
-                            recs.append(rec)
-                            self._log("ok", f"[{i}/{total}] Parsed PDF {rec['bid_no']}")
+                            self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
+                            return rec
                     except Exception as ex:
                         self.after(0, lambda f=blk, err=ex: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}"))
-                    continue
+                    return None
                 
                 # Parse block as text first
                 rec = parse_one(blk)
@@ -707,18 +767,16 @@ class TenderApp(tk.Tk):
                     elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
                         bid_no = line_val
                     else:
-                        self._log("warn", f"[{i}/{total}] SKIP — No valid Bid Number or URL found")
-                        continue
+                        self.after(0, lambda: self._log("warn", f"SKIP — No valid Bid Number or URL found"))
+                        return None
                 
                 # Check if it is in Don't Wants
                 id_to_check = bid_no if bid_no else bid_url
                 if self._is_bid_in_dont_wants(id_to_check):
-                    self._log("info", f"[{i}/{total}] Skipping {id_to_check}: Already in database 'Don't Wants'")
-                    continue
+                    self.after(0, lambda: self._log("info", f"Skipping {id_to_check}: Already in database 'Don't Wants'"))
+                    return None
                 
                 # Determine if we need to download the PDF:
-                # ONLY if the parsed record has no details (meaning it only contains bid_no/bid_url),
-                # AND we don't already have it fully parsed in database.
                 has_details = any(rec.get(k) for k in ("items", "dept", "start_date", "end_date", "ministry", "category"))
                 
                 if not has_details:
@@ -733,10 +791,10 @@ class TenderApp(tk.Tk):
                             break
                             
                     if existing_rec and any(existing_rec.get(k) for k in ("items", "dept", "start_date")):
-                        self._log("info", f"[{i}/{total}] Using existing database details for {bid_no}")
-                        recs.append(existing_rec)
+                        self.after(0, lambda: self._log("info", f"Using existing database details for {bid_no}"))
+                        return existing_rec
                     else:
-                        self._log("info", f"[{i}/{total}] Downloading PDF to fetch details for {bid_no or bid_url}...")
+                        self.after(0, lambda: self._log("info", f"Downloading PDF to fetch details for {bid_no or bid_url}..."))
                         try:
                             dl_dir = os.path.dirname(db.DB_FILE)
                             dest_path = None
@@ -761,7 +819,7 @@ class TenderApp(tk.Tk):
                                 dest_path = download_tender_pdf(bid_no, dl_dir, log_fn=self._log, headless=headless_opt)
                                 
                             if dest_path and os.path.exists(dest_path):
-                                self._log("ok", f"[{i}/{total}] PDF downloaded successfully. Parsing...")
+                                self.after(0, lambda: self._log("ok", f"PDF downloaded successfully for {bid_no}. Parsing..."))
                                 reader = pypdf.PdfReader(dest_path)
                                 pdf_text = ""
                                 for page in reader.pages:
@@ -772,28 +830,44 @@ class TenderApp(tk.Tk):
                                 pdf_rec = parse_one(md_text)
                                 if bid_url and "bid_url" not in pdf_rec:
                                     pdf_rec["bid_url"] = bid_url
-                                recs.append(pdf_rec)
+                                return pdf_rec
                             else:
-                                self._log("err", f"[{i}/{total}] Failed to download PDF for {bid_no or bid_url}")
+                                self.after(0, lambda: self._log("err", f"Failed to download PDF for {bid_no or bid_url}"))
                                 if not rec.get("bid_no") and bid_no:
                                     rec["bid_no"] = bid_no
                                 if not rec.get("bid_url") and bid_url:
                                     rec["bid_url"] = bid_url
-                                recs.append(rec)
+                                return rec
                         except Exception as dl_err:
-                            self._log("err", f"[{i}/{total}] Error downloading PDF: {dl_err}")
-                            recs.append(rec)
+                            self.after(0, lambda: self._log("err", f"Error downloading PDF for {bid_no}: {dl_err}"))
+                            return rec
                 else:
-                    self._log("ok", f"[{i}/{total}] Parsed details directly from text for {bid_no}")
-                    recs.append(rec)
+                    self.after(0, lambda: self._log("ok", f"Parsed details directly from text for {bid_no}"))
+                    return rec
                     
-            self._set_prog(100, "Done.")
+            with ThreadPoolExecutor(max_workers=3) as executor:
+                futures = {executor.submit(process_one, idx, blk): blk for idx, blk in enumerate(blocks_to_process, 1)}
+                for fut in as_completed(futures):
+                    res_rec = fut.result()
+                    if res_rec:
+                        recs.append(res_rec)
+                    completed_count += 1
+                    prog_val = int(completed_count / total * 100)
+                    self.after(0, lambda p=prog_val, c=completed_count: self._set_prog(p, f"Processed {c}/{total}…"))
+                    
+            self.after(0, lambda: self._set_prog(100, "Done."))
             self.after(0, lambda: self._add_rows(recs, total))
         threading.Thread(target=worker, daemon=True).start()
 
     def _add_rows(self, recs, total):
         added_count = 0
         updated_count = 0
+        
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
         
         children = self.tv.get_children()
         records_by_bid = {}
@@ -808,6 +882,7 @@ class TenderApp(tk.Tk):
                 if matched_rec:
                     records_by_bid[bid_no] = (matched_rec, iid)
 
+        new_wants = []
         for rec in recs:
             bid_no = rec.get("bid_no")
             if bid_no in records_by_bid:
@@ -826,9 +901,23 @@ class TenderApp(tk.Tk):
                 self._records.append(rec)
                 self._tv_insert(rec)
                 added_count += 1
+                
+                is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+                if is_want:
+                    new_wants.append(rec)
 
         db.save_all_tenders(self._records)
         self._refresh_table_view()
+        
+        if new_wants:
+            w_count = len(new_wants)
+            first_w = new_wants[0]
+            first_bid = first_w.get('bid_no', '')
+            first_item = first_w.get('items', '')
+            desc = f"{first_bid}: {first_item[:30]}..." if w_count == 1 \
+                   else f"{first_bid} and {w_count - 1} other(s)"
+            self._show_toast("New Want Tender Match!", desc, "ok")
+            
         skipped = total - (added_count + updated_count)
         msg = f"Parsed {total} block(s): {added_count} added"
         if updated_count:
@@ -1070,42 +1159,57 @@ class TenderApp(tk.Tk):
 
         def worker():
             total = len(targets)
-            for n, (idx, rec) in enumerate(targets, 1):
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            
+            completed_count = 0
+            
+            def fetch_one(idx, rec):
                 bid = rec.get("bid_no","?")
                 iid = iid_map.get(bid)
                 url = rec["bid_url"]
-
-                self._set_prog(int((n-1)/total*100), f"Fetching {n}/{total}: {bid}")
-                self._log("info", f"[{n}/{total}] Fetching {bid}")
-
-                # mark row as "fetching"
+                
+                self.after(0, lambda: self._log("info", f"Fetching details for {bid}"))
                 if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=("fetching",)))
-
-                extra = scrape_bid_page(url, log_fn=self._log)
-
-                if extra:
-                    rec.update(extra)
-                    rec["is_fetched"] = True
-                    # update treeview cells
-                    def update_tv(i=iid, r=rec):
-                        if i:
-                            for cid in TV_IDS:
-                                if cid in r:
-                                    self.tv.set(i, cid, r[cid])
-                            self.tv.item(i, tags=("fetched",))
-                        db.save_all_tenders(self._records)
-                    self.after(0, update_tv)
-                    self._log("ok", f"[{n}/{total}] {bid} — merged {len(extra)} extra fields")
-                else:
+                
+                try:
+                    headless_opt = db.load_settings().get("selenium_headless", False)
+                    extra = scrape_bid_page(url, log_fn=self._log, headless=headless_opt)
+                    if extra:
+                        rec.update(extra)
+                        rec["is_fetched"] = True
+                        
+                        def update_tv(i=iid, r=rec, e=extra):
+                            if i:
+                                for cid in TV_IDS:
+                                    if cid in r:
+                                        self.tv.set(i, cid, r[cid])
+                                self.tv.item(i, tags=("fetched",))
+                            db.upsert_tender(r)
+                            
+                        self.after(0, update_tv)
+                        self.after(0, lambda e_len=len(extra): self._log("ok", f"{bid} — merged {e_len} extra fields"))
+                    else:
+                        if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=()))
+                        self.after(0, lambda: self._log("warn", f"{bid} — no extra data scraped"))
+                except Exception as ex:
                     if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=()))
-                    self._log("warn", f"[{n}/{total}] {bid} — no extra data scraped")
+                    self.after(0, lambda b=bid, err=ex: self._log("err", f"Failed to fetch details for {b}: {err}"))
 
-                self._set_prog(int(n/total*100), f"Fetched {n}/{total}")
-
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                futures = {executor.submit(fetch_one, idx, rec): rec for idx, rec in targets}
+                for fut in as_completed(futures):
+                    completed_count += 1
+                    prog_val = int(completed_count / total * 100)
+                    self.after(0, lambda p=prog_val, c=completed_count: self._set_prog(p, f"Fetched {c}/{total}…"))
+                    
             self._fetch_running = False
-            self._set_prog(100, "Fetch complete.")
+            self.after(0, lambda: self._set_prog(100, "Fetch complete."))
             msg = f"Selenium fetch done: {total} URL(s) processed"
-            self._log("info", f"--- {msg} ---")
+            self.after(0, lambda: self._log("info", f"--- {msg} ---"))
+            
+            # Show toast when fetch is done
+            self._show_toast("Detail Fetching Complete", f"Successfully processed {total} URL(s).", "info")
+            
             def fetch_finished():
                 self._set_status(msg, SUCCESS)
                 try:
@@ -1563,6 +1667,8 @@ class TenderApp(tk.Tk):
                 self._update_details()
             elif selected_tab == 2:
                 self._update_matrix()
+            elif selected_tab == 3:
+                self._update_analytics()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -1583,14 +1689,56 @@ class TenderApp(tk.Tk):
         ]
         combined_text = " ".join(search_fields).lower()
         
-        for kw in exc_kws:
-            if kw and kw in combined_text:
+        def check_single_rule(rule):
+            rule_clean = rule.strip()
+            if not rule_clean:
+                return False
+            
+            # Regex Rule Support
+            if rule_clean.lower().startswith("rx:"):
+                pattern = rule_clean[3:].strip()
+                try:
+                    import re
+                    return bool(re.search(pattern, combined_text, re.I))
+                except Exception:
+                    return False
+                    
+            # Boolean Expression Support
+            if " and " in rule_clean.lower() or " or " in rule_clean.lower() or "not " in rule_clean.lower() or "(" in rule_clean or ")" in rule_clean:
+                return eval_expr(rule_clean.lower())
+                
+            # Standard Plain Substring Matching
+            return rule_clean.lower() in combined_text
+
+        def eval_expr(expr):
+            import re
+            tokens = re.findall(r"\(|\)|\w+[\w\s-]*\w+|\w+", expr)
+            processed_tokens = []
+            for tok in tokens:
+                tok_clean = tok.strip()
+                if tok_clean in ("(", ")", "and", "or", "not"):
+                    processed_tokens.append(tok_clean)
+                elif tok_clean:
+                    exists = check_single_rule(tok_clean)
+                    processed_tokens.append("True" if exists else "False")
+            
+            expr_str = " ".join(processed_tokens)
+            expr_str = re.sub(r"[^a-zA-Z0-9\s()&|!]", "", expr_str)
+            try:
+                if re.match(r"^[TrueFalse()andornot\s]+$", expr_str):
+                    return bool(eval(expr_str))
+            except Exception:
+                pass
+            return False
+
+        for rule in exc_kws:
+            if check_single_rule(rule):
                 return False
                 
         if inc_kws:
             matches_inc = False
-            for kw in inc_kws:
-                if kw and kw in combined_text:
+            for rule in inc_kws:
+                if check_single_rule(rule):
                     matches_inc = True
                     break
             if not matches_inc:
@@ -2101,3 +2249,161 @@ class TenderApp(tk.Tk):
         db.save_all_tenders(self._records)
         self._refresh_table_view()
         self._log("ok", f"Updated filing status for {bid_no} to '{new_status}'")
+
+    def _build_analytics_tab(self):
+        container = tk.Frame(self.tab_analytics, bg=BG)
+        container.pack(fill="both", expand=True, padx=15, pady=15)
+        
+        # Grid layout for cards
+        cards_fr = tk.Frame(container, bg=BG)
+        cards_fr.pack(fill="x", pady=(0, 15))
+        
+        for col in range(4):
+            cards_fr.columnconfigure(col, weight=1)
+            
+        def make_card(parent, col, title, color):
+            card = tk.Frame(parent, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
+            card.grid(row=0, column=col, padx=6, sticky="nsew")
+            lbl_title = tk.Label(card, text=title, font=FL, bg=PANEL, fg=MUTED)
+            lbl_title.pack(anchor="w")
+            lbl_val = tk.Label(card, text="0", font=("Segoe UI", 24, "bold"), bg=PANEL, fg=color)
+            lbl_val.pack(anchor="w", pady=(4, 0))
+            return lbl_val
+
+        self.lbl_total_tenders = make_card(cards_fr, 0, "Total Tenders", TEXT)
+        self.lbl_matching_wants = make_card(cards_fr, 1, "Matching Wants", SUCCESS)
+        self.lbl_filtered_dont_wants = make_card(cards_fr, 2, "Filtered Don't Wants", ERR)
+        self.lbl_not_filed = make_card(cards_fr, 3, "Not Filed Wants", WARN)
+        
+        # Bottom half
+        bottom_fr = tk.Frame(container, bg=BG)
+        bottom_fr.pack(fill="both", expand=True)
+        
+        bottom_fr.columnconfigure(0, weight=1)
+        bottom_fr.columnconfigure(1, weight=1)
+        
+        # Left Panel: Top Ministries Chart
+        chart_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
+        chart_fr.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
+        tk.Label(chart_fr, text="Top Ministries / Departments", font=FT, bg=PANEL, fg=TEXT).pack(anchor="w", pady=(0, 10))
+        
+        self.chart_canvas = tk.Canvas(chart_fr, bg=PANEL, highlightthickness=0, height=260)
+        self.chart_canvas.pack(fill="both", expand=True)
+        
+        # Right Panel: Upcoming Deadlines
+        deadlines_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
+        deadlines_fr.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
+        tk.Label(deadlines_fr, text="Upcoming Deadlines (Wants)", font=FT, bg=PANEL, fg=TEXT).pack(anchor="w", pady=(0, 10))
+        
+        self.deadlines_scroll = ttk.Scrollbar(deadlines_fr, orient="vertical")
+        self.deadlines_list = tk.Canvas(deadlines_fr, bg=PANEL, highlightthickness=0, yscrollcommand=self.deadlines_scroll.set)
+        self.deadlines_scroll.configure(command=self.deadlines_list.yview)
+        
+        self.deadlines_inner_fr = tk.Frame(self.deadlines_list, bg=PANEL)
+        self.deadlines_list.create_window((0, 0), window=self.deadlines_inner_fr, anchor="nw", tags="self.deadlines_inner_fr")
+        
+        self.deadlines_inner_fr.bind("<Configure>", lambda e: self.deadlines_list.configure(
+            scrollregion=self.deadlines_list.bbox("all")
+        ))
+        self.deadlines_list.bind("<Configure>", lambda e: self.deadlines_list.itemconfig(
+            "self.deadlines_inner_fr", width=e.width
+        ))
+        
+        self.deadlines_scroll.pack(side="right", fill="y")
+        self.deadlines_list.pack(side="left", fill="both", expand=True)
+
+    def _update_analytics(self):
+        total = len(self._records)
+        wants = 0
+        dont_wants = 0
+        not_filed = 0
+        
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+        
+        ministry_counts = {}
+        upcoming_deadlines = []
+        
+        for r in self._records:
+            is_want = self._get_tender_status(r, inc_kws, exc_kws)
+            if is_want:
+                wants += 1
+                if r.get("filing_status", "Not Filed") == "Not Filed":
+                    not_filed += 1
+                
+                end_str = r.get("end_date", "")
+                if end_str:
+                    dt = self._parse_date_str(end_str)
+                    if dt and dt >= datetime.now().date():
+                        upcoming_deadlines.append((dt, end_str, r))
+            else:
+                dont_wants += 1
+                
+            min_name = r.get("ministry", "").strip() or "Unknown Ministry"
+            ministry_counts[min_name] = ministry_counts.get(min_name, 0) + 1
+            
+        self.lbl_total_tenders.configure(text=str(total))
+        self.lbl_matching_wants.configure(text=str(wants))
+        self.lbl_filtered_dont_wants.configure(text=str(dont_wants))
+        self.lbl_not_filed.configure(text=str(not_filed))
+        
+        # Draw ministries bar chart
+        self.chart_canvas.delete("all")
+        sorted_mins = sorted(ministry_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        
+        if not sorted_mins:
+            self.chart_canvas.create_text(150, 100, text="No ministry data available", fill=MUTED, font=FL)
+        else:
+            max_count = sorted_mins[0][1]
+            canvas_w = self.chart_canvas.winfo_width() or 300
+            bar_max_w = max(100, canvas_w - 180)
+            
+            for idx, (min_name, count) in enumerate(sorted_mins):
+                y_offset = idx * 50 + 25
+                disp_name = min_name[:20] + "..." if len(min_name) > 20 else min_name
+                self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w")
+                
+                bar_w = int((count / max_count) * bar_max_w)
+                self.chart_canvas.create_rectangle(130, y_offset - 10, 130 + bar_w, y_offset + 10, fill=ACCENT2, outline="")
+                self.chart_canvas.create_text(130 + bar_w + 10, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
+
+        # Update deadlines
+        for child in self.deadlines_inner_fr.winfo_children():
+            child.destroy()
+            
+        upcoming_deadlines.sort(key=lambda x: x[0])
+        display_deadlines = upcoming_deadlines[:10]
+        
+        if not display_deadlines:
+            lbl = tk.Label(self.deadlines_inner_fr, text="No upcoming want deadlines.", font=FL, bg=PANEL, fg=MUTED)
+            lbl.pack(pady=30)
+        else:
+            for dt, end_str, r in display_deadlines:
+                row = tk.Frame(self.deadlines_inner_fr, bg=PANEL, pady=6)
+                row.pack(fill="x", padx=10)
+                
+                days_left = (dt - datetime.now().date()).days
+                if days_left == 0:
+                    status_lbl = "TODAY"
+                    status_color = ERR
+                elif days_left == 1:
+                    status_lbl = "1 day left"
+                    status_color = ERR
+                else:
+                    status_lbl = f"{days_left} days left"
+                    status_color = WARN if days_left < 4 else SUCCESS
+                    
+                lbl_left = tk.Label(row, text=r.get("bid_no", ""), font=FB, bg=PANEL, fg=TEXT, width=18, anchor="w")
+                lbl_left.pack(side="left")
+                
+                lbl_mid = tk.Label(row, text=r.get("items", "")[:25], font=FL, bg=PANEL, fg=MUTED, anchor="w")
+                lbl_mid.pack(side="left", fill="x", expand=True, padx=10)
+                
+                lbl_right = tk.Label(row, text=status_lbl, font=FB, bg=PANEL, fg=status_color, width=12, anchor="e")
+                lbl_right.pack(side="right")
+                
+                sep = tk.Frame(self.deadlines_inner_fr, bg="#30363D", height=1)
+                sep.pack(fill="x", padx=10)

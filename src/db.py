@@ -1,12 +1,14 @@
 import os
 import json
+import sqlite3
 import threading
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".tendertracker_settings.json")
-DEFAULT_DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tenders_db.json")
+DEFAULT_DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tenders_db.db")
 DB_FILE = DEFAULT_DB_FILE
 _lock = threading.RLock()
 
+# Settings loading/saving functions (keeps JSON settings file)
 def load_settings():
     """Load all settings from the settings file."""
     if os.path.exists(SETTINGS_FILE):
@@ -47,81 +49,307 @@ def init_db_path(custom_path=None):
         DB_FILE = cfg_path
     else:
         DB_FILE = DEFAULT_DB_FILE
+    
+    # Run migration check if default path is used
+    if DB_FILE == DEFAULT_DB_FILE:
+        legacy_json = DEFAULT_DB_FILE[:-2] + "json"
+        if os.path.exists(legacy_json) and not os.path.exists(DB_FILE):
+            migrate_json_to_sqlite(legacy_json, DB_FILE)
+        
     return DB_FILE
 
-def load_all_tenders():
-    """Load all tenders from the local JSON file. Thread-safe."""
+def migrate_json_to_sqlite(json_path, sqlite_path):
+    """Migrates legacy JSON tenders database to SQLite."""
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            records = json.load(f)
+        if records:
+            # Temporarily set DB_FILE to sqlite_path to call save_all_tenders
+            global DB_FILE
+            old_db_file = DB_FILE
+            DB_FILE = sqlite_path
+            init_db_connection()
+            save_all_tenders(records)
+            DB_FILE = old_db_file
+        backup_path = json_path + ".bak"
+        if os.path.exists(backup_path):
+            os.remove(backup_path)
+        os.rename(json_path, backup_path)
+    except Exception:
+        pass
+
+# SQLite Helpers
+def get_resolved_db_path():
+    db_path = DB_FILE
+    if db_path.lower().endswith(".json"):
+        db_path = db_path[:-5] + ".db"
+    return db_path
+
+def get_conn():
+    db_path = get_resolved_db_path()
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tenders'")
+        if not cursor.fetchone():
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tenders (
+                    bid_no TEXT PRIMARY KEY,
+                    bid_url TEXT,
+                    ministry TEXT,
+                    dept TEXT,
+                    organisation TEXT,
+                    office TEXT,
+                    category TEXT,
+                    items TEXT,
+                    quantity TEXT,
+                    location TEXT,
+                    contract_dur TEXT,
+                    est_value TEXT,
+                    eval_method TEXT,
+                    bid_type TEXT,
+                    bid_to_ra TEXT,
+                    emd TEXT,
+                    epbg TEXT,
+                    mii TEXT,
+                    mse_pref TEXT,
+                    mse_relax TEXT,
+                    startup_relax TEXT,
+                    min_turnover TEXT,
+                    exp_years TEXT,
+                    bid_opening TEXT,
+                    start_date TEXT,
+                    end_date TEXT,
+                    is_want INTEGER,
+                    is_want_derived INTEGER,
+                    is_saved INTEGER,
+                    is_fetched INTEGER,
+                    filing_status TEXT,
+                    remarks TEXT,
+                    tags TEXT
+                )
+            """)
+            conn.commit()
+    except Exception as e:
+        try: conn.close()
+        except Exception: pass
+        raise e
+    return conn
+
+def init_db_connection():
+    """Create the table if it does not exist."""
     with _lock:
-        if not os.path.exists(DB_FILE):
-            return []
         try:
-            with open(DB_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            conn = get_conn()
+            conn.close()
+        except Exception:
+            pass
+
+def handle_db_error(e):
+    err_msg = str(e).lower()
+    if "is not a database" in err_msg or "malformed" in err_msg:
+        with _lock:
+            try:
+                db_path = get_resolved_db_path()
+                os.remove(db_path)
+                init_db_connection()
+            except Exception:
+                pass
+
+# List of columns to map database rows to dicts
+COLUMNS = [
+    "bid_no", "bid_url", "ministry", "dept", "organisation", "office", "category",
+    "items", "quantity", "location", "contract_dur", "est_value", "eval_method",
+    "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
+    "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
+    "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags"
+]
+
+def row_to_dict(row):
+    d = {}
+    for i, col in enumerate(COLUMNS):
+        val = row[i]
+        # Deserialize tag list and boolean values
+        if col == "tags":
+            try:
+                tags_list = json.loads(val) if val else []
+                if tags_list:
+                    d[col] = tags_list
+            except Exception:
+                pass
+        elif col in ("is_want", "is_want_derived", "is_saved", "is_fetched"):
+            if val is not None:
+                d[col] = bool(val)
+        else:
+            if val is not None and str(val).strip() != "":
+                d[col] = val
+    # bid_no is required
+    if "bid_no" not in d:
+        d["bid_no"] = ""
+    return d
+
+def dict_to_row(d):
+    vals = []
+    for col in COLUMNS:
+        val = d.get(col)
+        if col == "tags":
+            vals.append(json.dumps(val) if val else "[]")
+        elif col in ("is_want", "is_want_derived", "is_saved", "is_fetched"):
+            if val is None:
+                vals.append(None)
+            else:
+                vals.append(1 if val else 0)
+        else:
+            vals.append(str(val) if val is not None else "")
+    return tuple(vals)
+
+def load_all_tenders():
+    """Load all tenders from SQLite. Thread-safe."""
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM tenders")
+            rows = cursor.fetchall()
+            return [row_to_dict(r) for r in rows]
+        except sqlite3.DatabaseError as e:
+            handle_db_error(e)
+            return []
         except Exception:
             return []
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
 
 def save_all_tenders(records):
-    """Save all tenders to the local JSON file. Thread-safe."""
+    """Save all tenders to SQLite (replaces all existing). Thread-safe."""
     with _lock:
+        def do_save():
+            conn = get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM tenders")
+                placeholders = ",".join(["?"] * len(COLUMNS))
+                sql = f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})"
+                rows = [dict_to_row(r) for r in records]
+                cursor.executemany(sql, rows)
+                conn.commit()
+            finally:
+                conn.close()
+
         try:
-            with open(DB_FILE, "w", encoding="utf-8") as f:
-                json.dump(records, f, indent=4, ensure_ascii=False)
+            do_save()
             return True
+        except sqlite3.DatabaseError as e:
+            handle_db_error(e)
+            try:
+                do_save()
+                return True
+            except Exception:
+                return False
         except Exception:
             return False
 
 def upsert_tender(record):
-    """Insert or update a tender record. Thread-safe."""
+    """Insert or update a single tender record. Thread-safe."""
     with _lock:
-        records = load_all_tenders()
         bid_no = record.get("bid_no")
         if not bid_no:
-            return records
+            return load_all_tenders()
             
-        found = False
-        for existing in records:
-            if existing.get("bid_no") == bid_no:
-                # Merge new fields into the existing record
-                for k, v in record.items():
-                    if v is not None and str(v).strip() != "":
-                        if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched"):
-                            existing[k] = v
-                found = True
-                break
-        
-        if not found:
-            records.append(record)
-            
-        save_all_tenders(records)
-        return records
+        def do_upsert():
+            conn = get_conn()
+            try:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                row = cursor.fetchone()
+                
+                if row:
+                    existing = row_to_dict(row)
+                    for k, v in record.items():
+                        if v is not None and str(v).strip() != "":
+                            if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                                existing[k] = v
+                    row_data = dict_to_row(existing)
+                else:
+                    row_data = dict_to_row(record)
+                    
+                placeholders = ",".join(["?"] * len(COLUMNS))
+                cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                conn.commit()
+            finally:
+                conn.close()
+
+        try:
+            do_upsert()
+        except sqlite3.DatabaseError as e:
+            handle_db_error(e)
+            try:
+                do_upsert()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return load_all_tenders()
 
 def upsert_tenders(new_records):
     """Bulk insert or update tender records. Thread-safe."""
     with _lock:
-        records = load_all_tenders()
-        for new_rec in new_records:
-            bid_no = new_rec.get("bid_no")
-            if not bid_no:
-                continue
-            found = False
-            for existing in records:
-                if existing.get("bid_no") == bid_no:
-                    # Merge new fields into the existing record
-                    for k, v in new_rec.items():
-                        if v is not None and str(v).strip() != "":
-                            if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched"):
-                                existing[k] = v
-                    found = True
-                    break
-            if not found:
-                records.append(new_rec)
-        save_all_tenders(records)
-        return records
+        def do_bulk_upsert():
+            conn = get_conn()
+            try:
+                cursor = conn.cursor()
+                for record in new_records:
+                    bid_no = record.get("bid_no")
+                    if not bid_no:
+                        continue
+                    cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                    row = cursor.fetchone()
+                    
+                    if row:
+                        existing = row_to_dict(row)
+                        for k, v in record.items():
+                            if v is not None and str(v).strip() != "":
+                                if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                                    existing[k] = v
+                        row_data = dict_to_row(existing)
+                    else:
+                        row_data = dict_to_row(record)
+                        
+                    placeholders = ",".join(["?"] * len(COLUMNS))
+                    cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                conn.commit()
+            finally:
+                conn.close()
+
+        try:
+            do_bulk_upsert()
+        except sqlite3.DatabaseError as e:
+            handle_db_error(e)
+            try:
+                do_bulk_upsert()
+            except Exception:
+                pass
+        except Exception:
+            pass
+        return load_all_tenders()
 
 def delete_tenders(bid_numbers):
     """Delete tenders by their bid numbers. Thread-safe."""
     with _lock:
-        records = load_all_tenders()
-        filtered = [r for r in records if r.get("bid_no") not in bid_numbers]
-        save_all_tenders(filtered)
-        return filtered
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            for bid in bid_numbers:
+                cursor.execute("DELETE FROM tenders WHERE bid_no=?", (bid,))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
+        return load_all_tenders()
