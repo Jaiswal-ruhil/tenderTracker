@@ -16,9 +16,9 @@ XL_HEADERS = [
     "MSE Relaxation", "Startup Relaxation",
     "Min Turnover (Lakhs)", "Experience Required (Yrs)",
     "Bid Opening Date", "Start Date", "End Date",
-    "Entry Date", "Filing Status", "Remarks",
+    "Entry Date", "Filing Status", "Tags", "Remarks",
 ]
-COL_WIDTHS = [5,22,40,28,30,24,20,22,30,8,24,14,16,20,14,10,10,10,10,10,10,10,14,14,18,18,18,14,15,22]
+COL_WIDTHS = [5,22,40,28,30,24,20,22,30,8,24,14,16,20,14,10,10,10,10,10,10,10,14,14,18,18,18,14,15,16,22]
 
 THIN     = Side(style="thin")
 BORDER   = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
@@ -74,6 +74,7 @@ def xl_append(path, rows):
             rec.get("start_date",""),  rec.get("end_date",""),
             datetime.now().strftime("%d-%m-%Y %H:%M"),
             rec.get("filing_status","Not Filed"),
+            ", ".join(rec.get("tags", [])) if isinstance(rec.get("tags"), list) else rec.get("tags", ""),
             rec.get("remarks",""),
         ])
         nr=ws.max_row; alt=sno%2==0

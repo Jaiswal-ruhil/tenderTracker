@@ -67,5 +67,23 @@ class TestFilterLogic(unittest.TestCase):
         # Even though exclude matches, manual override is True
         self.assertTrue(self.app._get_tender_status(rec2, inc, exc))
 
+    def test_is_bid_in_dont_wants(self):
+        # Setup mock records in app
+        self.app._records = [
+            {"bid_no": "GEM/2026/B/100", "bid_url": "https://bidplus.gem.gov.in/showbidDocument/100", "is_want": False}, # Don't want
+            {"bid_no": "GEM/2026/B/200", "bid_url": "https://bidplus.gem.gov.in/showbidDocument/200", "is_want": True},  # Want
+        ]
+        
+        # Test bid_no match
+        self.assertTrue(self.app._is_bid_in_dont_wants("GEM/2026/B/100"))
+        self.assertFalse(self.app._is_bid_in_dont_wants("GEM/2026/B/200"))
+        
+        # Test doc ID match (split "/")
+        self.assertTrue(self.app._is_bid_in_dont_wants("100"))
+        self.assertFalse(self.app._is_bid_in_dont_wants("200"))
+        
+        # Test non-existent
+        self.assertFalse(self.app._is_bid_in_dont_wants("300"))
+
 if __name__ == '__main__':
     unittest.main()

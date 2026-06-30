@@ -15,7 +15,7 @@ from config import (
 )
 from excel import financial_year, xl_path, ensure_workbook, xl_append
 from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
-from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf
+from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf, scrape_portal_search
 import db
 
 class TenderApp(tk.Tk):
@@ -31,6 +31,8 @@ class TenderApp(tk.Tk):
         self._records  = []
         self._editing  = None
         self._fetch_running = False
+        self._scrape_running = False
+        self._stop_scrape_flag = False
 
         # Calendar State
         self.cal_year = datetime.now().year
@@ -113,6 +115,81 @@ class TenderApp(tk.Tk):
                   self._do_fetch_all, bg=ACCENT, pad=10).pack(side="left", padx=6)
         self._btn(btn_row, "Clear", lambda: self.paste_txt.delete("1.0","end"),
                   bg=CARD).pack(side="left")
+
+        # ── Portal Scraper Frame ─────────────────────────────────────────────
+        scrape_fr = tk.Frame(left, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        scrape_fr.pack(fill="x", pady=(4, 8))
+        
+        tk.Label(scrape_fr, text="Automated Portal Scraper", font=("Segoe UI",9,"bold"),
+                 bg=PANEL, fg=MUTED).pack(anchor="w")
+        
+        # Search query entry
+        query_fr = tk.Frame(scrape_fr, bg=PANEL)
+        query_fr.pack(fill="x", pady=(4, 4))
+        tk.Label(query_fr, text="Query:", font=FL, bg=PANEL, fg=TEXTSUB).pack(side="left")
+        self.scrape_query_var = tk.StringVar()
+        self.scrape_query_ent = tk.Entry(query_fr, textvariable=self.scrape_query_var, bg=CARD, fg=TEXT,
+                                         insertbackground=TEXT, relief="flat", font=FL,
+                                         highlightthickness=1, highlightbackground="#30363D",
+                                         highlightcolor=ACCENT2)
+        self.scrape_query_ent.pack(side="right", fill="x", expand=True, padx=(6, 0))
+        
+        # Date Filter Row
+        date_fr = tk.Frame(scrape_fr, bg=PANEL)
+        date_fr.pack(fill="x", pady=(4, 4))
+        
+        tk.Label(date_fr, text="Date Filter:", font=FL, bg=PANEL, fg=TEXTSUB).pack(side="left")
+        self.scrape_date_type_var = tk.StringVar(value="None")
+        self.scrape_date_type_cb = ttk.Combobox(date_fr, textvariable=self.scrape_date_type_var,
+                                                values=["None", "Start Date", "End Date"],
+                                                state="readonly", font=("Segoe UI", 8), width=10)
+        self.scrape_date_type_cb.pack(side="left", padx=4)
+        
+        tk.Label(date_fr, text="From:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(4, 2))
+        self.scrape_date_from_var = tk.StringVar()
+        self.scrape_date_from_ent = tk.Entry(date_fr, textvariable=self.scrape_date_from_var, bg=CARD, fg=TEXT,
+                                             insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
+                                             highlightthickness=1, highlightbackground="#30363D")
+        self.scrape_date_from_ent.pack(side="left")
+        
+        tk.Label(date_fr, text="To:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(4, 2))
+        self.scrape_date_to_var = tk.StringVar()
+        self.scrape_date_to_ent = tk.Entry(date_fr, textvariable=self.scrape_date_to_var, bg=CARD, fg=TEXT,
+                                           insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
+                                           highlightthickness=1, highlightbackground="#30363D")
+        self.scrape_date_to_ent.pack(side="left", padx=(0, 4))
+
+        # Options row (e.g. limit pages or only keep matching filter)
+        opt_row = tk.Frame(scrape_fr, bg=PANEL)
+        opt_row.pack(fill="x", pady=(2, 4))
+        
+        self.scrape_filter_only_var = tk.BooleanVar(value=True)
+        self.scrape_filter_only_chk = tk.Checkbutton(opt_row, text="Only matches",
+                                                     variable=self.scrape_filter_only_var, bg=PANEL, fg=TEXT,
+                                                     selectcolor=BG, activebackground=PANEL, activeforeground=TEXT,
+                                                     font=("Segoe UI", 8), relief="flat", highlightthickness=0)
+        self.scrape_filter_only_chk.pack(side="left")
+        
+        # Limit pages
+        tk.Label(opt_row, text="Max Pgs:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(8, 2))
+        self.scrape_max_pages_var = tk.StringVar(value="0")
+        self.scrape_max_pages_ent = tk.Entry(opt_row, textvariable=self.scrape_max_pages_var, bg=CARD, fg=TEXT,
+                                             insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=4,
+                                             highlightthickness=1, highlightbackground="#30363D")
+        self.scrape_max_pages_ent.pack(side="left")
+
+        tk.Label(opt_row, text="(DD-MM-YYYY)", font=("Segoe UI", 7, "italic"), bg=PANEL, fg=MUTED).pack(side="right", padx=(4, 0))
+        
+        # Action Buttons
+        act_row = tk.Frame(scrape_fr, bg=PANEL)
+        act_row.pack(fill="x", pady=(4, 0))
+        
+        self.btn_start_scrape = self._btn(act_row, "  Start Portal Scrape  ", self._do_portal_scrape_start, bg=ACCENT2)
+        self.btn_start_scrape.pack(side="left")
+        
+        self.btn_stop_scrape = self._btn(act_row, "  Stop  ", self._do_portal_scrape_stop, bg=CARD, fg=ERR)
+        self.btn_stop_scrape.pack(side="right")
+        self.btn_stop_scrape.configure(state="disabled")
 
         # log
         log_hdr = tk.Frame(left, bg=BG)
@@ -246,6 +323,7 @@ class TenderApp(tk.Tk):
         self.ctx_menu.add_command(label="Mark as Want (Keep)", command=self._mark_selected_want)
         self.ctx_menu.add_command(label="Mark as Don't Want (Ignore)", command=self._mark_selected_dont_want)
         self.ctx_menu.add_command(label="Reset Manual Tag", command=self._reset_selected_tag)
+        self.ctx_menu.add_command(label="Manage Tags...", command=self._show_tags_dialog)
         self.ctx_menu.add_separator()
         self.ctx_menu.add_command(label="Delete Selected", command=self._del_sel)
         self.ctx_menu.add_command(label="Fetch Details (Selenium)", command=self._do_fetch_sel)
@@ -559,25 +637,7 @@ class TenderApp(tk.Tk):
         )
         if not confirm:
             return
-            
-        try:
-            self._records.clear()
-            db.save_all_tenders([])
-            self._refresh_table_view()
-            self._log("ok", "Database cleared successfully.")
-            messagebox.showinfo("Database Cleared", "The database has been successfully cleared.", parent=parent)
-            
-            try:
-                if self.notebook.index(self.notebook.select()) == 1:
-                    self._update_calendar()
-                    self._update_details()
-            except:
-                pass
-        except Exception as e:
-            self._log("err", f"Clear database failed: {e}")
-            messagebox.showerror("Error Clearing Database", f"Failed to clear database:\n\n{e}", parent=parent)
 
-    # ── Step 1 — parse paste blocks ───────────────────────────────────────────
     def _do_parse(self):
         raw = self.paste_txt.get("1.0","end").strip()
         if not raw: self._log("warn","Paste area is empty."); return
@@ -587,107 +647,146 @@ class TenderApp(tk.Tk):
         def worker():
             import pypdf
             
-            lines = raw.splitlines()
-            processed_text = ""
-            for line in lines:
-                line_clean = line.strip().strip('"\'')
-                if not line_clean:
-                    continue
-                    
-                # Clean prefix/suffix from bid number if copied from web page header
-                line_val = re.sub(r"^(?:BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*)", "", line_clean, flags=re.I).strip()
-                line_val = re.sub(r"\s+View\s+Corrigendum.*$", "", line_val, flags=re.I).strip()
+            # Step 1: Split raw text into initial blocks.
+            initial_blocks = split_blocks(raw)
+            
+            # If split_blocks didn't split anything (no "BID NO:" found),
+            # the user might have pasted a list of URLs or Bid Numbers, one per line.
+            # In that case, let's split by lines.
+            blocks_to_process = []
+            if len(initial_blocks) == 1 and not re.search(r"BID\s*(?:NO|Number)(?:\.|\b)\s*:", initial_blocks[0], re.I):
+                for line in raw.splitlines():
+                    ln = line.strip().strip('"\'')
+                    if ln:
+                        blocks_to_process.append(ln)
+            else:
+                blocks_to_process = initial_blocks
                 
-                # Case A: PDF file path on disk
-                if line_clean.lower().endswith(".pdf") and os.path.exists(line_clean):
-                    self.after(0, lambda f=line_clean: self._log("info", f"Reading PDF: {os.path.basename(f)}"))
-                    try:
-                        reader = pypdf.PdfReader(line_clean)
-                        pdf_text = ""
-                        for page in reader.pages:
-                            t = page.extract_text()
-                            if t:
-                                pdf_text += t + "\n"
-                        md_text = convert_pdf_text_to_markdown(pdf_text)
-                        processed_text += md_text + "\n"
-                    except Exception as ex:
-                        import traceback
-                        tb = traceback.format_exc()
-                        self.after(0, lambda f=line_clean, err=ex, trace=tb: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}\n{trace}"))
-                
-                # Case B: GeM showbidDocument URL
-                elif "showbidDocument" in line_clean:
-                    self.after(0, lambda url=line_clean: self._log("info", f"URL detected: {url}. Downloading PDF..."))
-                    try:
-                        import urllib.request
-                        doc_id = line_clean.rstrip('/').split('/')[-1]
-                        dl_dir = os.path.dirname(db.DB_FILE)
-                        filename = f"GeM-Bidding-{doc_id}.pdf"
-                        dest_path = os.path.abspath(os.path.join(dl_dir, filename))
-                        
-                        req = urllib.request.Request(
-                            line_clean,
-                            headers={
-                                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                            }
-                        )
-                        with urllib.request.urlopen(req) as response:
-                            with open(dest_path, 'wb') as out_file:
-                                out_file.write(response.read())
-                                
-                        self.after(0, lambda fn=dest_path: self._log("ok", f"PDF downloaded to: {fn}"))
-                        
-                        reader = pypdf.PdfReader(dest_path)
-                        pdf_text = ""
-                        for page in reader.pages:
-                            t = page.extract_text()
-                            if t:
-                                pdf_text += t + "\n"
-                        md_text = convert_pdf_text_to_markdown(pdf_text)
-                        processed_text += md_text + "\n"
-                    except Exception as ex:
-                        self.after(0, lambda url=line_clean, err=ex: self._log("err", f"Failed to download/parse URL {url}: {err}"))
-                        
-                # Case C: GeM Bid Number (e.g. GEM/2026/B/7647078)
-                elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
-                    self.after(0, lambda bn=line_val: self._log("info", f"Bid Number detected: {bn}. Running portal search to download PDF..."))
-                    try:
-                        dl_dir = os.path.dirname(db.DB_FILE)
-                        headless_opt = db.load_settings().get("selenium_headless", False)
-                        dest_path = download_tender_pdf(line_val, dl_dir, log_fn=self._log, headless=headless_opt)
-                        
-                        if dest_path and os.path.exists(dest_path):
-                            reader = pypdf.PdfReader(dest_path)
-                            pdf_text = ""
-                            for page in reader.pages:
-                                t = page.extract_text()
-                                if t:
-                                    pdf_text += t + "\n"
-                            md_text = convert_pdf_text_to_markdown(pdf_text)
-                            processed_text += md_text + "\n"
-                        else:
-                            self.after(0, lambda bn=line_val: self._log("err", f"Failed to download PDF for {bn}"))
-                    except Exception as ex:
-                        self.after(0, lambda bn=line_val, err=ex: self._log("err", f"Failed to process {bn}: {err}"))
-                
-                # Case D: Raw pasted text block
-                else:
-                    processed_text += line + "\n"
-
-            blocks = split_blocks(processed_text)
-            total  = len(blocks)
-            self._log("info", f"Found {total} block(s).")
+            total = len(blocks_to_process)
+            self._log("info", f"Found {total} item(s) to process.")
+            
             recs = []
-            for i, blk in enumerate(blocks,1):
+            for i, blk in enumerate(blocks_to_process, 1):
+                self._set_prog(int((i-1)/total*100), f"Processing {i}/{total}…")
+                
+                # Check if block is a local PDF path on disk
+                if blk.lower().endswith(".pdf") and os.path.exists(blk):
+                    self.after(0, lambda f=blk: self._log("info", f"[{i}/{total}] Reading PDF: {os.path.basename(f)}"))
+                    try:
+                        reader = pypdf.PdfReader(blk)
+                        pdf_text = ""
+                        for page in reader.pages:
+                            t = page.extract_text()
+                            if t:
+                                pdf_text += t + "\n"
+                        md_text = convert_pdf_text_to_markdown(pdf_text)
+                        rec = parse_one(md_text)
+                        if rec.get("bid_no"):
+                            recs.append(rec)
+                            self._log("ok", f"[{i}/{total}] Parsed PDF {rec['bid_no']}")
+                    except Exception as ex:
+                        self.after(0, lambda f=blk, err=ex: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}"))
+                    continue
+                
+                # Parse block as text first
                 rec = parse_one(blk)
-                self._set_prog(int(i/total*100), f"Parsing {i}/{total}…")
-                time.sleep(0.04)
-                if rec.get("bid_no"):
-                    recs.append(rec)
-                    flds = [k for k,v in rec.items() if v]
-                    self._log("ok", f"[{i}/{total}] {rec['bid_no']} — {len(flds)} fields")
+                bid_no = rec.get("bid_no")
+                bid_url = rec.get("bid_url")
+                
+                if not bid_no and not bid_url:
+                    # Try to reconstruct from raw line if it's a URL or Bid Number
+                    cleaned_blk = blk.strip().strip('"\'')
+                    line_val = re.sub(r"^(?:BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*)", "", cleaned_blk, flags=re.I).strip()
+                    line_val = re.sub(r"\s+View\s+Corrigendum.*$", "", line_val, flags=re.I).strip()
+                    
+                    if "showbidDocument" in cleaned_blk:
+                        bid_url = cleaned_blk
+                        doc_id = cleaned_blk.rstrip('/').split('/')[-1]
+                        bid_no = f"GEM/2026/B/{doc_id}"
+                    elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
+                        bid_no = line_val
+                    else:
+                        self._log("warn", f"[{i}/{total}] SKIP — No valid Bid Number or URL found")
+                        continue
+                
+                # Check if it is in Don't Wants
+                id_to_check = bid_no if bid_no else bid_url
+                if self._is_bid_in_dont_wants(id_to_check):
+                    self._log("info", f"[{i}/{total}] Skipping {id_to_check}: Already in database 'Don't Wants'")
+                    continue
+                
+                # Determine if we need to download the PDF:
+                # ONLY if the parsed record has no details (meaning it only contains bid_no/bid_url),
+                # AND we don't already have it fully parsed in database.
+                has_details = any(rec.get(k) for k in ("items", "dept", "start_date", "end_date", "ministry", "category"))
+                
+                if not has_details:
+                    # Need details. Check if we already have it fully parsed in database records
+                    existing_rec = None
+                    for r in self._records:
+                        if bid_no and r.get("bid_no") == bid_no:
+                            existing_rec = r
+                            break
+                        if bid_url and r.get("bid_url") == bid_url:
+                            existing_rec = r
+                            break
+                            
+                    if existing_rec and any(existing_rec.get(k) for k in ("items", "dept", "start_date")):
+                        self._log("info", f"[{i}/{total}] Using existing database details for {bid_no}")
+                        recs.append(existing_rec)
+                    else:
+                        self._log("info", f"[{i}/{total}] Downloading PDF to fetch details for {bid_no or bid_url}...")
+                        try:
+                            dl_dir = os.path.dirname(db.DB_FILE)
+                            dest_path = None
+                            
+                            if bid_url and "showbidDocument" in bid_url:
+                                doc_id = bid_url.rstrip('/').split('/')[-1]
+                                filename = f"GeM-Bidding-{doc_id}.pdf"
+                                dest_path = os.path.abspath(os.path.join(dl_dir, filename))
+                                
+                                import urllib.request
+                                req = urllib.request.Request(
+                                    bid_url,
+                                    headers={
+                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                                    }
+                                )
+                                with urllib.request.urlopen(req) as response:
+                                    with open(dest_path, 'wb') as out_file:
+                                        out_file.write(response.read())
+                            elif bid_no:
+                                headless_opt = db.load_settings().get("selenium_headless", False)
+                                dest_path = download_tender_pdf(bid_no, dl_dir, log_fn=self._log, headless=headless_opt)
+                                
+                            if dest_path and os.path.exists(dest_path):
+                                self._log("ok", f"[{i}/{total}] PDF downloaded successfully. Parsing...")
+                                reader = pypdf.PdfReader(dest_path)
+                                pdf_text = ""
+                                for page in reader.pages:
+                                    t = page.extract_text()
+                                    if t:
+                                        pdf_text += t + "\n"
+                                md_text = convert_pdf_text_to_markdown(pdf_text)
+                                pdf_rec = parse_one(md_text)
+                                if bid_url and "bid_url" not in pdf_rec:
+                                    pdf_rec["bid_url"] = bid_url
+                                recs.append(pdf_rec)
+                            else:
+                                self._log("err", f"[{i}/{total}] Failed to download PDF for {bid_no or bid_url}")
+                                if not rec.get("bid_no") and bid_no:
+                                    rec["bid_no"] = bid_no
+                                if not rec.get("bid_url") and bid_url:
+                                    rec["bid_url"] = bid_url
+                                recs.append(rec)
+                        except Exception as dl_err:
+                            self._log("err", f"[{i}/{total}] Error downloading PDF: {dl_err}")
+                            recs.append(rec)
                 else:
-                    self._log("warn", f"[{i}/{total}] SKIP — BID NO not found")
+                    self._log("ok", f"[{i}/{total}] Parsed details directly from text for {bid_no}")
+                    recs.append(rec)
+                    
+            self._set_prog(100, "Done.")
             self.after(0, lambda: self._add_rows(recs, total))
         threading.Thread(target=worker, daemon=True).start()
 
@@ -745,6 +844,188 @@ class TenderApp(tk.Tk):
                 self._update_details()
         except:
             pass
+
+    def _do_portal_scrape_start(self):
+        if self._scrape_running or self._fetch_running:
+            self._log("warn", "An operation is already running (scrape or fetch). Please wait.")
+            return
+
+        query = self.scrape_query_var.get().strip()
+        max_pages_str = self.scrape_max_pages_var.get().strip()
+        
+        try:
+            max_pages = int(max_pages_str) if max_pages_str else 0
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Max Pages must be an integer.", parent=self)
+            return
+
+        # Date filter validation
+        date_filter_type = self.scrape_date_type_var.get()
+        from_date_str = self.scrape_date_from_var.get().strip()
+        to_date_str = self.scrape_date_to_var.get().strip()
+        
+        if date_filter_type in ("Start Date", "End Date"):
+            if from_date_str:
+                from_date_parsed = self._parse_date_str(from_date_str)
+                if not from_date_parsed:
+                    messagebox.showerror("Invalid Date", "From Date must be in DD-MM-YYYY format.", parent=self)
+                    return
+            if to_date_str:
+                to_date_parsed = self._parse_date_str(to_date_str)
+                if not to_date_parsed:
+                    messagebox.showerror("Invalid Date", "To Date must be in DD-MM-YYYY format.", parent=self)
+                    return
+
+        if not _try_import_selenium():
+            messagebox.showerror("Missing library",
+                "Please install Selenium:\n\npip install selenium webdriver-manager", parent=self)
+            return
+
+        self._scrape_running = True
+        self._stop_scrape_flag = False
+        
+        self.btn_start_scrape.configure(state="disabled")
+        self.btn_stop_scrape.configure(state="normal")
+        self.scrape_query_ent.configure(state="disabled")
+        self.scrape_max_pages_ent.configure(state="disabled")
+        self.scrape_filter_only_chk.configure(state="disabled")
+        self.scrape_date_type_cb.configure(state="disabled")
+        self.scrape_date_from_ent.configure(state="disabled")
+        self.scrape_date_to_ent.configure(state="disabled")
+
+        self._log("info", f"--- Portal Search & Scrape started: query='{query}', max_pages={max_pages} ---")
+        if date_filter_type in ("Start Date", "End Date"):
+            self._log("info", f"Date filter active: {date_filter_type} from {from_date_str or 'any'} to {to_date_str or 'any'}")
+        self._set_status("Starting portal scraping...", ACCENT2)
+
+        def worker():
+            headless_opt = db.load_settings().get("selenium_headless", False)
+            
+            def stop_check():
+                return self._stop_scrape_flag
+
+            def record_callback(page_recs):
+                recs = []
+                date_filter_type = self.scrape_date_type_var.get()
+                from_date_parsed = self._parse_date_str(self.scrape_date_from_var.get().strip())
+                to_date_parsed = self._parse_date_str(self.scrape_date_to_var.get().strip())
+                
+                for blk in page_recs:
+                    rec = parse_one(blk)
+                    if rec.get("bid_no"):
+                        # Date filter check
+                        if date_filter_type in ("Start Date", "End Date"):
+                            fld_key = "start_date" if date_filter_type == "Start Date" else "end_date"
+                            bid_date_str = rec.get(fld_key)
+                            bid_date = self._parse_date_str(bid_date_str)
+                            if bid_date:
+                                if from_date_parsed and bid_date < from_date_parsed:
+                                    self._log("info", f"Skipping {rec['bid_no']}: {date_filter_type} {bid_date_str} < From Date")
+                                    continue
+                                if to_date_parsed and bid_date > to_date_parsed:
+                                    self._log("info", f"Skipping {rec['bid_no']}: {date_filter_type} {bid_date_str} > To Date")
+                                    continue
+                            else:
+                                if from_date_parsed or to_date_parsed:
+                                    self._log("info", f"Skipping {rec['bid_no']}: {date_filter_type} missing/unparseable")
+                                    continue
+
+                        # Check if we should only save matches
+                        if self.scrape_filter_only_var.get():
+                            settings = db.load_settings()
+                            inc_raw = settings.get("include_keywords", "")
+                            exc_raw = settings.get("exclude_keywords", "")
+                            inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+                            exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+                            
+                            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+                            if not is_want:
+                                self._log("info", f"Skipping filtered bid: {rec['bid_no']}")
+                                continue
+                        recs.append(rec)
+                if recs:
+                    self.after(0, lambda r=recs: self._add_scraped_rows(r))
+
+            scraped_total = scrape_portal_search(
+                query=query,
+                max_pages=max_pages,
+                headless=headless_opt,
+                log_fn=self._log,
+                stop_check_fn=stop_check,
+                record_callback=record_callback
+            )
+
+            def scrape_finished():
+                self._scrape_running = False
+                self.btn_start_scrape.configure(state="normal")
+                self.btn_stop_scrape.configure(state="disabled")
+                self.scrape_query_ent.configure(state="normal")
+                self.scrape_max_pages_ent.configure(state="normal")
+                self.scrape_filter_only_chk.configure(state="normal")
+                self.scrape_date_type_cb.configure(state="readonly")
+                self.scrape_date_from_ent.configure(state="normal")
+                self.scrape_date_to_ent.configure(state="normal")
+                
+                msg = f"Portal scrape done: {scraped_total} bid(s) processed"
+                self._set_status(msg, SUCCESS)
+                try:
+                    if self.notebook.index(self.notebook.select()) == 1:
+                        self._update_calendar()
+                        self._update_details()
+                except:
+                    pass
+
+            self.after(0, scrape_finished)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _do_portal_scrape_stop(self):
+        if self._scrape_running:
+            self._log("info", "Stopping portal scraper... Please wait for Chrome to close.")
+            self._stop_scrape_flag = True
+            self.btn_stop_scrape.configure(state="disabled")
+
+    def _add_scraped_rows(self, recs):
+        added_count = 0
+        updated_count = 0
+        
+        children = self.tv.get_children()
+        records_by_bid = {}
+        for iid in children:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                matched_rec = None
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        matched_rec = r
+                        break
+                if matched_rec:
+                    records_by_bid[bid_no] = (matched_rec, iid)
+
+        for rec in recs:
+            bid_no = rec.get("bid_no")
+            if bid_no in records_by_bid:
+                existing_rec, iid = records_by_bid[bid_no]
+                merged_fields = []
+                for k, v in rec.items():
+                    if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
+                        existing_rec[k] = v
+                        if k in TV_IDS:
+                            self.tv.set(iid, k, v)
+                        merged_fields.append(k)
+                if merged_fields:
+                    updated_count += 1
+                    self.tv.item(iid, tags=("fetched",))
+            else:
+                self._records.append(rec)
+                self._tv_insert(rec)
+                added_count += 1
+
+        db.save_all_tenders(self._records)
+        self._refresh_table_view()
+        
+        msg = f"Portal Scraper: {added_count} added, {updated_count} updated"
+        self._log("ok", msg)
 
     # ── Step 2 — Selenium fetch ───────────────────────────────────────────────
     def _do_fetch_all(self):
@@ -838,7 +1119,13 @@ class TenderApp(tk.Tk):
 
     # ── table helpers ─────────────────────────────────────────────────────────
     def _tv_insert(self, rec):
-        vals = tuple(rec.get(c,"") for c in TV_IDS)
+        raw_vals = []
+        for c in TV_IDS:
+            val = rec.get(c, "")
+            if c == "tags" and isinstance(val, list):
+                val = ", ".join(val)
+            raw_vals.append(val)
+        vals = tuple(raw_vals)
         tags = []
         
         # Wants / Don't Wants tags
@@ -1310,6 +1597,35 @@ class TenderApp(tk.Tk):
                 
         return True
 
+    def _is_bid_in_dont_wants(self, bid_no_or_id):
+        if not bid_no_or_id:
+            return False
+        target = bid_no_or_id.strip().lower()
+        
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
+        for r in self._records:
+            r_bid_no = r.get("bid_no", "").strip().lower()
+            r_bid_url = r.get("bid_url", "").strip().lower()
+            
+            match = False
+            if target == r_bid_no:
+                match = True
+            elif target in r_bid_url:
+                match = True
+            elif "/" in r_bid_no and target == r_bid_no.split("/")[-1]:
+                match = True
+                
+            if match:
+                is_want = self._get_tender_status(r, inc_kws, exc_kws)
+                if not is_want:
+                    return True
+        return False
+
     def _refresh_table_view(self):
         for child in self.tv.get_children():
             self.tv.delete(child)
@@ -1393,6 +1709,173 @@ class TenderApp(tk.Tk):
         db.save_all_tenders(self._records)
         self._refresh_table_view()
         self._log("info", f"Reset manual tag for {len(sel)} tender(s).")
+
+    def _show_tags_dialog(self):
+        sel = self.tv.selection()
+        if not sel:
+            messagebox.showwarning("No Rows Selected", "Please select at least one tender to manage tags.", parent=self)
+            return
+
+        selected_bids = []
+        for iid in sel:
+            bid = self.tv.set(iid, "bid_no")
+            if bid:
+                selected_bids.append(bid)
+
+        if not selected_bids:
+            return
+
+        win = tk.Toplevel(self)
+        win.grab_set()
+        win.transient(self)
+        win.title("Manage Tags")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 500) // 2
+        win.geometry(f"400x500+{max(0, x)}+{max(0, y)}")
+
+        tk.Label(win, text="Manage Tender Tags", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+
+        # List frame for checkboxes
+        list_frame = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
+        list_frame.pack(fill="both", expand=True, padx=20, pady=6)
+
+        # Scrollable canvas
+        canvas = tk.Canvas(list_frame, bg=PANEL, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        checkbox_fr = tk.Frame(canvas, bg=PANEL)
+        canvas.create_window((0, 0), window=checkbox_fr, anchor="nw", tags="checkbox_fr")
+        
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+
+        checkbox_fr.bind("<Configure>", lambda e: canvas.configure(
+            scrollregion=canvas.bbox("all")
+        ))
+        canvas.bind("<Configure>", lambda e: canvas.itemconfig(
+            "checkbox_fr", width=e.width
+        ))
+
+        # Check existing tags on selected bids
+        initial_tags = set()
+        for r in self._records:
+            if r.get("bid_no") in selected_bids:
+                t_list = r.get("tags", [])
+                if isinstance(t_list, str):
+                    t_list = [t.strip() for t in t_list.split(",") if t.strip()]
+                for t in t_list:
+                    initial_tags.add(t)
+
+        settings = db.load_settings()
+        defined_tags = settings.get("defined_tags", ["Urgent", "Review", "Follow-up", "Sugar Mill"])
+        
+        chk_vars = {}
+        
+        def render_tags_list():
+            for child in checkbox_fr.winfo_children():
+                child.destroy()
+                
+            nonlocal defined_tags
+            settings_inner = db.load_settings()
+            defined_tags = settings_inner.get("defined_tags", ["Urgent", "Review", "Follow-up", "Sugar Mill"])
+            
+            for tag in defined_tags:
+                row_fr = tk.Frame(checkbox_fr, bg=PANEL)
+                row_fr.pack(fill="x", padx=10, pady=2)
+                
+                if tag not in chk_vars:
+                    var = tk.BooleanVar(value=(tag in initial_tags))
+                    chk_vars[tag] = var
+                else:
+                    var = chk_vars[tag]
+                    
+                chk = tk.Checkbutton(row_fr, text=tag, variable=var, bg=PANEL, fg=TEXT, selectcolor=BG,
+                                     activebackground=PANEL, activeforeground=TEXT, font=FL, relief="flat",
+                                     highlightthickness=0)
+                chk.pack(side="left")
+                
+                def make_delete(t=tag):
+                    return lambda: delete_tag_globally(t)
+                del_btn = tk.Button(row_fr, text="×", command=make_delete(), bg=CARD, fg=ERR, relief="flat",
+                                    font=("Segoe UI", 8, "bold"), padx=4, pady=0, activebackground=ACCENT2, cursor="hand2")
+                del_btn.pack(side="right")
+
+        def delete_tag_globally(tag_to_del):
+            confirm = messagebox.askyesno(
+                "Delete Tag",
+                f"Are you sure you want to delete the tag '{tag_to_del}' globally?\n\nThis will remove it from all records.",
+                parent=win
+            )
+            if not confirm:
+                return
+            settings_inner = db.load_settings()
+            tags = settings_inner.get("defined_tags", ["Urgent", "Review", "Follow-up", "Sugar Mill"])
+            if tag_to_del in tags:
+                tags.remove(tag_to_del)
+                db.save_setting("defined_tags", tags)
+            
+            for r in self._records:
+                t_list = r.get("tags", [])
+                if isinstance(t_list, str):
+                    t_list = [t.strip() for t in t_list.split(",") if t.strip()]
+                if tag_to_del in t_list:
+                    t_list.remove(tag_to_del)
+                    r["tags"] = t_list
+            db.save_all_tenders(self._records)
+            
+            if tag_to_del in chk_vars:
+                del chk_vars[tag_to_del]
+            render_tags_list()
+            self._refresh_table_view()
+
+        # Add tag UI
+        add_fr = tk.Frame(win, bg=BG)
+        add_fr.pack(fill="x", padx=20, pady=6)
+        
+        new_tag_var = tk.StringVar()
+        new_tag_ent = tk.Entry(add_fr, textvariable=new_tag_var, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                               relief="flat", font=FL, highlightthickness=1, highlightbackground="#30363D",
+                               highlightcolor=ACCENT2)
+        new_tag_ent.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        
+        def add_new_tag_definition():
+            val = new_tag_var.get().strip()
+            if not val:
+                return
+            settings_inner = db.load_settings()
+            tags = settings_inner.get("defined_tags", ["Urgent", "Review", "Follow-up", "Sugar Mill"])
+            if val not in tags:
+                tags.append(val)
+                db.save_setting("defined_tags", tags)
+            new_tag_var.set("")
+            chk_vars[val] = tk.BooleanVar(value=True)
+            render_tags_list()
+            
+        self._btn(add_fr, "Add Tag", add_new_tag_definition, bg=CARD).pack(side="right")
+
+        def apply_selected_tags():
+            selected_tags = [t for t, var in chk_vars.items() if var.get()]
+            
+            for r in self._records:
+                if r.get("bid_no") in selected_bids:
+                    r["tags"] = selected_tags
+                    
+            db.save_all_tenders(self._records)
+            self._refresh_table_view()
+            self._log("ok", f"Updated tags for {len(selected_bids)} tender(s).")
+            win.destroy()
+            
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=15)
+        
+        self._btn(btn_fr, "  Apply  ", apply_selected_tags, bg=ACCENT2).pack(side="left", padx=(40, 10), expand=True, fill="x")
+        self._btn(btn_fr, "  Cancel  ", win.destroy, bg=CARD).pack(side="right", padx=(10, 40), expand=True, fill="x")
+
+        render_tags_list()
 
     def _show_filter_rules_dialog(self):
         win = tk.Toplevel(self)

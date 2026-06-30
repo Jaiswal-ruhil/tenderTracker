@@ -16,6 +16,33 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 
 ---
 
+## Application Flow Diagram
+
+Below is the workflow showing how inputs are processed, parsed, filtered, and saved within the application:
+
+```mermaid
+graph TD
+    A[User Inputs Bids / URLs / PDF Path] --> B[Initial Parse of Input Blocks]
+    B --> C{Details Found in Text?}
+    C -->|Yes| D[Parse Details Directly]
+    C -->|No| E{Already in Database with Details?}
+    E -->|Yes| F[Load Existing Record Details]
+    E -->|No| G{Marked as Don't Want?}
+    G -->|Yes| H[Skip Download & Ignore]
+    G -->|No| I[Download PDF & Extract Details]
+    D --> J[Apply Keyword Filter Rules]
+    F --> J
+    I --> J
+    J --> K{Matches "Wants"?}
+    K -->|Yes| L[Tag as Want / Keep in Table]
+    K -->|No| M[Tag as Don't Want / Ignore]
+    L --> N[Save to Database & Update UI]
+    M --> N
+    N --> O[Excel Export Selected Bids]
+```
+
+---
+
 ## Directory Structure
 
 ```text

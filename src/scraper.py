@@ -296,3 +296,167 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
         if driver:
             try: driver.quit()
             except: pass
+
+def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progress_fn=None, stop_check_fn=None, record_callback=None):
+    """
+    Open GeM search portal, perform search, paginate through results, and extract bid information.
+    """
+    import os
+    import re
+    
+    mods = _try_import_selenium()
+    if not mods:
+        if log_fn: log_fn("err", "Selenium not installed.")
+        return 0
+
+    webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
+
+    opts = Options()
+    opts.add_argument("--disable-blink-features=AutomationControlled")
+    opts.add_experimental_option("excludeSwitches", ["enable-automation"])
+    opts.add_experimental_option("useAutomationExtension", False)
+    opts.add_argument("--start-maximized")
+    opts.add_argument("--no-sandbox")
+    opts.add_argument("--disable-dev-shm-usage")
+    if headless:
+        opts.add_argument("--headless=new")
+
+    driver = None
+    scraped_count = 0
+    try:
+        if log_fn: log_fn("info", "Starting Chrome for portal scraping...")
+        service = Service(ChromeDriverManager().install())
+        driver = webdriver.Chrome(service=service, options=opts)
+        driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
+
+        driver.get("https://bidplus.gem.gov.in/all-bids")
+
+        if query:
+            if log_fn: log_fn("info", f"Searching portal for query: '{query}'")
+            search_input = WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.ID, "searchBid"))
+            )
+            search_input.clear()
+            search_input.send_keys(query)
+            
+            search_btn = driver.find_element(By.ID, "searchBidRA")
+            search_btn.click()
+            time.sleep(5)
+
+        page_num = 1
+        while True:
+            if stop_check_fn and stop_check_fn():
+                if log_fn: log_fn("warn", "Scrape cancelled by user.")
+                break
+
+            if log_fn: log_fn("info", f"Processing Page {page_num}...")
+
+            # Extract the summary to see how many total records
+            total_records = 0
+            showing_text = ""
+            try:
+                body_el = driver.find_element(By.TAG_NAME, "body")
+                body_text = body_el.text
+                for line in body_text.splitlines():
+                    if "Showing" in line and "records" in line:
+                        showing_text = line
+                        m = re.search(r"of\s+(\d+)\s+records", line, re.I)
+                        if m:
+                            total_records = int(m.group(1))
+                        break
+            except Exception as e:
+                pass
+
+            if showing_text and log_fn:
+                log_fn("info", f"Portal Page Status: {showing_text}")
+
+            # Extract bid elements on current page
+            bid_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'BID NO:') or contains(text(), 'Bid Number:')]")
+            page_recs = []
+            seen_bids = set()
+            
+            for el in bid_elements:
+                try:
+                    parent = el.find_element(By.XPATH, "..")
+                    text = parent.text
+                    if "BID NO:" in text or "Bid Number:" in text:
+                        bid_no_match = re.search(r"BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*([^\s\n\(\)\]]+)", text, re.I)
+                        if bid_no_match:
+                            bid_no = bid_no_match.group(1).strip()
+                            bid_no_clean_match = re.search(r"(GEM/\d{4}/[A-Z0-9]+/\d+)", bid_no, re.I)
+                            if bid_no_clean_match:
+                                bid_no = bid_no_clean_match.group(1)
+                                if bid_no not in seen_bids:
+                                    seen_bids.add(bid_no)
+                                    page_recs.append(text)
+                except:
+                    pass
+
+            if log_fn: log_fn("info", f"Scraped {len(page_recs)} bid blocks from Page {page_num}.")
+
+            # Send back records to callback
+            if record_callback and page_recs:
+                record_callback(page_recs)
+                scraped_count += len(page_recs)
+
+            # Check if we should stop due to max pages
+            if max_pages > 0 and page_num >= max_pages:
+                if log_fn: log_fn("ok", f"Reached maximum configured page limit ({max_pages}).")
+                break
+
+            # Find next page links
+            next_links = driver.find_elements(By.XPATH, "//a[text()='Next']")
+            if not next_links:
+                if log_fn: log_fn("ok", "No 'Next' page link found. End of results.")
+                break
+
+            # We click the first visible Next button
+            try:
+                driver.execute_script("arguments[0].scrollIntoView(true);", next_links[0])
+                time.sleep(0.5)
+                next_links[0].click()
+            except Exception as click_err:
+                if log_fn: log_fn("err", f"Failed to click Next button: {click_err}")
+                break
+
+            # Wait for page update using showing_text
+            updated = False
+            for _ in range(10):
+                time.sleep(1.0)
+                if stop_check_fn and stop_check_fn():
+                    break
+                try:
+                    new_body_text = driver.find_element(By.TAG_NAME, "body").text
+                    new_showing_text = ""
+                    for line in new_body_text.splitlines():
+                        if "Showing" in line and "records" in line:
+                            new_showing_text = line
+                            break
+                    if new_showing_text and new_showing_text != showing_text:
+                        updated = True
+                        break
+                except:
+                    pass
+            
+            if stop_check_fn and stop_check_fn():
+                if log_fn: log_fn("warn", "Scrape cancelled by user.")
+                break
+
+            if not updated:
+                if log_fn: log_fn("warn", "Timeout waiting for next page load or no more records.")
+                # We stop if we didn't update and we have reached the end
+                break
+            
+            page_num += 1
+
+        if log_fn: log_fn("ok", f"Scrape job complete. Total bids processed: {scraped_count}")
+
+    except Exception as e:
+        if log_fn: log_fn("err", f"Scraper error: {e}")
+    finally:
+        if driver:
+            try: driver.quit()
+            except: pass
+
+    return scraped_count
+

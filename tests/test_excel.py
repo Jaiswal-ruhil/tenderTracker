@@ -86,7 +86,8 @@ class TestExcel(unittest.TestCase):
                 "ministry": "Mines",
                 "items": "Laptop",
                 "quantity": "5",
-                "location": "Delhi"
+                "location": "Delhi",
+                "tags": ["Urgent", "Review"]
             },
             {
                 "bid_no": "GEM/2026/B/200",
@@ -111,7 +112,8 @@ class TestExcel(unittest.TestCase):
         self.assertEqual(ws.cell(row=2, column=2).value, "GEM/2026/B/100") # Bid No
         self.assertEqual(ws.cell(row=2, column=3).value, "https://example.com/100") # Bid URL
         self.assertEqual(ws.cell(row=2, column=4).value, "Mines") # Ministry
-        self.assertEqual(ws.cell(row=2, column=9).value, "Laptop") # Items (Col 9 is Items)
+        self.assertEqual(ws.cell(row=2, column=9).value, "Laptop") # Items
+        self.assertEqual(ws.cell(row=2, column=30).value, "Urgent, Review") # Tags column (30)
         
         # Check second row values
         self.assertEqual(ws.cell(row=3, column=1).value, 2)
