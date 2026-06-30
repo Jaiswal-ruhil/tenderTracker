@@ -286,8 +286,9 @@ class TenderApp(tk.Tk):
         self.option_add("*TCombobox*Listbox.foreground", TEXT)
         self.option_add("*TCombobox*Listbox.selectBackground", SEL_BG)
 
-        # Refine rules button
+        # Refine rules and copy table buttons
         self._btn(filter_fr, "⚙ Refine Rules...", self._show_filter_rules_dialog, bg=CARD).pack(side="right")
+        self._btn(filter_fr, "📋 Copy Table", self._copy_table_output, bg=CARD).pack(side="right", padx=(0, 6))
 
         # treeview (now inside self.tab_table)
         tv_fr = tk.Frame(self.tab_table, bg=BG)
@@ -1709,6 +1710,30 @@ class TenderApp(tk.Tk):
         db.save_all_tenders(self._records)
         self._refresh_table_view()
         self._log("info", f"Reset manual tag for {len(sel)} tender(s).")
+
+    def _copy_table_output(self):
+        headers = [c[1] for c in TV_COLS]
+        lines = ["\t".join(headers)]
+        
+        selected = self.tv.selection()
+        rows_to_copy = selected if selected else self.tv.get_children()
+        
+        if not rows_to_copy:
+            self._log("warn", "No data to copy.")
+            return
+            
+        for iid in rows_to_copy:
+            vals = [str(self.tv.set(iid, c[0])) for c in TV_COLS]
+            lines.append("\t".join(vals))
+            
+        text_to_copy = "\n".join(lines)
+        self.clipboard_clear()
+        self.clipboard_append(text_to_copy)
+        self.update()
+        
+        count = len(rows_to_copy)
+        scope = "selected" if selected else "all visible"
+        self._log("ok", f"Copied {count} {scope} row(s) to clipboard.")
 
     def _show_tags_dialog(self):
         sel = self.tv.selection()
