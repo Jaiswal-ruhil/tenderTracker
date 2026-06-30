@@ -292,9 +292,15 @@ class TenderApp(tk.Tk):
         self._btn(filter_fr, "⚙ Refine Rules...", self._show_filter_rules_dialog, bg=CARD).pack(side="right")
         self._btn(filter_fr, "📋 Copy Table", self._copy_table_output, bg=CARD).pack(side="right", padx=(0, 6))
 
-        # treeview (now inside self.tab_table)
-        tv_fr = tk.Frame(self.tab_table, bg=BG)
-        tv_fr.pack(fill="both", expand=True)
+        # Create a PanedWindow inside self.tab_table for resizable Treeview and Detail Side-Panel
+        table_pane = tk.PanedWindow(self.tab_table, orient="horizontal", bg=BG,
+                                    sashwidth=4, sashrelief="flat", handlesize=0)
+        table_pane.pack(fill="both", expand=True)
+
+        # treeview frame (placed in the left pane of table_pane)
+        tv_fr = tk.Frame(table_pane, bg=BG)
+        table_pane.add(tv_fr, minsize=400, weight=3)
+
         cols = [c[0] for c in TV_COLS]
         self.tv = ttk.Treeview(tv_fr, columns=cols, show="headings",
                                selectmode="extended")
@@ -310,6 +316,36 @@ class TenderApp(tk.Tk):
         hsb.grid(row=1, column=0, sticky="ew")
         tv_fr.rowconfigure(0, weight=1); tv_fr.columnconfigure(0, weight=1)
 
+        # Detail Side-Panel frame (placed in the right pane of table_pane)
+        self.detail_panel = tk.Frame(table_pane, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=12, pady=10)
+        table_pane.add(self.detail_panel, minsize=320, weight=1)
+
+        # Detail Title
+        detail_title = tk.Label(self.detail_panel, text="TENDER DETAILS", font=FT, bg=PANEL, fg=TEXT)
+        detail_title.pack(anchor="w", pady=(0, 6))
+
+        # Detail Scrollable Text widget
+        txt_fr = tk.Frame(self.detail_panel, bg=PANEL)
+        txt_fr.pack(fill="both", expand=True)
+
+        self.detail_txt = tk.Text(txt_fr, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                                  relief="flat", font=FL, wrap="word", highlightthickness=0)
+        self.detail_txt.pack(side="left", fill="both", expand=True)
+
+        detail_vsb = ttk.Scrollbar(txt_fr, orient="vertical", command=self.detail_txt.yview)
+        detail_vsb.pack(side="right", fill="y")
+        self.detail_txt.configure(yscrollcommand=detail_vsb.set)
+        
+        # Configure tags for detail_txt formatting & highlighting
+        self.detail_txt.tag_configure("header", foreground=ACCENT2, font=("Segoe UI", 10, "bold"))
+        self.detail_txt.tag_configure("label", foreground=MUTED, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("value", foreground=TEXT, font=("Segoe UI", 9))
+        self.detail_txt.tag_configure("match_inc", background="#1A4A2A", foreground=SUCCESS, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
+
+        # Initialize detail text state
+        self._clear_detail_panel()
+
         self.tv.tag_configure("alt",     background="#1C2128")
         self.tv.tag_configure("fetched", background="#1A2E1A", foreground=SUCCESS)
         self.tv.tag_configure("saved",   background="#1A3A2A", foreground=SUCCESS)
@@ -319,6 +355,7 @@ class TenderApp(tk.Tk):
 
         self.tv.bind("<Double-1>", self._on_dbl)
         self.tv.bind("<Button-1>", self._cancel_edit)
+        self.tv.bind("<<TreeviewSelect>>", self._on_treeview_select)
 
         # Context Menu
         self.ctx_menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT, 
@@ -2408,3 +2445,113 @@ class TenderApp(tk.Tk):
                 
                 sep = tk.Frame(self.deadlines_inner_fr, bg="#30363D", height=1)
                 sep.pack(fill="x", padx=10)
+
+    def _clear_detail_panel(self):
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        self.detail_txt.insert("end", "\n\nSelect a tender from the table to view its full details here.", "value")
+        self.detail_txt.configure(state="disabled")
+
+    def _on_treeview_select(self, event):
+        sel = self.tv.selection()
+        if not sel:
+            self._clear_detail_panel()
+            return
+            
+        # Get selected record
+        bid_no = self.tv.set(sel[0], "bid_no")
+        rec = None
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                rec = r
+                break
+        if not rec:
+            self._clear_detail_panel()
+            return
+            
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        
+        # Display fields in group categories
+        categories = {
+            "Basic Info": ["bid_no", "bid_url", "category", "items", "quantity", "location"],
+            "Department Info": ["ministry", "dept", "organisation", "office"],
+            "Dates & Schedule": ["start_date", "end_date", "bid_opening"],
+            "Financial Details": ["est_value", "emd", "epbg", "min_turnover"],
+            "Qualifications": ["exp_years", "contract_dur", "mii", "mse_pref", "mse_relax", "startup_relax"],
+            "Status & Metadata": ["filing_status", "tags", "remarks"]
+        }
+        
+        # Mapping DB field keys to human readable labels
+        labels = {
+            "bid_no": "Bid Number", "bid_url": "Bid URL", "category": "Category", "items": "Items", 
+            "quantity": "Quantity", "location": "Location/Consignee", "ministry": "Ministry", 
+            "dept": "Department", "organisation": "Organisation", "office": "Office", 
+            "start_date": "Start Date", "end_date": "End Date", "bid_opening": "Bid Opening Date", 
+            "est_value": "Estimated Value", "emd": "EMD Required", "epbg": "ePBG Required", 
+            "min_turnover": "Min Turnover", "exp_years": "Exp Years Required", "contract_dur": "Contract Duration", 
+            "mii": "MII Compliant", "mse_pref": "MSE Pref", "mse_relax": "MSE Relaxation", 
+            "startup_relax": "Startup Relaxation", "filing_status": "Filing Status", "tags": "Tags", 
+            "remarks": "Remarks"
+        }
+        
+        first = True
+        for cat_name, fields in categories.items():
+            if not first:
+                self.detail_txt.insert("end", "\n\n")
+            first = False
+            
+            # Print Category Header
+            self.detail_txt.insert("end", f"■ {cat_name}\n", "header")
+            self.detail_txt.insert("end", "─" * 32 + "\n", "label")
+            
+            for field in fields:
+                val = rec.get(field, "")
+                if field == "tags":
+                    if isinstance(val, list):
+                        val = ", ".join(val)
+                    elif not val:
+                        val = "None"
+                elif isinstance(val, bool):
+                    val = "Yes" if val else "No"
+                else:
+                    val = str(val).strip()
+                    
+                if not val:
+                    val = "N/A"
+                    
+                lbl = labels.get(field, field.capitalize())
+                self.detail_txt.insert("end", f"{lbl}: ", "label")
+                self.detail_txt.insert("end", f"{val}\n", "value")
+                
+        # Highlight match words (include / exclude keywords)
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        
+        inc_kws = [k.strip() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip() for k in exc_raw.split(",") if k.strip()]
+        
+        # Apply include tags (case-insensitive)
+        for kw in inc_kws:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(kw)}c"
+                self.detail_txt.tag_add("match_inc", pos, end)
+                start = end
+                
+        # Apply exclude tags (case-insensitive)
+        for kw in exc_kws:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(kw)}c"
+                self.detail_txt.tag_add("match_exc", pos, end)
+                start = end
+                
+        self.detail_txt.configure(state="disabled")

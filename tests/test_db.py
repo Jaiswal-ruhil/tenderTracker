@@ -151,5 +151,31 @@ class TestDb(unittest.TestCase):
         loaded = db.load_all_tenders()
         self.assertEqual(len(loaded), num_threads * records_per_thread)
 
+    def test_fuzzy_unification(self):
+        # Insert a base tender with specific ministry and department
+        db.upsert_tender({
+            "bid_no": "GEM/2026/B/BASE-1",
+            "ministry": "Ministry of Jal Shakti",
+            "dept": "Uttar Pradesh Cooperative Sugar Factories Federation Limited",
+            "organisation": "Kisan Sahakari Chini Mill"
+        })
+        
+        # Insert another tender with slight typos / variations
+        db.upsert_tender({
+            "bid_no": "GEM/2026/B/BASE-2",
+            "ministry": "Ministry of Jall Shaktii", # 1 typo
+            "dept": "Uttar Pradesh Coop Sugar Factories Federation Ltd", # Abbreviation
+            "organisation": "Kisan Sahakaree Cheeni Mill" # Spelling difference
+        })
+        
+        # Load records and verify base-2 got unified to base-1 values
+        tenders = db.load_all_tenders()
+        tenders_by_bid = {t["bid_no"]: t for t in tenders}
+        
+        base2 = tenders_by_bid["GEM/2026/B/BASE-2"]
+        self.assertEqual(base2["ministry"], "Ministry of Jal Shakti")
+        self.assertEqual(base2["dept"], "Uttar Pradesh Cooperative Sugar Factories Federation Limited")
+        self.assertEqual(base2["organisation"], "Kisan Sahakari Chini Mill")
+
 if __name__ == '__main__':
     unittest.main()

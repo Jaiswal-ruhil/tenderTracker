@@ -252,12 +252,69 @@ def save_all_tenders(records):
         except Exception:
             return False
 
+def unify_organization_names(record, cursor=None):
+    """
+    Fuzzy standardizes organization, department, and ministry fields of the record
+    against already existing entries in the database.
+    """
+    import difflib
+    
+    close_conn = False
+    if cursor is None:
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            close_conn = True
+        except Exception:
+            return record
+            
+    try:
+        # Unify Ministry
+        val_min = record.get("ministry")
+        if val_min and str(val_min).strip():
+            cursor.execute("SELECT DISTINCT ministry FROM tenders WHERE ministry IS NOT NULL AND ministry != ''")
+            existing_mins = [r[0] for r in cursor.fetchall() if r[0] != val_min]
+            matches = difflib.get_close_matches(val_min, existing_mins, n=1, cutoff=0.75)
+            if matches:
+                record["ministry"] = matches[0]
+                
+        # Unify Dept
+        val_dept = record.get("dept")
+        if val_dept and str(val_dept).strip():
+            cursor.execute("SELECT DISTINCT dept FROM tenders WHERE dept IS NOT NULL AND dept != ''")
+            existing_depts = [r[0] for r in cursor.fetchall() if r[0] != val_dept]
+            matches = difflib.get_close_matches(val_dept, existing_depts, n=1, cutoff=0.75)
+            if matches:
+                record["dept"] = matches[0]
+
+        # Unify Organisation
+        val_org = record.get("organisation")
+        if val_org and str(val_org).strip():
+            cursor.execute("SELECT DISTINCT organisation FROM tenders WHERE organisation IS NOT NULL AND organisation != ''")
+            existing_orgs = [r[0] for r in cursor.fetchall() if r[0] != val_org]
+            matches = difflib.get_close_matches(val_org, existing_orgs, n=1, cutoff=0.75)
+            if matches:
+                record["organisation"] = matches[0]
+    except Exception:
+        pass
+    finally:
+        if close_conn and cursor:
+            try:
+                cursor.connection.close()
+            except Exception:
+                pass
+                
+    return record
+
 def upsert_tender(record):
     """Insert or update a single tender record. Thread-safe."""
     with _lock:
         bid_no = record.get("bid_no")
         if not bid_no:
             return load_all_tenders()
+            
+        # Unify organization names before upserting
+        record = unify_organization_names(record)
             
         def do_upsert():
             conn = get_conn()
@@ -305,6 +362,10 @@ def upsert_tenders(new_records):
                     bid_no = record.get("bid_no")
                     if not bid_no:
                         continue
+                        
+                    # Unify organization names using existing cursor
+                    record = unify_organization_names(record, cursor)
+                    
                     cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
                     row = cursor.fetchone()
                     
