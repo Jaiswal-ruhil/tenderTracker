@@ -953,6 +953,9 @@ class TenderApp(tk.Tk):
                 is_want = self._get_tender_status(rec, inc_kws, exc_kws)
                 if is_want:
                     new_wants.append(rec)
+                    self._log("ok", f"Added {bid_no} to database (matches Wants)")
+                else:
+                    self._log("info", f"Added {bid_no} to database (Don't Want / Filtered)")
 
         db.save_all_tenders(self._records)
         self._refresh_table_view()
