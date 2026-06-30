@@ -42,6 +42,8 @@ def parse_one(text):
     if m: r["start_date"]=m.group(1).strip()
     m=re.search(r"End\s*Date\s*:\s*(.+)", text, re.I)
     if m: r["end_date"]=m.group(1).strip()
+    m = re.search(r"Bid\s*Opening\s*(?:Date)?\s*:\s*(.+)", text, re.I)
+    if m: r["bid_opening"] = m.group(1).strip()
 
     # Detailed fields parsing
     m = re.search(r"Ministry\s*:\s*(.+)", text, re.I)
@@ -117,23 +119,55 @@ def convert_pdf_text_to_markdown(pdf_text):
     # 6. End Date
     end = re.search(r"Bid\s*End\s*Date\s*(?:/\s*Time)?\s*(?::|\n)\s*([0-9]{2}-[0-9]{2}-[0-9]{4}[^\n]*)", pdf_text, re.I)
     
+    # 7. Bid Opening Date
+    bid_opening = re.search(r"Bid\s*Opening\s*(?:\n|Date/Time|\s|/)*\s*([0-9]{2}[-/][0-9]{2}[-/][0-9]{4}[^\n]*)", pdf_text, re.I)
+    
     # Extra PDF details
     ministry = re.search(r"Ministry/State\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     org = re.search(r"Organisation\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     office = re.search(r"Office\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
-    est_val = re.search(r"Estimated\s*Bid\s*Value[\s\S]*?(?::|\n)\s*(\d+)", pdf_text, re.I)
+    
+    # Line limited regexes to prevent matching far-away numbers when fields are not present/N/A
+    est_val = re.search(r"Estimated\s*Bid\s*Value(?:[^\n]*\n){0,3}?[^\n]*?(\d+)", pdf_text, re.I)
     eval_method = re.search(r"Evaluation\s*Method\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     bid_type = re.search(r"Type\s*of\s*Bid\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     bid_to_ra = re.search(r"Bid\s*to\s*RA\s*(?:enabled)?\s*(?::|\n)\s*(\S+)", pdf_text, re.I)
-    emd = re.search(r"EMD\s*Detail[\s\S]*?Required\s*(?::|\n)\s*(\S+)", pdf_text, re.I)
-    epbg = re.search(r"ePBG\s*Detail[\s\S]*?Required\s*(?::|\n)\s*(\S+)", pdf_text, re.I)
-    mii = re.search(r"MII\s*Compliance[\s\S]*?(?::|\n)\s*(Yes|No)", pdf_text, re.I)
-    mse_pref = re.search(r"MSE\s*Purchase\s*Preference[\s\S]*?(?::|\n)\s*(Yes|No)", pdf_text, re.I)
-    mse_relax = re.search(r"MSE\s*Relaxation[\s\S]*?(?::|\n)\s*(Yes|No)", pdf_text, re.I)
-    startup_relax = re.search(r"Startup\s*Relaxation[\s\S]*?(?::|\n)\s*(Yes|No)", pdf_text, re.I)
-    min_turnover = re.search(r"Minimum\s*Average\s*Annual\s*Turnover[\s\S]*?(?::|\n)\s*([0-9][^\n]*)", pdf_text, re.I)
-    exp_years = re.search(r"Years\s*of\s*Past\s*Experience[\s\S]*?(?::|\n)\s*([0-9][^\n]*)", pdf_text, re.I)
-    contract_dur = re.search(r"Contract\s*(?:Duration|Period)[\s\S]*?(?::|\n)\s*([0-9][^\n]*)", pdf_text, re.I)
+    
+    # EMD & ePBG block division to avoid section cross-talk
+    emd_block = ""
+    epbg_block = ""
+    emd_idx = pdf_text.lower().find("emd detail")
+    epbg_idx = pdf_text.lower().find("epbg detail")
+    if emd_idx != -1:
+        if epbg_idx != -1 and epbg_idx > emd_idx:
+            emd_block = pdf_text[emd_idx:epbg_idx]
+            epbg_block = pdf_text[epbg_idx:epbg_idx + 1000]
+        else:
+            emd_block = pdf_text[emd_idx:emd_idx + 1000]
+            
+    emd_required_val = "No"
+    if emd_block:
+        if "advisory bank" in emd_block.lower() or "emd amount" in emd_block.lower() or "amount" in emd_block.lower():
+            emd_required_val = "Yes"
+        elif re.search(r"Required\s*(?::|\n)\s*Yes", emd_block, re.I):
+            emd_required_val = "Yes"
+            
+    epbg_required_val = "No"
+    if epbg_block:
+        m_req = re.search(r"Required\s*(?::|\n)\s*(Yes|No)", epbg_block, re.I)
+        if m_req:
+            epbg_required_val = m_req.group(1).strip()
+        elif "advisory bank" in epbg_block.lower() or "duration" in epbg_block.lower():
+            epbg_required_val = "Yes"
+
+    mii = re.search(r"MII\s*Compliance(?:[^\n]*\n){0,3}?[^\n]*?(Yes|No)", pdf_text, re.I)
+    mse_pref = re.search(r"MSE\s*Purchase\s*Preference(?:[^\n]*\n){0,3}?[^\n]*?(Yes|No)", pdf_text, re.I)
+    mse_relax = re.search(r"MSE\s*Relaxation(?:[^\n]*\n){0,3}?[^\n]*?(Yes|No)", pdf_text, re.I)
+    startup_relax = re.search(r"Startup\s*Relaxation(?:[^\n]*\n){0,3}?[^\n]*?(Yes|No)", pdf_text, re.I)
+    
+    min_turnover = re.search(r"Minimum\s*Average\s*Annual\s*Turnover(?:[^\n]*\n){0,3}?[^\n]*?(?<!For\s)(?<!For\s\s)([0-9][^\n]*)", pdf_text, re.I)
+    exp_years = re.search(r"Years\s*of\s*Past\s*Experience(?:[^\n]*\n){0,3}?[^\n]*?(?<!For\s)(?<!For\s\s)([0-9][^\n]*)", pdf_text, re.I)
+    contract_dur = re.search(r"Contract\s*(?:Duration|Period)(?:[^\n]*\n){0,3}?[^\n]*?([0-9][^\n]*)", pdf_text, re.I)
 
     # Consignee / Delivery Location
     location = ""
@@ -182,6 +216,14 @@ def convert_pdf_text_to_markdown(pdf_text):
                 qty_idx = i
                 break
                 
+        # Use whole word boundary check to avoid false matches on names like Narendra
+        if qty_idx == -1:
+            for idx_d, line in enumerate(data_lines):
+                cleaned_line = line.lower()
+                if re.search(r'\b(?:na|n/a|lumpsum|project|based|quantity)\b', cleaned_line):
+                    qty_idx = idx_d
+                    break
+                    
         if qty_idx != -1:
             row_content_lines = data_lines[:qty_idx]
             addr_start_idx = -1
@@ -214,6 +256,8 @@ def convert_pdf_text_to_markdown(pdf_text):
         lines.append(f"Start Date: {start.group(1).strip()}")
     if end:
         lines.append(f"End Date: {end.group(1).strip()}")
+    if bid_opening:
+        lines.append(f"Bid Opening Date: {bid_opening.group(1).strip()}")
     if ministry:
         lines.append(f"Ministry: {ministry.group(1).strip()}")
     if org:
@@ -228,10 +272,8 @@ def convert_pdf_text_to_markdown(pdf_text):
         lines.append(f"Bid Type: {bid_type.group(1).strip()}")
     if bid_to_ra:
         lines.append(f"Bid to RA: {bid_to_ra.group(1).strip()}")
-    if emd:
-        lines.append(f"EMD Required: {emd.group(1).strip()}")
-    if epbg:
-        lines.append(f"ePBG Required: {epbg.group(1).strip()}")
+    lines.append(f"EMD Required: {emd_required_val}")
+    lines.append(f"ePBG Required: {epbg_required_val}")
     if mii:
         lines.append(f"MII Compliance: {mii.group(1).strip()}")
     if mse_pref:

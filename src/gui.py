@@ -157,9 +157,11 @@ class TenderApp(tk.Tk):
 
         self.tab_table = tk.Frame(self.notebook, bg=BG)
         self.tab_calendar = tk.Frame(self.notebook, bg=BG)
+        self.tab_matrix = tk.Frame(self.notebook, bg=BG)
         
         self.notebook.add(self.tab_table, text="  Table View  ")
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
+        self.notebook.add(self.tab_matrix, text="  Matrix View  ")
 
         # Table Tab Header (formerly right header)
         hdr = tk.Frame(self.tab_table, bg=BG)
@@ -175,6 +177,40 @@ class TenderApp(tk.Tk):
                   self._do_fetch_sel, bg="#2D333B").pack(side="right",padx=2)
         self._btn(hdr,"  Save Selected to Excel  ",
                   self._save_selected, bg=ACCENT, pad=10).pack(side="right",padx=(6,2))
+
+        # ── Filter & Refine Bar ──────────────────────────────────────────────
+        filter_fr = tk.Frame(self.tab_table, bg=PANEL, padx=10, pady=6,
+                             highlightthickness=1, highlightbackground="#30363D")
+        filter_fr.pack(fill="x", pady=(0, 6))
+
+        # Search box
+        tk.Label(filter_fr, text="Search:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", lambda *args: self._refresh_table_view())
+        
+        search_ent = tk.Entry(filter_fr, textvariable=self.search_var, bg=CARD, fg=TEXT,
+                              insertbackground=TEXT, relief="flat", font=FL, width=22,
+                              highlightthickness=1, highlightbackground="#30363D",
+                              highlightcolor=ACCENT2)
+        search_ent.pack(side="left", padx=(4, 15))
+
+        # View dropdown
+        tk.Label(filter_fr, text="Category View:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
+        
+        self.view_var = tk.StringVar(value="All Tenders")
+        view_opt = ttk.Combobox(filter_fr, textvariable=self.view_var, 
+                                values=["All Tenders", "Wants (Matches)", "Don't Wants (Filtered)"],
+                                state="readonly", font=FL, width=20)
+        view_opt.pack(side="left", padx=4)
+        view_opt.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
+        
+        # Style Combobox listbox dropdown
+        self.option_add("*TCombobox*Listbox.background", CARD)
+        self.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", SEL_BG)
+
+        # Refine rules button
+        self._btn(filter_fr, "⚙ Refine Rules...", self._show_filter_rules_dialog, bg=CARD).pack(side="right")
 
         # treeview (now inside self.tab_table)
         tv_fr = tk.Frame(self.tab_table, bg=BG)
@@ -198,12 +234,31 @@ class TenderApp(tk.Tk):
         self.tv.tag_configure("fetched", background="#1A2E1A", foreground=SUCCESS)
         self.tv.tag_configure("saved",   background="#1A3A2A", foreground=SUCCESS)
         self.tv.tag_configure("fetching",background="#2A2A1A", foreground=WARN)
+        self.tv.tag_configure("dont_want", foreground="#5D6570")
+        self.tv.tag_configure("manual_want", background="#1A3324")
 
         self.tv.bind("<Double-1>", self._on_dbl)
         self.tv.bind("<Button-1>", self._cancel_edit)
 
+        # Context Menu
+        self.ctx_menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT, 
+                                activebackground=SEL_BG, activeforeground=TEXT, font=FL)
+        self.ctx_menu.add_command(label="Mark as Want (Keep)", command=self._mark_selected_want)
+        self.ctx_menu.add_command(label="Mark as Don't Want (Ignore)", command=self._mark_selected_dont_want)
+        self.ctx_menu.add_command(label="Reset Manual Tag", command=self._reset_selected_tag)
+        self.ctx_menu.add_separator()
+        self.ctx_menu.add_command(label="Delete Selected", command=self._del_sel)
+        self.ctx_menu.add_command(label="Fetch Details (Selenium)", command=self._do_fetch_sel)
+        self.ctx_menu.add_command(label="Save Selected to Excel", command=self._save_selected)
+        
+        self.tv.bind("<Button-3>", self._show_context_menu)
+        self.tv.bind("<Button-2>", self._show_context_menu) # For macOS
+
         # Build Calendar tab layouts
         self._build_calendar_tab()
+
+        # Build Matrix tab layouts
+        self._build_matrix_tab()
 
         # Bind notebook tab change event to refresh calendar if switched to it
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -296,10 +351,7 @@ class TenderApp(tk.Tk):
         self._set_status("Loading tenders from database...", MUTED)
         try:
             self._records = db.load_all_tenders()
-            for rec in self._records:
-                self._tv_insert(rec)
-            self._refresh_alt()
-            self.count_lbl.configure(text=f"{len(self._records)} rows")
+            self._refresh_table_view()
             
             display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
             self._set_status(f"Database: {display_path}", SUCCESS)
@@ -509,15 +561,9 @@ class TenderApp(tk.Tk):
             return
             
         try:
-            # Clear GUI
-            for child in self.tv.get_children():
-                self.tv.delete(child)
             self._records.clear()
-            self._refresh_alt()
-            self.count_lbl.configure(text="0 rows")
-            
-            # Write empty list to DB
             db.save_all_tenders([])
+            self._refresh_table_view()
             self._log("ok", "Database cleared successfully.")
             messagebox.showinfo("Database Cleared", "The database has been successfully cleared.", parent=parent)
             
@@ -681,9 +727,8 @@ class TenderApp(tk.Tk):
                 self._tv_insert(rec)
                 added_count += 1
 
-        self._refresh_alt()
         db.save_all_tenders(self._records)
-        self.count_lbl.configure(text=f"{len(self._records)} rows")
+        self._refresh_table_view()
         skipped = total - (added_count + updated_count)
         msg = f"Parsed {total} block(s): {added_count} added"
         if updated_count:
@@ -714,9 +759,12 @@ class TenderApp(tk.Tk):
             self._log("warn","No rows selected."); return
         targets = []
         for iid in sel:
-            idx = self.tv.index(iid)
-            if idx < len(self._records) and self._records[idx].get("bid_url"):
-                targets.append((idx, self._records[idx]))
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for idx, r in enumerate(self._records):
+                    if r.get("bid_no") == bid_no and r.get("bid_url"):
+                        targets.append((idx, r))
+                        break
         if not targets:
             self._log("warn","Selected rows have no Bid URL."); return
         self._run_fetch(targets, "selected")
@@ -736,13 +784,13 @@ class TenderApp(tk.Tk):
         self._log("info", f"--- Selenium fetch started: {len(targets)} {label} row(s) ---")
         self._set_prog(0, f"Fetching 0/{len(targets)}…")
 
-        iid_map = {i: iid for i,iid in enumerate(self.tv.get_children())}
+        iid_map = {self.tv.set(iid, "bid_no"): iid for iid in self.tv.get_children() if self.tv.set(iid, "bid_no")}
 
         def worker():
             total = len(targets)
             for n, (idx, rec) in enumerate(targets, 1):
-                iid = iid_map.get(idx)
                 bid = rec.get("bid_no","?")
+                iid = iid_map.get(bid)
                 url = rec["bid_url"]
 
                 self._set_prog(int((n-1)/total*100), f"Fetching {n}/{total}: {bid}")
@@ -792,16 +840,29 @@ class TenderApp(tk.Tk):
     def _tv_insert(self, rec):
         vals = tuple(rec.get(c,"") for c in TV_IDS)
         tags = []
+        
+        # Wants / Don't Wants tags
+        manual_want = rec.get("is_want")
+        derived_want = rec.get("is_want_derived", True)
+        
+        if manual_want is False:
+            tags.append("dont_want")
+        elif manual_want is True:
+            tags.append("manual_want")
+        elif derived_want is False:
+            tags.append("dont_want")
+            
         if rec.get("is_saved"):
             tags.append("saved")
         elif rec.get("is_fetched"):
             tags.append("fetched")
+            
         return self.tv.insert("","end", values=vals, tags=tuple(tags))
 
     def _refresh_alt(self):
         for i, iid in enumerate(self.tv.get_children()):
             cur_tags = self.tv.item(iid,"tags")
-            special = [t for t in cur_tags if t in ("fetched","saved","fetching")]
+            special = [t for t in cur_tags if t in ("fetched","saved","fetching","dont_want","manual_want")]
             if not special:
                 self.tv.item(iid, tags=("alt",) if i%2 else ())
 
@@ -834,8 +895,12 @@ class TenderApp(tk.Tk):
         self._editing = (iid, col_id, e)
         def commit(ev=None):
             nv = var.get(); self.tv.set(iid,col_id,nv)
-            idx = self.tv.index(iid)
-            if idx < len(self._records): self._records[idx][col_id]=nv
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        r[col_id] = nv
+                        break
             e.destroy(); self._editing=None
             db.save_all_tenders(self._records)
             try:
@@ -859,12 +924,16 @@ class TenderApp(tk.Tk):
     def _del_sel(self):
         sel = self.tv.selection()
         if not sel: return
-        for iid in sorted(sel, key=self.tv.index, reverse=True):
-            idx = self.tv.index(iid)
-            self.tv.delete(iid)
-            if idx < len(self._records): self._records.pop(idx)
-        self._refresh_alt()
-        self.count_lbl.configure(text=f"{len(self._records)} rows")
+        
+        bids_to_del = []
+        for iid in sel:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                bids_to_del.append(bid_no)
+                
+        self._records = [r for r in self._records if r.get("bid_no") not in bids_to_del]
+        
+        self._refresh_table_view()
         self._log("info", f"Deleted {len(sel)} row(s).")
         db.save_all_tenders(self._records)
         try:
@@ -883,20 +952,35 @@ class TenderApp(tk.Tk):
             self._set_status("Set output folder first.", ERR); return
         os.makedirs(folder, exist_ok=True)
         fy   = financial_year(datetime.now())
-        path = xl_path(folder, fy)
+        pat  = db.load_settings().get("excel_filename_pattern", "GEM_Tenders_FY_{fy}")
+        path = xl_path(folder, fy, pattern=pat)
         ensure_workbook(path)
+        
+        # Resolve selected records by bid_no
         recs = []
+        bids_saved = []
         for iid in sel:
-            idx = self.tv.index(iid)
-            if idx < len(self._records): recs.append(self._records[idx])
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        recs.append(r)
+                        bids_saved.append(bid_no)
+                        break
         try:
             snos = xl_append(path, recs)
             msg = f"Saved {len(snos)} row(s) → {os.path.basename(path)}  (S.No {snos[0]}–{snos[-1]})"
             self._log("ok", msg); self._set_status(msg, SUCCESS); self._fy_tick()
-            for iid in sel: self.tv.item(iid, tags=("saved",))
-            for idx in [self.tv.index(iid) for iid in sel]:
-                if idx < len(self._records):
-                    self._records[idx]["is_saved"] = True
+            
+            # Tag the rows in Treeview
+            for iid in sel: 
+                self.tv.item(iid, tags=("saved",))
+                
+            # Update records structure
+            for r in self._records:
+                if r.get("bid_no") in bids_saved:
+                    r["is_saved"] = True
+                    
             db.save_all_tenders(self._records)
         except Exception as ex:
             self._log("err", f"Save error: {ex}")
@@ -1189,5 +1273,323 @@ class TenderApp(tk.Tk):
             if selected_tab == 1:
                 self._update_calendar()
                 self._update_details()
+            elif selected_tab == 2:
+                self._update_matrix()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
+
+    # ── Filtering & Refinement ────────────────────────────────────────────────
+    def _get_tender_status(self, rec, inc_kws, exc_kws):
+        is_want = rec.get("is_want")
+        if is_want is not None:
+            return is_want
+            
+        search_fields = [
+            rec.get("items", ""),
+            rec.get("category", ""),
+            rec.get("ministry", ""),
+            rec.get("dept", ""),
+            rec.get("organisation", ""),
+            rec.get("location", ""),
+            rec.get("bid_no", "")
+        ]
+        combined_text = " ".join(search_fields).lower()
+        
+        for kw in exc_kws:
+            if kw and kw in combined_text:
+                return False
+                
+        if inc_kws:
+            matches_inc = False
+            for kw in inc_kws:
+                if kw and kw in combined_text:
+                    matches_inc = True
+                    break
+            if not matches_inc:
+                return False
+                
+        return True
+
+    def _refresh_table_view(self):
+        for child in self.tv.get_children():
+            self.tv.delete(child)
+            
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+        
+        view_filter = self.view_var.get()
+        search_text = self.search_var.get().strip().lower()
+        
+        visible_count = 0
+        for rec in self._records:
+            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+            rec["is_want_derived"] = is_want
+            
+            if view_filter == "Wants (Matches)" and not is_want:
+                continue
+            if view_filter == "Don't Wants (Filtered)" and is_want:
+                continue
+                
+            if search_text:
+                combined_text = " ".join(str(v) for v in rec.values()).lower()
+                if search_text not in combined_text:
+                    continue
+                    
+            self._tv_insert(rec)
+            visible_count += 1
+            
+        self._refresh_alt()
+        self.count_lbl.configure(text=f"{visible_count} visible / {len(self._records)} total")
+
+    def _show_context_menu(self, event):
+        iid = self.tv.identify_row(event.y)
+        if iid:
+            if iid not in self.tv.selection():
+                self.tv.selection_set(iid)
+            self.ctx_menu.post(event.x_root, event.y_root)
+
+    def _mark_selected_want(self):
+        sel = self.tv.selection()
+        if not sel: return
+        for iid in sel:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        r["is_want"] = True
+                        break
+        db.save_all_tenders(self._records)
+        self._refresh_table_view()
+        self._log("ok", f"Marked {len(sel)} tender(s) as Want.")
+
+    def _mark_selected_dont_want(self):
+        sel = self.tv.selection()
+        if not sel: return
+        for iid in sel:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        r["is_want"] = False
+                        break
+        db.save_all_tenders(self._records)
+        self._refresh_table_view()
+        self._log("ok", f"Marked {len(sel)} tender(s) as Don't Want.")
+
+    def _reset_selected_tag(self):
+        sel = self.tv.selection()
+        if not sel: return
+        for iid in sel:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        r.pop("is_want", None)
+                        break
+        db.save_all_tenders(self._records)
+        self._refresh_table_view()
+        self._log("info", f"Reset manual tag for {len(sel)} tender(s).")
+
+    def _show_filter_rules_dialog(self):
+        win = tk.Toplevel(self)
+        win.grab_set()
+        win.transient(self)
+        win.title("Filter & Refinement Rules")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        
+        x = self.winfo_x() + (self.winfo_width() - 500) // 2
+        y = self.winfo_y() + (self.winfo_height() - 340) // 2
+        win.geometry(f"500x340+{max(0, x)}+{max(0, y)}")
+        
+        tk.Label(win, text="Keyword Refinement Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 8))
+        
+        # Include Keywords Frame
+        inc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        inc_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(inc_frame, text="Include Keywords (comma-separated):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
+        tk.Label(inc_frame, text="Only matching tenders will be categorized as 'Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(0, 4))
+        
+        current_inc = db.load_settings().get("include_keywords", "")
+        inc_var = tk.StringVar(value=current_inc)
+        
+        inc_entry = tk.Entry(inc_frame, textvariable=inc_var, bg=CARD, fg=TEXT,
+                             insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D",
+                             highlightcolor=ACCENT2)
+        inc_entry.pack(fill="x", pady=4)
+        
+        # Exclude Keywords Frame
+        exc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        exc_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(exc_frame, text="Exclude Keywords (comma-separated):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
+        tk.Label(exc_frame, text="Matching tenders will be automatically ignored as 'Don't Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(0, 4))
+        
+        current_exc = db.load_settings().get("exclude_keywords", "")
+        exc_var = tk.StringVar(value=current_exc)
+        
+        exc_entry = tk.Entry(exc_frame, textvariable=exc_var, bg=CARD, fg=TEXT,
+                             insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D",
+                             highlightcolor=ACCENT2)
+        exc_entry.pack(fill="x", pady=4)
+        
+        def save_rules():
+            db.save_setting("include_keywords", inc_var.get().strip())
+            db.save_setting("exclude_keywords", exc_var.get().strip())
+            self._log("info", "Filter rules updated.")
+            self._refresh_table_view()
+            win.destroy()
+            
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=12)
+        self._btn(btn_fr, "  Save & Apply  ", save_rules, bg=ACCENT2).pack(anchor="center")
+
+    # ── Matrix View Implementation ────────────────────────────────────────────
+    def _build_matrix_tab(self):
+        container = tk.Frame(self.tab_matrix, bg=BG)
+        container.pack(fill="both", expand=True, padx=4, pady=4)
+        
+        vbar = ttk.Scrollbar(container, orient="vertical")
+        hbar = ttk.Scrollbar(container, orient="horizontal")
+        
+        self.matrix_canvas = tk.Canvas(container, bg=BG, highlightthickness=0,
+                                       xscrollcommand=hbar.set, yscrollcommand=vbar.set)
+        
+        vbar.configure(command=self.matrix_canvas.yview)
+        hbar.configure(command=self.matrix_canvas.xview)
+        
+        vbar.pack(side="right", fill="y")
+        hbar.pack(side="bottom", fill="x")
+        self.matrix_canvas.pack(side="left", fill="both", expand=True)
+        
+        self.matrix_grid_fr = tk.Frame(self.matrix_canvas, bg=BG)
+        self.matrix_canvas.create_window((0, 0), window=self.matrix_grid_fr, anchor="nw", tags="self.matrix_grid_fr")
+        
+        self.matrix_grid_fr.bind("<Configure>", lambda e: self.matrix_canvas.configure(
+            scrollregion=self.matrix_canvas.bbox("all")
+        ))
+        
+        def _on_matrix_mousewheel(event):
+            self.matrix_canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+            
+        def _on_matrix_shift_mousewheel(event):
+            self.matrix_canvas.xview_scroll(int(-1 * (event.delta / 120)), "units")
+        
+        self.matrix_canvas.bind("<Enter>", lambda e: (
+            self.matrix_canvas.bind_all("<MouseWheel>", _on_matrix_mousewheel),
+            self.matrix_canvas.bind_all("<Shift-MouseWheel>", _on_matrix_shift_mousewheel)
+        ))
+        self.matrix_canvas.bind("<Leave>", lambda e: (
+            self.matrix_canvas.unbind_all("<MouseWheel>"),
+            self.matrix_canvas.unbind_all("<Shift-MouseWheel>")
+        ))
+
+    def _update_matrix(self):
+        for child in self.matrix_grid_fr.winfo_children():
+            child.destroy()
+            
+        locations = sorted(list(set(r.get("location", "").strip() for r in self._records if r.get("location", "").strip())))
+        categories = sorted(list(set(r.get("category", "").strip() for r in self._records if r.get("category", "").strip())))
+        
+        if not locations or not categories:
+            lbl = tk.Label(self.matrix_grid_fr, text="No tenders with Location and Category details found.",
+                           font=FB, bg=BG, fg=MUTED)
+            lbl.pack(pady=40, padx=40)
+            return
+            
+        hdr_corner = tk.Frame(self.matrix_grid_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=10, pady=8)
+        hdr_corner.grid(row=0, column=0, sticky="nsew")
+        tk.Label(hdr_corner, text="Location \\ Category", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack()
+        
+        for c_idx, cat in enumerate(categories):
+            hdr_cell = tk.Frame(self.matrix_grid_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=10, pady=8, width=180)
+            hdr_cell.grid(row=0, column=c_idx + 1, sticky="nsew")
+            hdr_cell.grid_propagate(False)
+            hdr_cell.configure(height=80)
+            lbl = tk.Label(hdr_cell, text=cat, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=TEXT, wraplength=150, justify="center")
+            lbl.pack(expand=True, fill="both")
+            
+        for r_idx, loc in enumerate(locations):
+            hdr_cell = tk.Frame(self.matrix_grid_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=10, pady=8, width=220)
+            hdr_cell.grid(row=r_idx + 1, column=0, sticky="nsew")
+            hdr_cell.grid_propagate(False)
+            hdr_cell.configure(height=120)
+            lbl = tk.Label(hdr_cell, text=loc, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=TEXT, wraplength=200, justify="left")
+            lbl.pack(expand=True, fill="both")
+            
+        for r_idx, loc in enumerate(locations):
+            for c_idx, cat in enumerate(categories):
+                cell_recs = [r for r in self._records if r.get("location", "").strip() == loc and r.get("category", "").strip() == cat]
+                
+                cell_fr = tk.Frame(self.matrix_grid_fr, highlightthickness=1, highlightbackground="#30363D", width=180, height=120)
+                cell_fr.grid(row=r_idx + 1, column=c_idx + 1, sticky="nsew")
+                cell_fr.grid_propagate(False)
+                
+                if not cell_recs:
+                    cell_fr.configure(bg=BG)
+                    lbl = tk.Label(cell_fr, text="-", font=FB, bg=BG, fg="#30363D")
+                    lbl.pack(expand=True)
+                else:
+                    cell_fr.configure(bg=CARD)
+                    rec = cell_recs[0]
+                    
+                    bid = rec.get("bid_no", "GEM/...")
+                    bid_short = bid.split("/")[-1] if "/" in bid else bid
+                    
+                    bid_lbl = tk.Label(cell_fr, text=bid_short, font=("Segoe UI", 9, "bold"), bg=CARD, fg=ACCENT2, cursor="hand2")
+                    bid_lbl.pack(anchor="w", padx=6, pady=(4, 0))
+                    
+                    if rec.get("bid_url"):
+                        bid_lbl.bind("<Button-1>", lambda e, url=rec["bid_url"]: webbrowser.open(url))
+                        
+                    end_dt = rec.get("end_date", "")
+                    if end_dt:
+                        date_match = re.search(r"\d{2}-\d{2}-\d{4}", end_dt)
+                        end_date_str = date_match.group(0) if date_match else end_dt
+                    else:
+                        end_date_str = "No End Date"
+                        
+                    date_lbl = tk.Label(cell_fr, text=f"End: {end_date_str}", font=("Segoe UI", 8), bg=CARD, fg=MUTED)
+                    date_lbl.pack(anchor="w", padx=6)
+                    
+                    curr_status = rec.get("filing_status", "Not Filed")
+                    if not curr_status:
+                        curr_status = "Not Filed"
+                        
+                    status_var = tk.StringVar(value=curr_status)
+                    status_opts = ["Not Filed", "Draft", "Submitted", "Exempt"]
+                    if curr_status not in status_opts:
+                        status_opts.append(curr_status)
+                        
+                    cb = ttk.Combobox(cell_fr, textvariable=status_var, values=status_opts, state="readonly", width=14, font=("Segoe UI", 8))
+                    cb.pack(anchor="w", padx=6, pady=(8, 4))
+                    
+                    def make_on_status_change(r_obj=rec, var=status_var):
+                        return lambda e: self._update_tender_filing_status(r_obj, var.get())
+                        
+                    cb.bind("<<ComboboxSelected>>", make_on_status_change())
+                    
+                    if len(cell_recs) > 1:
+                        cnt_lbl = tk.Label(cell_fr, text=f"+{len(cell_recs)-1} more", font=("Segoe UI", 7, "bold"), bg=CARD, fg=WARN)
+                        cnt_lbl.pack(anchor="e", padx=6, pady=(0, 2))
+
+    def _update_tender_filing_status(self, rec, new_status):
+        bid_no = rec.get("bid_no")
+        if not bid_no:
+            return
+            
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                r["filing_status"] = new_status
+                break
+                
+        db.save_all_tenders(self._records)
+        self._refresh_table_view()
+        self._log("ok", f"Updated filing status for {bid_no} to '{new_status}'")

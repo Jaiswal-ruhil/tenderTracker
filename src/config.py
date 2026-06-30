@@ -41,6 +41,7 @@ TV_COLS = [
     ("bid_opening",  "Bid Opening",       130),
     ("start_date",   "Start Date",        130),
     ("end_date",     "End Date",          130),
+    ("filing_status", "Filing Status",    110),
     ("remarks",      "Remarks",           120),
 ]
 TV_IDS = [c[0] for c in TV_COLS]
