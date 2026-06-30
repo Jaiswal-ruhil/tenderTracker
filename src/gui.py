@@ -769,23 +769,27 @@ class TenderApp(tk.Tk):
             
             def process_one(i, blk):
                 # Check if block is a local PDF path on disk
-                if blk.lower().endswith(".pdf") and os.path.exists(blk):
-                    self.after(0, lambda f=blk: self._log("info", f"[{i}/{total}] Reading PDF: {os.path.basename(f)}"))
-                    try:
-                        reader = pypdf.PdfReader(blk)
-                        pdf_text = ""
-                        for page in reader.pages:
-                            t = page.extract_text()
-                            if t:
-                                pdf_text += t + "\n"
-                        md_text = convert_pdf_text_to_markdown(pdf_text)
-                        rec = parse_one(md_text)
-                        if rec.get("bid_no"):
-                            self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
-                            return rec
-                    except Exception as ex:
-                        self.after(0, lambda f=blk, err=ex: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}"))
-                    return None
+                if blk.lower().endswith(".pdf"):
+                    if os.path.exists(blk):
+                        self.after(0, lambda f=blk: self._log("info", f"[{i}/{total}] Reading PDF: {os.path.basename(f)}"))
+                        try:
+                            reader = pypdf.PdfReader(blk)
+                            pdf_text = ""
+                            for page in reader.pages:
+                                t = page.extract_text()
+                                if t:
+                                    pdf_text += t + "\n"
+                            md_text = convert_pdf_text_to_markdown(pdf_text)
+                            rec = parse_one(md_text)
+                            if rec.get("bid_no"):
+                                self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
+                                return rec
+                        except Exception as ex:
+                            self.after(0, lambda f=blk, err=ex: self._log("err", f"Failed to read PDF {os.path.basename(f)}: {err}"))
+                        return None
+                    else:
+                        self.after(0, lambda: self._log("warn", f"SKIP — PDF file does not exist on disk: {blk}"))
+                        return None
                 
                 # Parse block as text first
                 rec = parse_one(blk)
@@ -805,7 +809,10 @@ class TenderApp(tk.Tk):
                     elif re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", line_val, re.I):
                         bid_no = line_val
                     else:
-                        self.after(0, lambda: self._log("warn", f"SKIP — No valid Bid Number or URL found"))
+                        snippet = blk.strip().replace("\n", " ")
+                        if len(snippet) > 40:
+                            snippet = snippet[:40] + "..."
+                        self.after(0, lambda: self._log("warn", f"SKIP — No valid Bid Number or URL found in block: \"{snippet}\""))
                         return None
                 
                 # Check if it is in Don't Wants
@@ -935,6 +942,9 @@ class TenderApp(tk.Tk):
                 if merged_fields:
                     updated_count += 1
                     self.tv.item(iid, tags=("fetched",))
+                    self._log("ok", f"Updated {bid_no} with {len(merged_fields)} new fields")
+                else:
+                    self._log("info", f"Skipped {bid_no}: Already exists with identical details")
             else:
                 self._records.append(rec)
                 self._tv_insert(rec)
