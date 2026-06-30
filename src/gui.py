@@ -711,17 +711,18 @@ class TenderApp(tk.Tk):
             # Step 1: Split raw text into initial blocks.
             initial_blocks = split_blocks(raw)
             
-            # If split_blocks didn't split anything (no "BID NO:" found),
-            # the user might have pasted a list of URLs or Bid Numbers, one per line.
-            # In that case, let's split by lines.
+            # Process each block from split_blocks:
+            # If it starts with a BID NO label, process it as a single block.
+            # Otherwise, split it by lines (handling lists of PDF paths, URLs, or raw bid numbers).
             blocks_to_process = []
-            if len(initial_blocks) == 1 and not re.search(r"BID\s*(?:NO|Number)(?:\.|\b)\s*:", initial_blocks[0], re.I):
-                for line in raw.splitlines():
-                    ln = line.strip().strip('"\'')
-                    if ln:
-                        blocks_to_process.append(ln)
-            else:
-                blocks_to_process = initial_blocks
+            for blk in initial_blocks:
+                if re.match(r"^\s*BID\s*(?:NO|Number)(?:\.|\b)\s*:", blk, re.I):
+                    blocks_to_process.append(blk)
+                else:
+                    for line in blk.splitlines():
+                        ln = line.strip().strip('"\'')
+                        if ln:
+                            blocks_to_process.append(ln)
                 
             total = len(blocks_to_process)
             self._log("info", f"Found {total} item(s) to process.")

@@ -19,6 +19,19 @@ class TestParser(unittest.TestCase):
         self.assertTrue(blocks[0].startswith("BID NO: GEM/2026/B/7526729"))
         self.assertTrue(blocks[1].startswith("Bid Number: GEM/2026/B/7490294"))
 
+    def test_split_blocks_with_preface(self):
+        text = """
+        C:/Users/pc/Downloads/GeM-Bidding-7593328.pdf
+        C:/Users/pc/Downloads/GeM-Bidding-7612203.pdf
+        
+        BID NO: GEM/2026/B/7526729
+        Items: Item 1
+        """
+        blocks = parser.split_blocks(text)
+        self.assertEqual(len(blocks), 2)
+        self.assertTrue("GeM-Bidding-7593328.pdf" in blocks[0])
+        self.assertTrue(blocks[1].startswith("BID NO: GEM/2026/B/7526729"))
+
     def test_parse_one_standard(self):
         text = """
         BID NO: [GEM/2026/B/7526729](https://bidplus.gem.gov.in/showbidDocument/7526729)

@@ -7,38 +7,49 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 ## Key Features
 
 * **Sleek Custom Desktop UI**: Modern dark-themed dashboard with HSL panels, interactive data tables (Treeview), styled progress meters, and dynamic action logs.
-* **Local PDF Data Extraction**: Paste a path or drag-and-drop a GeM PDF document directly into the paste box to automatically parse and map **21 detailed fields** (using page-extraction fallbacks like Consignee tables).
-* **Selenium Scraper Fallback**: Autodetects bid page URLs and crawls them in the background using Selenium Chrome Webdriver to fetch organizational details.
-* **Smart Row De-duplication**: Auto-merges incoming rows. If a tender ID already exists, it improves the entry by only populating missing cells instead of creating duplicate records.
-* **Excel Exporting**: Saves parsed tenders to a structured, formatted Excel sheet named after the corresponding financial year (e.g., `Tenders_FY_2026-27.xlsx`).
-* **CI/CD Pipelines**: Integrated GitHub Actions workflow to build, test, sign, and release standalone Windows binaries automatically.
-* **Pre-commit Safeguards**: Custom Git pre-commit hooks that run the test suite and enforce checks prior to allowing a commit.
+* **SQLite Database Backend**: Self-healing SQLite3 database (`tenders_db.db`) replacing flat JSON files, featuring transaction timeouts, concurrent lock protection, and automatic backward-compatible migration of legacy JSON records.
+* **Concurrent Ingestion Engine**: Parallel pipelines using `ThreadPoolExecutor` (max 3 workers for PDF downloads, max 2 workers for Selenium scraping) to optimize crawling speeds without blocking the UI.
+* **Advanced Logical Rules Filter**: Advanced boolean matching (`AND`, `OR`, `NOT` grouping with parentheses) and regular expressions prefixed with `rx:` to refine "Want" alerts.
+* **Visual Analytics Hub**: Interactive dashboard tab rendering custom-drawn ministry bar charts, deadline status progress, and metric status cards.
+* **Custom Toast Alerts**: Border-accented bottom-right notifications that fade out smoothly via alpha blending when new matching tenders are parsed or when crawls complete.
+* **Tags System & Multi-Tag Selection**: A custom-made tags manager allows defining, deleting, and assigning multiple color-coded tag labels to tenders.
+* **Export & Copy Table**: Export formatted Excel spreadsheets (e.g. `Tenders_FY_2026-27.xlsx`) or copy table selections directly to the clipboard in tab-separated (TSV) values.
 
 ---
 
 ## Application Flow Diagram
 
-Below is the workflow showing how inputs are processed, parsed, filtered, and saved within the application:
+Below is the workflow showing how inputs are processed, parsed, filtered, stored, and displayed within the application:
 
 ```mermaid
-graph TD
-    A[User Inputs Bids / URLs / PDF Path] --> B[Initial Parse of Input Blocks]
-    B --> C{Details Found in Text?}
-    C -->|Yes| D[Parse Details Directly]
-    C -->|No| E{Already in Database with Details?}
-    E -->|Yes| F[Load Existing Record Details]
-    E -->|No| G{Marked as Don't Want?}
-    G -->|Yes| H[Skip Download & Ignore]
-    G -->|No| I[Download PDF & Extract Details]
-    D --> J[Apply Keyword Filter Rules]
-    F --> J
-    I --> J
-    J --> K{Matches "Wants"?}
-    K -->|Yes| L[Tag as Want / Keep in Table]
-    K -->|No| M[Tag as Don't Want / Ignore]
-    L --> N[Save to Database & Update UI]
-    M --> N
-    N --> O[Excel Export Selected Bids]
+flowchart TD
+    subgraph Input & Parsing
+        A[User Pastes Text, URLs, or PDF Paths] --> B[ThreadPoolExecutor split & process blocks]
+        B --> C{Is PDF Path?}
+        C -->|Yes| D[Parse local PDF file]
+        C -->|No| E[Parse text metadata block]
+    end
+
+    subgraph Database Check & Fetching
+        D & E --> F{Is in SQLite 'Don't Wants'?}
+        F -->|Yes| G[Skip block / Ignore]
+        F -->|No| H{Has full details?}
+        H -->|Yes| I[Use parsed details]
+        H -->|No| J[Concurrent Selenium Crawl / PDF download]
+    end
+
+    subgraph Storage & Filtering
+        I & J --> K[Upsert to SQLite Database]
+        K --> L[Apply Advanced Filter Rules: Regex & Boolean AND/OR/NOT]
+        L --> M{Matches 'Wants'?}
+        M -->|Yes| N[Trigger Custom Match Toast Notification]
+        M -->|No| O[Save as Don't Want / Hide in Table View]
+    end
+
+    subgraph UI & Output
+        N & O --> P[Update UI Views: Table, Calendar, Matrix, Analytics]
+        P --> Q[Copy Rows to Clipboard / Export formatted Excel]
+    end
 ```
 
 ---
