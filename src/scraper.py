@@ -1,5 +1,6 @@
 import re
 import time
+import logger
 
 # Static import hooks for PyInstaller package scanning
 try:
@@ -221,9 +222,15 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
     import os
     import urllib.request
     
+    def log_local(level, msg):
+        if log_fn:
+            try: log_fn(level, msg)
+            except Exception: pass
+        logger.log(level, msg)
+        
     mods = _try_import_selenium()
     if not mods:
-        if log_fn: log_fn("err", "Selenium not installed. Cannot search portal.")
+        log_local("err", "Selenium not installed. Cannot search portal.")
         return None
         
     webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
@@ -240,7 +247,7 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
         
     driver = None
     try:
-        if log_fn: log_fn("info", f"[{bid_no}] Searching GeM portal for PDF document...")
+        log_local("info", f"[{bid_no}] Searching GeM portal for PDF document...")
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
@@ -264,18 +271,18 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
         # Find document link containing showbidDocument
         links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
         if not links:
-            if log_fn: log_fn("err", f"[{bid_no}] PDF document link not found on GeM search results.")
+            log_local("err", f"[{bid_no}] PDF document link not found on GeM search results.")
             return None
             
         doc_url = links[0].get_attribute("href")
-        if log_fn: log_fn("info", f"[{bid_no}] Found document URL: {doc_url}")
+        log_local("info", f"[{bid_no}] Found document URL: {doc_url}")
         
         # Download PDF
         os.makedirs(download_dir, exist_ok=True)
         filename = f"GeM-Bidding-{bid_no.replace('/', '_')}.pdf"
         dest_path = os.path.join(download_dir, filename)
         
-        if log_fn: log_fn("info", f"[{bid_no}] Downloading PDF to {dest_path}...")
+        log_local("info", f"[{bid_no}] Downloading PDF to {dest_path}...")
         
         req = urllib.request.Request(
             doc_url,
@@ -287,10 +294,10 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
             with open(dest_path, 'wb') as out_file:
                 out_file.write(response.read())
                 
-        if log_fn: log_fn("ok", f"[{bid_no}] PDF successfully downloaded to {dest_path}")
+        log_local("ok", f"[{bid_no}] PDF successfully downloaded to {dest_path}")
         return dest_path
     except Exception as e:
-        if log_fn: log_fn("err", f"[{bid_no}] Failed to download PDF: {e}")
+        log_local("err", f"[{bid_no}] Failed to download PDF: {e}")
         return None
     finally:
         if driver:
@@ -304,9 +311,15 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
     import os
     import re
     
+    def log_local(level, msg):
+        if log_fn:
+            try: log_fn(level, msg)
+            except Exception: pass
+        logger.log(level, msg)
+        
     mods = _try_import_selenium()
     if not mods:
-        if log_fn: log_fn("err", "Selenium not installed.")
+        log_local("err", "Selenium not installed.")
         return 0
 
     webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
@@ -324,7 +337,7 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
     driver = None
     scraped_count = 0
     try:
-        if log_fn: log_fn("info", "Starting Chrome for portal scraping...")
+        log_local("info", "Starting Chrome for portal scraping...")
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
@@ -332,7 +345,7 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
         driver.get("https://bidplus.gem.gov.in/all-bids")
 
         if query:
-            if log_fn: log_fn("info", f"Searching portal for query: '{query}'")
+            log_local("info", f"Searching portal for query: '{query}'")
             search_input = WebDriverWait(driver, 15).until(
                 EC.presence_of_element_located((By.ID, "searchBid"))
             )
@@ -346,10 +359,10 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
         page_num = 1
         while True:
             if stop_check_fn and stop_check_fn():
-                if log_fn: log_fn("warn", "Scrape cancelled by user.")
+                log_local("warn", "Scrape cancelled by user.")
                 break
 
-            if log_fn: log_fn("info", f"Processing Page {page_num}...")
+            log_local("info", f"Processing Page {page_num}...")
 
             # Extract the summary to see how many total records
             total_records = 0
@@ -367,8 +380,8 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
             except Exception as e:
                 pass
 
-            if showing_text and log_fn:
-                log_fn("info", f"Portal Page Status: {showing_text}")
+            if showing_text:
+                log_local("info", f"Portal Page Status: {showing_text}")
 
             # Extract bid elements on current page
             bid_elements = driver.find_elements(By.XPATH, "//*[contains(text(), 'BID NO:') or contains(text(), 'Bid Number:')]")
@@ -392,7 +405,7 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
                 except:
                     pass
 
-            if log_fn: log_fn("info", f"Scraped {len(page_recs)} bid blocks from Page {page_num}.")
+            log_local("info", f"Scraped {len(page_recs)} bid blocks from Page {page_num}.")
 
             # Send back records to callback
             if record_callback and page_recs:
@@ -401,13 +414,13 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
 
             # Check if we should stop due to max pages
             if max_pages > 0 and page_num >= max_pages:
-                if log_fn: log_fn("ok", f"Reached maximum configured page limit ({max_pages}).")
+                log_local("ok", f"Reached maximum configured page limit ({max_pages}).")
                 break
 
             # Find next page links
             next_links = driver.find_elements(By.XPATH, "//a[text()='Next']")
             if not next_links:
-                if log_fn: log_fn("ok", "No 'Next' page link found. End of results.")
+                log_local("ok", "No 'Next' page link found. End of results.")
                 break
 
             # We click the first visible Next button
@@ -416,7 +429,7 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
                 time.sleep(0.5)
                 next_links[0].click()
             except Exception as click_err:
-                if log_fn: log_fn("err", f"Failed to click Next button: {click_err}")
+                log_local("err", f"Failed to click Next button: {click_err}")
                 break
 
             # Wait for page update using showing_text
@@ -439,20 +452,20 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
                     pass
             
             if stop_check_fn and stop_check_fn():
-                if log_fn: log_fn("warn", "Scrape cancelled by user.")
+                log_local("warn", "Scrape cancelled by user.")
                 break
 
             if not updated:
-                if log_fn: log_fn("warn", "Timeout waiting for next page load or no more records.")
+                log_local("warn", "Timeout waiting for next page load or no more records.")
                 # We stop if we didn't update and we have reached the end
                 break
             
             page_num += 1
 
-        if log_fn: log_fn("ok", f"Scrape job complete. Total bids processed: {scraped_count}")
+        log_local("ok", f"Scrape job complete. Total bids processed: {scraped_count}")
 
     except Exception as e:
-        if log_fn: log_fn("err", f"Scraper error: {e}")
+        log_local("err", f"Scraper error: {e}")
     finally:
         if driver:
             try: driver.quit()

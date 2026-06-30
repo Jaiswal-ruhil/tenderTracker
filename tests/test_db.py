@@ -30,7 +30,7 @@ class TestDb(unittest.TestCase):
         self.assertTrue(db.save_setting("excel_save_folder", "D:/exports"))
         self.assertEqual(db.load_settings().get("excel_save_folder"), "D:/exports")
         
-        test_path = "D:/tenders/custom_tenders_db.json"
+        test_path = "D:/tenders/custom_tenders_db.db"
         self.assertTrue(db.save_configured_db_path(test_path))
         self.assertEqual(db.get_configured_db_path(), test_path)
         

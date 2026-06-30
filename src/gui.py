@@ -44,6 +44,7 @@ class TenderApp(tk.Tk):
         self._build()
         self._load_from_db()
         self._fy_tick()
+        self._poll_log_queue()
 
     # ── styles ────────────────────────────────────────────────────────────────
     def _style(self):
@@ -398,9 +399,10 @@ class TenderApp(tk.Tk):
                          cursor="hand2")
 
     def _log(self, level, msg):
-        if threading.current_thread() is not threading.main_thread():
-            self.after(0, lambda: self._log(level, msg))
-            return
+        import logger
+        logger.log(level, msg)
+
+    def _write_to_log_widget(self, level, msg):
         self.log_txt.configure(state="normal")
         ts = datetime.now().strftime("%H:%M:%S")
         icons = {
@@ -414,6 +416,16 @@ class TenderApp(tk.Tk):
         self.log_txt.see("end")
         self.log_txt.configure(state="disabled")
         self.update_idletasks()
+
+    def _poll_log_queue(self):
+        import logger
+        while not logger.log_queue.empty():
+            try:
+                level, msg = logger.log_queue.get_nowait()
+                self._write_to_log_widget(level, msg)
+            except Exception:
+                break
+        self.after(50, self._poll_log_queue)
 
     def _show_toast(self, title, message, level="info"):
         if threading.current_thread() is not threading.main_thread():
@@ -494,13 +506,15 @@ class TenderApp(tk.Tk):
         if not cfg_path:
             self._log("info", "First run detected: Prompting for database storage location.")
             selected_dir = filedialog.askdirectory(
-                title="First Run: Select folder to store database (tenders_db.json)",
+                title="First Run: Select folder to store database (tenders_db.db)",
                 parent=self
             )
             if selected_dir:
-                db_path = os.path.join(os.path.abspath(selected_dir), "tenders_db.json")
+                db_path = os.path.join(os.path.abspath(selected_dir), "tenders_db.db")
                 db.save_configured_db_path(db_path)
                 db.init_db_path(db_path)
+                import logger
+                logger.setup_file_logger(db_path)
                 self._log("ok", f"Database configured at: {db_path}")
             else:
                 db_path = db.DEFAULT_DB_FILE
@@ -511,9 +525,13 @@ class TenderApp(tk.Tk):
                 )
                 db.save_configured_db_path(db_path)
                 db.init_db_path(db_path)
+                import logger
+                logger.setup_file_logger(db_path)
                 self._log("warn", f"Prompt cancelled. Defaulting database to: {db_path}")
         else:
             db.init_db_path()
+            import logger
+            logger.setup_file_logger(db.DB_FILE)
 
         # Load Excel save folder setting if configured
         settings = db.load_settings()
@@ -539,13 +557,13 @@ class TenderApp(tk.Tk):
         parent = parent_win or self
         old_path = db.DB_FILE
         new_dir = filedialog.askdirectory(
-            title="Select new folder to store tenders_db.json",
+            title="Select new folder to store tenders_db.db",
             parent=parent
         )
         if not new_dir:
             return
             
-        new_path = os.path.join(os.path.abspath(new_dir), "tenders_db.json")
+        new_path = os.path.join(os.path.abspath(new_dir), "tenders_db.db")
         if os.path.abspath(new_path) == os.path.abspath(old_path):
             return
             
@@ -575,6 +593,8 @@ class TenderApp(tk.Tk):
         
         db.save_configured_db_path(new_path)
         db.init_db_path(new_path)
+        import logger
+        logger.setup_file_logger(new_path)
         
         try:
             self._records = db.load_all_tenders()

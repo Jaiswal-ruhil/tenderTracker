@@ -2,6 +2,7 @@ import os
 import json
 import sqlite3
 import threading
+import logger
 
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".tendertracker_settings.json")
 DEFAULT_DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tenders_db.db")
@@ -50,17 +51,23 @@ def init_db_path(custom_path=None):
     else:
         DB_FILE = DEFAULT_DB_FILE
     
-    # Run migration check if default path is used
-    if DB_FILE == DEFAULT_DB_FILE:
-        legacy_json = DEFAULT_DB_FILE[:-2] + "json"
-        if os.path.exists(legacy_json) and not os.path.exists(DB_FILE):
-            migrate_json_to_sqlite(legacy_json, DB_FILE)
+    # Run migration check for either the custom or default DB path
+    resolved_db = get_resolved_db_path()
+    legacy_json = None
+    if DB_FILE.lower().endswith(".json"):
+        legacy_json = DB_FILE
+    elif DB_FILE.lower().endswith(".db"):
+        legacy_json = DB_FILE[:-3] + ".json"
+        
+    if legacy_json and os.path.exists(legacy_json) and not os.path.exists(resolved_db):
+        migrate_json_to_sqlite(legacy_json, resolved_db)
         
     return DB_FILE
 
 def migrate_json_to_sqlite(json_path, sqlite_path):
     """Migrates legacy JSON tenders database to SQLite."""
     try:
+        logger.log_info(f"Starting legacy database migration from {os.path.basename(json_path)} to SQLite...")
         with open(json_path, "r", encoding="utf-8") as f:
             records = json.load(f)
         if records:
@@ -75,8 +82,9 @@ def migrate_json_to_sqlite(json_path, sqlite_path):
         if os.path.exists(backup_path):
             os.remove(backup_path)
         os.rename(json_path, backup_path)
-    except Exception:
-        pass
+        logger.log_ok("Migration from legacy JSON database completed successfully.")
+    except Exception as e:
+        logger.log_err(f"Failed to migrate legacy JSON database: {e}")
 
 # SQLite Helpers
 def get_resolved_db_path():
@@ -93,7 +101,7 @@ def get_conn():
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tenders'")
         if not cursor.fetchone():
             cursor.execute("""
-                CREATE TABLE IF NOT EXISTS tenders (
+                CREATE TABLE tenders (
                     bid_no TEXT PRIMARY KEY,
                     bid_url TEXT,
                     ministry TEXT,
@@ -129,6 +137,15 @@ def get_conn():
                     tags TEXT
                 )
             """)
+            conn.commit()
+        else:
+            # Check for and dynamically add missing columns
+            cursor.execute("PRAGMA table_info(tenders)")
+            existing_cols = {row[1] for row in cursor.fetchall()}
+            for col in COLUMNS:
+                if col not in existing_cols:
+                    col_type = "INTEGER" if col in ("is_want", "is_want_derived", "is_saved", "is_fetched") else "TEXT"
+                    cursor.execute(f"ALTER TABLE tenders ADD COLUMN {col} {col_type}")
             conn.commit()
     except Exception as e:
         try: conn.close()
@@ -247,9 +264,11 @@ def save_all_tenders(records):
             try:
                 do_save()
                 return True
-            except Exception:
+            except Exception as ex:
+                logger.log_err(f"Database write error: {ex}")
                 return False
-        except Exception:
+        except Exception as e:
+            logger.log_err(f"Database write error: {e}")
             return False
 
 def unify_organization_names(record, cursor=None):
