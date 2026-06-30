@@ -44,12 +44,12 @@ def init_db_path(custom_path=None):
     global DB_FILE
     if custom_path:
         DB_FILE = custom_path
-        return DB_FILE
-    cfg_path = get_configured_db_path()
-    if cfg_path:
-        DB_FILE = cfg_path
     else:
-        DB_FILE = DEFAULT_DB_FILE
+        cfg_path = get_configured_db_path()
+        if cfg_path:
+            DB_FILE = cfg_path
+        else:
+            DB_FILE = DEFAULT_DB_FILE
     
     # Run migration check for either the custom or default DB path
     resolved_db = get_resolved_db_path()
@@ -61,6 +61,14 @@ def init_db_path(custom_path=None):
         
     if legacy_json and os.path.exists(legacy_json) and not os.path.exists(resolved_db):
         migrate_json_to_sqlite(legacy_json, resolved_db)
+        
+    # Force DB_FILE to be the resolved SQLite .db database path
+    DB_FILE = resolved_db
+    
+    # Update the settings file if it was still configured to point to the legacy .json
+    cfg_path = get_configured_db_path()
+    if cfg_path and cfg_path.lower().endswith(".json"):
+        save_configured_db_path(DB_FILE)
         
     return DB_FILE
 
