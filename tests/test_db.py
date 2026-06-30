@@ -169,8 +169,20 @@ class TestDb(unittest.TestCase):
             "organisation": "Kisan Sahakaree Cheeni Mill", # Spelling difference
             "location": "Sathiaon - Kissan Sahkari Chini Mill Ltd. Sathiaon" # Slight spelling difference in location
         })
+
+        # Insert a base tender with Mohiuddinpur location
+        db.upsert_tender({
+            "bid_no": "GEM/2026/B/BASE-3",
+            "location": "Mohiuddinpur - UP State Sugar Corporation Limited Mohiuddinpur"
+        })
+
+        # Insert another tender with structural variation in Mohiuddinpur location
+        db.upsert_tender({
+            "bid_no": "GEM/2026/B/BASE-4",
+            "location": "U.P.STATE SUGAR CORPORATION Ltd., unit Mohiuddinpur (Meerut) -250205"
+        })
         
-        # Load records and verify base-2 got unified to base-1 values
+        # Load records and verify base-2 and base-4 got unified
         tenders = db.load_all_tenders()
         tenders_by_bid = {t["bid_no"]: t for t in tenders}
         
@@ -179,6 +191,9 @@ class TestDb(unittest.TestCase):
         self.assertEqual(base2["dept"], "Uttar Pradesh Cooperative Sugar Factories Federation Limited")
         self.assertEqual(base2["organisation"], "Kisan Sahakari Chini Mill")
         self.assertEqual(base2["location"], "Sathiaon - Kisan Sahkari Chini Mills Ltd. Sathiaon")
+
+        base4 = tenders_by_bid["GEM/2026/B/BASE-4"]
+        self.assertEqual(base4["location"], "Mohiuddinpur - UP State Sugar Corporation Limited Mohiuddinpur")
 
 if __name__ == '__main__':
     unittest.main()

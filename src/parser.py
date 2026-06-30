@@ -1,4 +1,8 @@
 import re
+try:
+    from geocode import enrich_location as _enrich_location
+except ImportError:  # geocode not available (e.g. build environment)
+    def _enrich_location(loc): return loc
 
 def split_blocks(text):
     parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
@@ -170,77 +174,145 @@ def convert_pdf_text_to_markdown(pdf_text):
     contract_dur = re.search(r"Contract\s*(?:Duration|Period)(?:[^\n]*\n){0,3}?[^\n]*?([0-9][^\n]*)", pdf_text, re.I)
 
     # Consignee / Delivery Location
+    # Strategy: find the consignee TABLE header, then collect the first
+    # pincode,Name ... City entry, stopping at the quantity (digit-only line).
     location = ""
-    idx = pdf_text.lower().find("consignee")
-    if idx == -1:
-        idx = pdf_text.lower().find("reporting/officer")
-    if idx == -1:
-        idx = pdf_text.lower().find("/address")
-        
-    if idx != -1:
-        sub = pdf_text[idx:]
-        sub_lines = sub.splitlines()
-        start_idx = 0
-        for i, line in enumerate(sub_lines):
-            cleaned = line.strip()
-            if cleaned == "1":
-                start_idx = i + 1
+    # Prefer the specific consignee table header over a generic "consignee" mention.
+    # We MUST skip false positives like "consignee wise evaluation" which appear in
+    # the evaluation-method description, not in the actual consignee address section.
+    table_pos = -1
+    _lower = pdf_text.lower()
+
+    # Phase 1 – look for unambiguous section headers (highest confidence)
+    for marker in ["/consignees/reporting officer", "reporting/officer and quantity",
+                   "consignee\nreporting/officer", "consignee reporting/officer"]:
+        p = _lower.find(marker)
+        if p != -1:
+            table_pos = p
+            break
+
+    # Phase 2 – fallback: find "consignee" but skip occurrences that are clearly
+    # inside an evaluation-method phrase (e.g. "consignee wise evaluation") or
+    # a cross-reference clause (e.g. "details of item-consignee combination").
+    if table_pos == -1:
+        idx = 0
+        while True:
+            p = _lower.find("consignee", idx)
+            if p == -1:
                 break
-        else:
-            header_keywords = [
-                "consignee", "reporting", "officer", "address", "estimated", "quantity", 
-                "requirement", "परे षती", "Tरपो@टgग", "अिधकार", "पता", "संसाधन", "मात्रा", 
-                "अतिरिक्त", "आवश्यकता", "=.सं.", "s.n", "o."
-            ]
-            for i, line in enumerate(sub_lines):
-                cleaned = line.strip().lower()
+            # Grab up to 60 chars before this occurrence to check context
+            pre = _lower[max(0, p - 60):p]
+            post = _lower[p:p + 80]
+            # Skip if it looks like an evaluation-method phrase or a cross-ref
+            if re.search(r'(wise|method|evaluation|item|-)\s*$', pre) or \
+               re.search(r'^consignee\s+(wise|location\b|combination)', post):
+                idx = p + 1
+                continue
+            table_pos = p
+            break
+
+    # Phase 3 – other fallback markers
+    if table_pos == -1:
+        for marker in ["reporting/officer", "/address"]:
+            p = _lower.find(marker)
+            if p != -1:
+                table_pos = p
+                break
+
+    if table_pos != -1:
+        sub = pdf_text[table_pos:]
+        # Find first pincode,Name line (6 digits followed by comma and any char)
+        pin_m = re.search(r'\b(\d{6})\s*,\s*(\S[^\n]*)', sub)
+        if pin_m:
+            # Start location with the pincode and name on the same line
+            loc_parts = [pin_m.group(0).strip()]
+            after = sub[pin_m.end():]
+            for ln in after.splitlines():
+                cleaned = ln.strip()
                 if not cleaned:
                     continue
-                is_header = any(kw in cleaned for kw in header_keywords)
-                if not is_header:
-                    start_idx = i
+                # Stop at digit-only line (quantity), technical spec markers, or advisory
+                if cleaned.isdigit():
                     break
-                    
-        data_lines = []
-        for line in sub_lines[start_idx:]:
-            cleaned = line.strip()
-            if not cleaned:
-                continue
-            if cleaned in ("2", "3", "4", "5") or "buyer added" in cleaned.lower() or "disclaimer" in cleaned.lower():
-                break
-            data_lines.append(cleaned)
-            
-        qty_idx = -1
-        for i in range(len(data_lines) - 1, -1, -1):
-            if data_lines[i].isdigit():
-                qty_idx = i
-                break
-                
-        # Use whole word boundary check to avoid false matches on names like Narendra
-        if qty_idx == -1:
-            for idx_d, line in enumerate(data_lines):
-                cleaned_line = line.lower()
-                if re.search(r'\b(?:na|n/a|lumpsum|project|based|quantity)\b', cleaned_line):
-                    qty_idx = idx_d
+                if cleaned.lower().startswith("advisory") or "buyer added" in cleaned.lower():
                     break
-                    
-        if qty_idx != -1:
-            row_content_lines = data_lines[:qty_idx]
-            addr_start_idx = -1
-            for idx_c, line in enumerate(row_content_lines):
-                if re.search(r'\b\d{6}\b', line):
-                    addr_start_idx = idx_c
+                if cleaned.startswith("/") or "Technical Specifications" in cleaned:
                     break
-                cleaned_line = line.lower()
-                if "address" in cleaned_line or "pin code" in cleaned_line or "pincode" in cleaned_line:
-                    addr_start_idx = idx_c
+                if re.match(r'^\d{6}\s*,', cleaned):
+                    break  # Next consignee row starts
+                loc_parts.append(cleaned)
+            location = " ".join(loc_parts).strip()
+        else:
+            # Fallback for PDFs without a pincode: find address content by skipping
+            # header lines (including Hindi/bilingual column headers and asterisk lines).
+            sub_lines = sub.splitlines()
+            skip_kws = {"consignee", "reporting", "officer", "s.n", "delivery", "days",
+                        "quantity", "estimated", "requirement", "address", "पता",
+                        "to be set", "product", "equipment", "additional", "number",
+                        "service", "period", "months", "contract"}
+            addr_lines = []
+            addr_started = False
+            for ln in sub_lines:
+                cleaned = ln.strip()
+                if not cleaned:
+                    continue
+                cl = cleaned.lower()
+                # Hard stops
+                if "buyer added" in cl or "disclaimer" in cl or cl.startswith("advisory"):
                     break
-            if addr_start_idx == -1:
-                if len(row_content_lines) > 2:
-                    addr_start_idx = 2
+                # Skip lines that are mostly non-ASCII (Hindi/Devanagari column headers)
+                ascii_ratio = sum(1 for c in cleaned if ord(c) < 128) / max(len(cleaned), 1)
+                if ascii_ratio < 0.5:
+                    continue
+                # Skip lines that are all asterisks or similar punctuation (redacted fields)
+                if re.match(r'^[\*\-\.\s]+$', cleaned):
+                    continue
+                # Lines like "***AGRA" or "***AGRA CITY" — strip leading punctuation
+                stripped = re.sub(r'^[\*\-\.]+', '', cleaned).strip()
+                if stripped:
+                    cleaned = stripped
+                cl = cleaned.lower()
+                if not addr_started:
+                    # Skip header-like lines and digit-only row numbers
+                    if any(kw in cl for kw in skip_kws) or cleaned.startswith("/"):
+                        continue
+                    if cleaned.isdigit():
+                        continue
+                    # Skip pure column-header lines (all tokens start with uppercase, <= 3 words)
+                    # UNLESS the line came from stripping asterisks (likely a real address token)
+                    was_asterisk_prefixed = re.match(r'^[\*\-\.]+', ln.strip())
+                    words = cleaned.split()
+                    if not was_asterisk_prefixed and \
+                       all(w and w[0].isupper() for w in words) and len(words) <= 3:
+                        continue
+                    # Any other substantial content starts the address
+                    addr_started = True
+                    addr_lines.append(cleaned)
                 else:
-                    addr_start_idx = min(1, len(row_content_lines))
-            location = " ".join(row_content_lines[addr_start_idx:]).strip()
+                    if cleaned.isdigit():
+                        break
+                    addr_lines.append(cleaned)
+            location = " ".join(addr_lines).strip()
+
+    # Last resort: for BOQ-type PDFs where the consignee section lists city names
+    # in a schedule table like "Schedule 1 ( LUCKNOW )" and no address block is
+    # found via the methods above, extract the city from that pattern.
+    # Also override if the fallback produced obviously wrong content (schedule item descriptions).
+    _loc_lower = location.lower()
+    location_looks_like_garbage = (
+        not location or
+        'schedule' in _loc_lower or
+        'item/category' in _loc_lower or
+        re.search(r'\d+\s*mm|\d+\s*ka|slab\s+\d', _loc_lower) is not None
+    )
+    if location_looks_like_garbage:
+        sched_m = re.search(r'Schedule\s+\d+\s*\([\s]*([A-Z][A-Z ]+[A-Z])[\s]*\)', pdf_text)
+        if sched_m:
+            location = sched_m.group(1).strip()
+        elif not location:
+            pass  # leave empty
+
+
 
     lines = []
     if bid_no:
@@ -289,6 +361,7 @@ def convert_pdf_text_to_markdown(pdf_text):
     if contract_dur:
         lines.append(f"Contract Duration: {contract_dur.group(1).strip()}")
     if location:
+        location = _enrich_location(location)
         lines.append(f"Location: {location}")
         
     return "\n".join(lines)

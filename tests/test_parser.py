@@ -146,7 +146,9 @@ class TestParser(unittest.TestCase):
         self.assertEqual(r["min_turnover"], "1 Lakh (s)")
         self.assertEqual(r["exp_years"], "2 Year (s)")
         self.assertEqual(r["contract_dur"], "1 Year(s) 3 Day(s)")
-        self.assertEqual(r["location"], "Address Block Details")
+        # No location expected: this test PDF has no pincode or real address
+        # ("Address Block Details" is a column header, correctly skipped now)
+        self.assertNotIn("location", r)
 
     def test_convert_pdf_text_to_markdown_with_pincode_address(self):
         pdf_text = """
@@ -187,7 +189,12 @@ class TestParser(unittest.TestCase):
         r = parser.parse_one(md)
         self.assertEqual(r["bid_no"], "GEM/2026/B/9520877")
         self.assertEqual(r["quantity"], "700")
-        self.assertEqual(r["location"], "276404,The Kisan Sahakari chini mill Sathiaon, Azamgarh (U.P) Pin Code -276406 GST NO-09AAAAK0204B1ZI Contact no -6389025002,9910729844")
+        # Location is enriched with district/state from PostalPincode API
+        # (pincode 276404 → Azamgarh, Uttar Pradesh; "Azamgarh" already in string so only state appended)
+        loc = r["location"]
+        self.assertTrue(loc.startswith("276404,The Kisan Sahakari chini mill Sathiaon, Azamgarh"))
+        self.assertIn("276404", loc)
+        self.assertIn("Azamgarh", loc)
 
 if __name__ == '__main__':
     unittest.main()

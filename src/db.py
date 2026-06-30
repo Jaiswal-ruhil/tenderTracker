@@ -279,13 +279,59 @@ def save_all_tenders(records):
             logger.log_err(f"Database write error: {e}")
             return False
 
+def get_distinctive_keywords(s):
+    import re
+    if not s:
+        return set()
+    words = re.findall(r'\b[a-z]{4,}\b', s.lower())
+    NOISE = {
+        'ltd', 'limited', 'cooperative', 'sahkari', 'chini', 'mill', 'mills',
+        'factory', 'corporation', 'state', 'unit', 'district', 'distt',
+        'ganna', 'vikas', 'nigam', 'sahakari', 'sahakaree', 'cheeni', 'kissan',
+        'kisan', 'operative', 'sugar', 'factories', 'federation', 'private',
+        'pvt', 'gases', 'solutions', 'flux', 'weld', 'welding', 'alloys',
+        'systems', 'technologies', 'india', 'officer', 'consignee', 'reporting',
+        'address', 'delivery'
+    }
+    return {w for w in words if w not in NOISE}
+
+def unify_value(val, existing_list):
+    import difflib
+    if not val or not str(val).strip():
+        return val
+        
+    val_clean = str(val).strip()
+    
+    # 1. Direct close matches (high threshold)
+    matches = difflib.get_close_matches(val_clean, existing_list, n=1, cutoff=0.75)
+    if matches:
+        return matches[0]
+        
+    # 2. Distinctive keyword overlap matching
+    kw_val = get_distinctive_keywords(val_clean)
+    if not kw_val:
+        return val_clean
+        
+    best_match = None
+    best_ratio = 0.0
+    for exist_val in existing_list:
+        kw_exist = get_distinctive_keywords(exist_val)
+        if kw_val.intersection(kw_exist):
+            ratio = difflib.SequenceMatcher(None, val_clean.lower(), exist_val.lower()).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_match = exist_val
+                
+    if best_match and best_ratio >= 0.4:
+        return best_match
+        
+    return val_clean
+
 def unify_organization_names(record, cursor=None):
     """
     Fuzzy standardizes organization, department, and ministry fields of the record
     against already existing entries in the database.
     """
-    import difflib
-    
     close_conn = False
     if cursor is None:
         try:
@@ -301,36 +347,28 @@ def unify_organization_names(record, cursor=None):
         if val_min and str(val_min).strip():
             cursor.execute("SELECT DISTINCT ministry FROM tenders WHERE ministry IS NOT NULL AND ministry != ''")
             existing_mins = [r[0] for r in cursor.fetchall() if r[0] != val_min]
-            matches = difflib.get_close_matches(val_min, existing_mins, n=1, cutoff=0.75)
-            if matches:
-                record["ministry"] = matches[0]
+            record["ministry"] = unify_value(val_min, existing_mins)
                 
         # Unify Dept
         val_dept = record.get("dept")
         if val_dept and str(val_dept).strip():
             cursor.execute("SELECT DISTINCT dept FROM tenders WHERE dept IS NOT NULL AND dept != ''")
             existing_depts = [r[0] for r in cursor.fetchall() if r[0] != val_dept]
-            matches = difflib.get_close_matches(val_dept, existing_depts, n=1, cutoff=0.75)
-            if matches:
-                record["dept"] = matches[0]
+            record["dept"] = unify_value(val_dept, existing_depts)
 
         # Unify Organisation
         val_org = record.get("organisation")
         if val_org and str(val_org).strip():
             cursor.execute("SELECT DISTINCT organisation FROM tenders WHERE organisation IS NOT NULL AND organisation != ''")
             existing_orgs = [r[0] for r in cursor.fetchall() if r[0] != val_org]
-            matches = difflib.get_close_matches(val_org, existing_orgs, n=1, cutoff=0.75)
-            if matches:
-                record["organisation"] = matches[0]
+            record["organisation"] = unify_value(val_org, existing_orgs)
 
         # Unify Location
         val_loc = record.get("location")
         if val_loc and str(val_loc).strip():
             cursor.execute("SELECT DISTINCT location FROM tenders WHERE location IS NOT NULL AND location != ''")
             existing_locs = [r[0] for r in cursor.fetchall() if r[0] != val_loc]
-            matches = difflib.get_close_matches(val_loc, existing_locs, n=1, cutoff=0.75)
-            if matches:
-                record["location"] = matches[0]
+            record["location"] = unify_value(val_loc, existing_locs)
     except Exception:
         pass
     finally:
