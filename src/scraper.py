@@ -66,9 +66,48 @@ def _find_text(driver, label):
 
 def scrape_bid_page(url, log_fn=None, headless=False):
     """
-    Open the GeM bid document page with Selenium and extract all available fields.
-    Returns a dict of extra fields to merge into the record.
+    Fetch details for a bid. If it is a PDF document (e.g. showbidDocument),
+    downloads and parses it programmatically in-memory for speed and reliability.
+    Otherwise, falls back to Selenium scraping.
     """
+    import urllib.request
+    import io
+    import pypdf
+    from parser import convert_pdf_text_to_markdown, parse_one
+
+    # If it is a showbidDocument PDF URL, do in-memory PDF parsing
+    if "showbiddocument" in url.lower():
+        try:
+            if log_fn: log_fn("info", f"Downloading PDF in-memory: {url}")
+            req = urllib.request.Request(
+                url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            )
+            with urllib.request.urlopen(req, timeout=15) as response:
+                pdf_bytes = response.read()
+                
+            reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
+            pdf_text = ""
+            for page in reader.pages:
+                t = page.extract_text()
+                if t:
+                    pdf_text += t + "\n"
+                    
+            md_text = convert_pdf_text_to_markdown(pdf_text)
+            extra = parse_one(md_text)
+            
+            # Remove empty values
+            extra = {k: v for k, v in extra.items() if v}
+            
+            if log_fn:
+                log_fn("ok", f"Parsed {len(extra)} fields from PDF: {', '.join(extra.keys())}")
+            return extra
+        except Exception as e:
+            if log_fn: log_fn("err", f"Failed to parse PDF details: {e}")
+            if log_fn: log_fn("info", "Falling back to Selenium page scraping...")
+
     mods = _try_import_selenium()
     if not mods:
         if log_fn: log_fn("err","Selenium not installed. Run: pip install selenium webdriver-manager")
@@ -77,7 +116,6 @@ def scrape_bid_page(url, log_fn=None, headless=False):
     webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
 
     opts = Options()
-    # Run visible so GeM doesn't block headless browsers
     opts.add_argument("--disable-blink-features=AutomationControlled")
     opts.add_experimental_option("excludeSwitches", ["enable-automation"])
     opts.add_experimental_option("useAutomationExtension", False)
@@ -90,7 +128,7 @@ def scrape_bid_page(url, log_fn=None, headless=False):
     extra = {}
     driver = None
     try:
-        if log_fn: log_fn("info", f"  Opening Chrome → {url}")
+        if log_fn: log_fn("info", f"Opening Chrome (Selenium fallback) → {url}")
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
@@ -200,12 +238,12 @@ def scrape_bid_page(url, log_fn=None, headless=False):
         extra = {k:v for k,v in extra.items() if v}
 
         if log_fn:
-            log_fn("ok", f"  Scraped {len(extra)} extra fields: {', '.join(extra.keys())}")
+            log_fn("ok", f"Scraped {len(extra)} extra fields from HTML: {', '.join(extra.keys())}")
 
     except Exception as e:
         if log_fn:
             import traceback
-            log_fn("err", f"  Selenium error: {e}\n{traceback.format_exc()}")
+            log_fn("err", f"Selenium fallback error: {e}\n{traceback.format_exc()}")
     finally:
         if driver:
             try: driver.quit()

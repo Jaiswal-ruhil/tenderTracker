@@ -157,7 +157,8 @@ class TestDb(unittest.TestCase):
             "bid_no": "GEM/2026/B/BASE-1",
             "ministry": "Ministry of Jal Shakti",
             "dept": "Uttar Pradesh Cooperative Sugar Factories Federation Limited",
-            "organisation": "Kisan Sahakari Chini Mill"
+            "organisation": "Kisan Sahakari Chini Mill",
+            "location": "Sathiaon - Kisan Sahkari Chini Mills Ltd. Sathiaon"
         })
         
         # Insert another tender with slight typos / variations
@@ -165,7 +166,8 @@ class TestDb(unittest.TestCase):
             "bid_no": "GEM/2026/B/BASE-2",
             "ministry": "Ministry of Jall Shaktii", # 1 typo
             "dept": "Uttar Pradesh Coop Sugar Factories Federation Ltd", # Abbreviation
-            "organisation": "Kisan Sahakaree Cheeni Mill" # Spelling difference
+            "organisation": "Kisan Sahakaree Cheeni Mill", # Spelling difference
+            "location": "Sathiaon - Kissan Sahkari Chini Mill Ltd. Sathiaon" # Slight spelling difference in location
         })
         
         # Load records and verify base-2 got unified to base-1 values
@@ -176,6 +178,7 @@ class TestDb(unittest.TestCase):
         self.assertEqual(base2["ministry"], "Ministry of Jal Shakti")
         self.assertEqual(base2["dept"], "Uttar Pradesh Cooperative Sugar Factories Federation Limited")
         self.assertEqual(base2["organisation"], "Kisan Sahakari Chini Mill")
+        self.assertEqual(base2["location"], "Sathiaon - Kisan Sahkari Chini Mills Ltd. Sathiaon")
 
 if __name__ == '__main__':
     unittest.main()

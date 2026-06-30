@@ -322,6 +322,15 @@ def unify_organization_names(record, cursor=None):
             matches = difflib.get_close_matches(val_org, existing_orgs, n=1, cutoff=0.75)
             if matches:
                 record["organisation"] = matches[0]
+
+        # Unify Location
+        val_loc = record.get("location")
+        if val_loc and str(val_loc).strip():
+            cursor.execute("SELECT DISTINCT location FROM tenders WHERE location IS NOT NULL AND location != ''")
+            existing_locs = [r[0] for r in cursor.fetchall() if r[0] != val_loc]
+            matches = difflib.get_close_matches(val_loc, existing_locs, n=1, cutoff=0.75)
+            if matches:
+                record["location"] = matches[0]
     except Exception:
         pass
     finally:
