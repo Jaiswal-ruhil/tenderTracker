@@ -299,7 +299,7 @@ class TenderApp(tk.Tk):
 
         # treeview frame (placed in the left pane of table_pane)
         tv_fr = tk.Frame(table_pane, bg=BG)
-        table_pane.add(tv_fr, minsize=400, weight=3)
+        table_pane.add(tv_fr, minsize=400, stretch="always")
 
         cols = [c[0] for c in TV_COLS]
         self.tv = ttk.Treeview(tv_fr, columns=cols, show="headings",
@@ -318,7 +318,7 @@ class TenderApp(tk.Tk):
 
         # Detail Side-Panel frame (placed in the right pane of table_pane)
         self.detail_panel = tk.Frame(table_pane, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=12, pady=10)
-        table_pane.add(self.detail_panel, minsize=320, weight=1)
+        table_pane.add(self.detail_panel, minsize=320, stretch="always")
 
         # Detail Title
         detail_title = tk.Label(self.detail_panel, text="TENDER DETAILS", font=FT, bg=PANEL, fg=TEXT)
