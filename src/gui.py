@@ -1222,10 +1222,29 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         if not bbox: return
         x,y,w,h = bbox
         var = tk.StringVar(value=self.tv.set(iid, col_id))
-        e = tk.Entry(self.tv, textvariable=var, bg=SEL_BG, fg=TEXT,
-                     insertbackground=TEXT, relief="flat", font=FL,
-                     highlightthickness=0)
-        e.place(x=x,y=y,width=w,height=h); e.focus_set(); e.select_range(0,"end")
+        if col_id == "category":
+            import db
+            settings = db.load_settings()
+            mappings = settings.get("category_mappings")
+            if not mappings:
+                try:
+                    from config import CATEGORY_MAPPING
+                    mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+                except Exception:
+                    mappings = []
+            category_options = sorted(list(set(m["name"] for m in mappings if m.get("name"))))
+            
+            e = ttk.Combobox(self.tv, textvariable=var, values=category_options, font=FL)
+            e.place(x=x, y=y, width=w, height=h)
+            e.focus_set()
+            e.select_range(0, "end")
+        else:
+            e = tk.Entry(self.tv, textvariable=var, bg=SEL_BG, fg=TEXT,
+                         insertbackground=TEXT, relief="flat", font=FL,
+                         highlightthickness=0)
+            e.place(x=x, y=y, width=w, height=h)
+            e.focus_set()
+            e.select_range(0, "end")
         self._editing = (iid, col_id, e)
         def commit(ev=None):
             nv = var.get(); self.tv.set(iid,col_id,nv)
@@ -1259,6 +1278,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 pass
         e.bind("<Return>",commit); e.bind("<Tab>",commit)
         e.bind("<Escape>",lambda ev: e.destroy())
+        if col_id == "category":
+            e.bind("<<ComboboxSelected>>", commit)
 
     def _cancel_edit(self, event):
         if self._editing:
