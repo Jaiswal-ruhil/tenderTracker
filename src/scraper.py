@@ -257,14 +257,17 @@ def scrape_bid_page(url, log_fn=None, headless=False):
 
     return extra
 
-def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
+def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True):
     """
-    Open the GeM portal, search for the bid number, locate the PDF document link, 
-    and download it to the specified download directory.
-    Returns the absolute path to the downloaded PDF file or None.
+    Download a GeM PDF document to the specified directory.
+    Supports either a bid number (e.g. GEM/2026/B/12345) or a direct showbidDocument URL.
+    Uses Chrome's native download features in Selenium (preserving cookies/session)
+    to prevent broken 0kb downloads. Falls back to urllib if needed.
     """
     import os
+    import time
     import urllib.request
+    import ssl
     
     def log_local(level, msg):
         if log_fn:
@@ -272,9 +275,28 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
             except Exception: pass
         logger.log(level, msg)
         
+    is_url = str(bid_no_or_url).lower().startswith("http")
+    if is_url:
+        doc_url = bid_no_or_url
+        # Extract doc_id or use a safe name
+        doc_id = bid_no_or_url.rstrip('/').split('/')[-1]
+        filename = f"GeM-Bidding-{doc_id}.pdf"
+        log_id = doc_id
+    else:
+        filename = f"GeM-Bidding-{bid_no_or_url.replace('/', '_')}.pdf"
+        log_id = bid_no_or_url
+        
+    os.makedirs(download_dir, exist_ok=True)
+    dest_path = os.path.abspath(os.path.join(download_dir, filename))
+    
+    # Delete pre-existing file if any to prevent conflict/false positives
+    if os.path.exists(dest_path):
+        try: os.remove(dest_path)
+        except Exception: pass
+        
     mods = _try_import_selenium()
     if not mods:
-        log_local("err", "Selenium not installed. Cannot search portal.")
+        log_local("err", "Selenium not installed. Cannot use browser download.")
         return None
         
     webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
@@ -289,65 +311,112 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
     if headless:
         opts.add_argument("--headless=new")
         
+    # Configure Chrome to automatically download PDF files instead of opening them
+    prefs = {
+        "download.default_directory": os.path.abspath(download_dir),
+        "download.prompt_for_download": False,
+        "download.directory_upgrade": True,
+        "plugins.always_open_pdf_externally": True
+    }
+    opts.add_experimental_option("prefs", prefs)
+    
     driver = None
     try:
-        log_local("info", f"[{bid_no}] Searching GeM portal for PDF document...")
+        # Record files in directory before starting download
+        existing_files = set(os.listdir(download_dir)) if os.path.exists(download_dir) else set()
+        
+        log_local("info", f"[{log_id}] Initializing Chrome session for download...")
         try:
             service = Service(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=opts)
         except Exception as manager_err:
-            log_local("warn", f"[{bid_no}] webdriver-manager failed to install, trying Selenium built-in fallback: {manager_err}")
+            log_local("warn", f"[{log_id}] webdriver-manager failed, trying Selenium built-in fallback: {manager_err}")
             driver = webdriver.Chrome(options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         
-        driver.get("https://bidplus.gem.gov.in/all-bids")
-        
-        # Wait for search input
-        search_input = WebDriverWait(driver, 15).until(
-            EC.presence_of_element_located((By.ID, "searchBid"))
-        )
-        search_input.clear()
-        search_input.send_keys(bid_no)
-        
-        # Click search button
-        search_btn = driver.find_element(By.ID, "searchBidRA")
-        search_btn.click()
-        
-        # Wait for search results
-        time.sleep(5)
-        
-        # Find document link containing showbidDocument
-        links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
-        if not links:
-            log_local("err", f"[{bid_no}] PDF document link not found on GeM search results.")
-            return None
+        # Configure CDP to allow downloads in headless mode
+        try:
+            driver.execute_cdp_cmd('Page.setDownloadBehavior', {
+                'behavior': 'allow',
+                'downloadPath': os.path.abspath(download_dir)
+            })
+        except Exception as cdp_err:
+            log_local("warn", f"[{log_id}] Failed to set download behavior via CDP: {cdp_err}")
             
-        doc_url = links[0].get_attribute("href")
-        log_local("info", f"[{bid_no}] Found document URL: {doc_url}")
+        if is_url:
+            # Direct download URL
+            doc_url = bid_no_or_url
+        else:
+            # Need to search portal for doc_url
+            driver.get("https://bidplus.gem.gov.in/all-bids")
+            search_input = WebDriverWait(driver, 15).until(
+                EC.presence_of_element_located((By.ID, "searchBid"))
+            )
+            search_input.clear()
+            search_input.send_keys(bid_no_or_url)
+            
+            search_btn = driver.find_element(By.ID, "searchBidRA")
+            search_btn.click()
+            time.sleep(5)
+            
+            links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
+            if not links:
+                log_local("err", f"[{log_id}] PDF document link not found on portal search results.")
+                return None
+            doc_url = links[0].get_attribute("href")
+            
+        log_local("info", f"[{log_id}] Triggering PDF download via Chrome: {doc_url}")
+        driver.get(doc_url)
         
-        # Download PDF
-        os.makedirs(download_dir, exist_ok=True)
-        filename = f"GeM-Bidding-{bid_no.replace('/', '_')}.pdf"
-        dest_path = os.path.join(download_dir, filename)
+        # Poll directory for new PDF file completion
+        downloaded_file = None
+        timeout = 45
+        start_time = time.time()
         
-        log_local("info", f"[{bid_no}] Downloading PDF to {dest_path}...")
-        
-        req = urllib.request.Request(
-            doc_url,
-            headers={
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        )
-        import ssl
-        context = ssl._create_unverified_context()
-        with urllib.request.urlopen(req, context=context) as response:
-            with open(dest_path, 'wb') as out_file:
-                out_file.write(response.read())
-                
-        log_local("ok", f"[{bid_no}] PDF successfully downloaded to {dest_path}")
-        return dest_path
+        while time.time() - start_time < timeout:
+            if not os.path.exists(download_dir):
+                time.sleep(1)
+                continue
+            current_files = set(os.listdir(download_dir))
+            new_files = current_files - existing_files
+            
+            pdf_files = [f for f in new_files if f.lower().endswith(".pdf")]
+            cr_files = [f for f in new_files if f.lower().endswith(".crdownload")]
+            
+            if pdf_files and not cr_files:
+                possible_path = os.path.join(download_dir, pdf_files[0])
+                if os.path.exists(possible_path) and os.path.getsize(possible_path) > 0:
+                    downloaded_file = possible_path
+                    break
+            time.sleep(1)
+            
+        if downloaded_file:
+            if os.path.abspath(downloaded_file) != os.path.abspath(dest_path):
+                if os.path.exists(dest_path):
+                    try: os.remove(dest_path)
+                    except Exception: pass
+                os.rename(downloaded_file, dest_path)
+            log_local("ok", f"[{log_id}] PDF successfully downloaded via Chrome: {dest_path}")
+            return dest_path
+        else:
+            log_local("warn", f"[{log_id}] Chrome download timed out or failed. Trying urllib fallback...")
+            # Fallback to urllib
+            req = urllib.request.Request(
+                doc_url,
+                headers={
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                }
+            )
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, context=context) as response:
+                with open(dest_path, 'wb') as out_file:
+                    out_file.write(response.read())
+            if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+                log_local("ok", f"[{log_id}] PDF successfully downloaded via urllib fallback: {dest_path}")
+                return dest_path
+            return None
     except Exception as e:
-        log_local("err", f"[{bid_no}] Failed to download PDF: {e}")
+        log_local("err", f"[{log_id}] Failed to download PDF: {e}")
         return None
     finally:
         if driver:

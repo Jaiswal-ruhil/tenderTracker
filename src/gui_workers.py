@@ -126,20 +126,8 @@ class WorkersMixin:
                             dest_path = None
                             
                             if bid_url and "showbidDocument" in bid_url:
-                                doc_id = bid_url.rstrip('/').split('/')[-1]
-                                filename = f"GeM-Bidding-{doc_id}.pdf"
-                                dest_path = os.path.abspath(os.path.join(dl_dir, filename))
-                                
-                                import urllib.request
-                                req = urllib.request.Request(
-                                    bid_url,
-                                    headers={
-                                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                                    }
-                                )
-                                with urllib.request.urlopen(req) as response:
-                                    with open(dest_path, 'wb') as out_file:
-                                        out_file.write(response.read())
+                                headless_opt = db.load_settings().get("selenium_headless", False)
+                                dest_path = download_tender_pdf(bid_url, dl_dir, log_fn=self._log, headless=headless_opt)
                             elif bid_no:
                                 headless_opt = db.load_settings().get("selenium_headless", False)
                                 dest_path = download_tender_pdf(bid_no, dl_dir, log_fn=self._log, headless=headless_opt)
