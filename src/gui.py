@@ -23,7 +23,7 @@ from gui_calendar import CalendarTabMixin
 from gui_matrix import MatrixTabMixin
 from gui_analytics import AnalyticsTabMixin
 from gui_dialogs import DialogsMixin
-from gui_table_tab import TableTabMixin
+from gui_table_tab import TableTabMixin, DatePickerPopup
 from gui_workers import WorkersMixin
 
 class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin):
@@ -161,14 +161,26 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                                              insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
                                              highlightthickness=1, highlightbackground="#30363D")
         self.scrape_date_from_ent.pack(side="left")
-        
+        self.btn_scrape_from_cal = tk.Button(date_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
+                                             font=("Segoe UI", 8), padx=3, pady=0, cursor="hand2",
+                                             activebackground=ACCENT)
+        self.btn_scrape_from_cal.pack(side="left", padx=(2, 4))
+        self.btn_scrape_from_cal.configure(
+            command=lambda: self._show_datepicker(self.btn_scrape_from_cal, self.scrape_date_from_var))
+
         # To Label
         tk.Label(date_fr, text="To:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(4, 2))
         self.scrape_date_to_var = tk.StringVar()
         self.scrape_date_to_ent = tk.Entry(date_fr, textvariable=self.scrape_date_to_var, bg=CARD, fg=TEXT,
                                            insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
                                            highlightthickness=1, highlightbackground="#30363D")
-        self.scrape_date_to_ent.pack(side="left", padx=(0, 4))
+        self.scrape_date_to_ent.pack(side="left")
+        self.btn_scrape_to_cal = tk.Button(date_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
+                                           font=("Segoe UI", 8), padx=3, pady=0, cursor="hand2",
+                                           activebackground=ACCENT)
+        self.btn_scrape_to_cal.pack(side="left", padx=(2, 4))
+        self.btn_scrape_to_cal.configure(
+            command=lambda: self._show_datepicker(self.btn_scrape_to_cal, self.scrape_date_to_var))
 
         # Options row (e.g. limit pages or only keep matching filter)
         opt_row = tk.Frame(scrape_fr, bg=PANEL)
