@@ -132,6 +132,128 @@ class DatePickerPopup(tk.Toplevel):
         if not (w_x <= x <= w_x + w_w and w_y <= y <= w_y + w_h):
             self.destroy()
 
+
+class CellTooltip:
+    """
+    Hover tooltip for ttk.Treeview cells.
+    Since Treeview doesn't support native multi-line rendering, this tooltip
+    shows the full wrapped cell content when the user hovers over a cell.
+    Only appears when the cell text is long enough to be truncated.
+    """
+    MIN_CHARS = 20          # don't show tooltip for very short values
+    WRAP_CHARS = 80         # wrap at this many characters per line
+    DELAY_MS  = 500         # ms before tooltip appears
+    MAX_LINES = 12          # cap how many lines to show
+
+    def __init__(self, treeview, tv_ids):
+        self.tv     = treeview
+        self.tv_ids = tv_ids
+        self._tip   = None
+        self._job   = None
+
+        treeview.bind("<Motion>",   self._on_motion,  add="+")
+        treeview.bind("<Leave>",    self._hide,        add="+")
+        treeview.bind("<Button-1>", self._hide,        add="+")
+        treeview.bind("<Button-3>", self._hide,        add="+")
+
+    def _on_motion(self, event):
+        col = self.tv.identify_column(event.x)
+        iid = self.tv.identify_row(event.y)
+        if not col or not iid:
+            self._hide()
+            return
+
+        col_idx = int(col[1:]) - 1
+        if col_idx < 0 or col_idx >= len(self.tv_ids):
+            self._hide()
+            return
+
+        col_id  = self.tv_ids[col_idx]
+        cell_val = self.tv.set(iid, col_id)
+        if not cell_val or len(str(cell_val)) < self.MIN_CHARS:
+            self._hide()
+            return
+
+        # Cancel pending tooltip if the cell changed
+        if self._job:
+            self.tv.after_cancel(self._job)
+        self._hide_tip()
+
+        x_root = event.x_root + 12
+        y_root = event.y_root + 16
+        self._job = self.tv.after(
+            self.DELAY_MS,
+            lambda: self._show(cell_val, col_id, x_root, y_root)
+        )
+
+    def _show(self, text, col_id, x, y):
+        import textwrap
+        self._job = None
+        self._hide_tip()
+
+        # Word-wrap the text
+        wrapped = textwrap.fill(str(text), width=self.WRAP_CHARS)
+        lines = wrapped.splitlines()
+        if len(lines) > self.MAX_LINES:
+            lines = lines[:self.MAX_LINES]
+            lines.append("…")
+        display = "\n".join(lines)
+
+        self._tip = tk.Toplevel(self.tv)
+        self._tip.overrideredirect(True)
+        self._tip.attributes("-topmost", True)
+        self._tip.configure(bg="#2D333B", highlightthickness=1,
+                            highlightbackground="#444C56")
+
+        # Column label header
+        lbl_header = tk.Label(self._tip,
+                              text=col_id.replace("_", " ").title(),
+                              bg="#2D333B", fg="#8B949E",
+                              font=("Segoe UI", 8, "bold"),
+                              anchor="w", padx=8, pady=2)
+        lbl_header.pack(fill="x")
+
+        sep = tk.Frame(self._tip, bg="#444C56", height=1)
+        sep.pack(fill="x")
+
+        lbl = tk.Label(self._tip,
+                       text=display,
+                       justify="left",
+                       anchor="nw",
+                       bg="#1C2128", fg="#E6EDF3",
+                       font=("Segoe UI", 9),
+                       wraplength=560,
+                       padx=10, pady=6)
+        lbl.pack(fill="both", expand=True)
+
+        # Clamp to screen
+        self._tip.update_idletasks()
+        sw = self._tip.winfo_screenwidth()
+        sh = self._tip.winfo_screenheight()
+        tw = self._tip.winfo_width()
+        th = self._tip.winfo_height()
+        if x + tw > sw:
+            x = sw - tw - 8
+        if y + th > sh:
+            y = y - th - 20
+
+        self._tip.geometry(f"+{x}+{y}")
+
+    def _hide_tip(self):
+        if self._tip:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+    def _hide(self, event=None):
+        if self._job:
+            self.tv.after_cancel(self._job)
+            self._job = None
+        self._hide_tip()
+
+
 class TableTabMixin:
     def _build_table_tab(self):
         # Table Tab Header (formerly right header)
@@ -295,6 +417,9 @@ class TableTabMixin:
         self.tv.bind("<Double-1>", self._on_dbl)
         self.tv.bind("<Button-1>", self._cancel_edit)
         self.tv.bind("<<TreeviewSelect>>", self._on_treeview_select)
+
+        # Attach hover tooltip for full cell text (text-wrap workaround for Treeview)
+        self._cell_tooltip = CellTooltip(self.tv, TV_IDS)
 
         # Context Menu
         self.ctx_menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT, 

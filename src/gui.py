@@ -60,7 +60,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         s = ttk.Style(self); s.theme_use("clam")
         s.configure(".", background=BG, foreground=TEXT, font=FB)
         s.configure("Treeview", background=PANEL, foreground=TEXT,
-                    fieldbackground=PANEL, rowheight=26, borderwidth=0, font=FL)
+                    fieldbackground=PANEL, rowheight=28, borderwidth=0, font=FL)
         s.configure("Treeview.Heading", background=CARD, foreground=TEXT,
                     font=("Segoe UI",9,"bold"), relief="flat")
         s.map("Treeview",
