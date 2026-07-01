@@ -130,13 +130,26 @@ class CalendarTabMixin:
     def _parse_date_str(self, date_str):
         if not date_str or not isinstance(date_str, str):
             return None
-        m = re.search(r"([0-9]{2})-([0-9]{2})-([0-9]{4})", date_str)
-        if m:
+        date_str = date_str.strip()
+        
+        # 1. Try DD-MM-YYYY or DD/MM/YYYY with 1 or 2 digit day/month
+        m1 = re.search(r"\b([0-9]{1,2})[-/]([0-9]{1,2})[-/]([0-9]{4})\b", date_str)
+        if m1:
             try:
-                day, month, year = map(int, m.groups())
+                day, month, year = map(int, m1.groups())
                 return datetime(year, month, day).date()
             except ValueError:
-                return None
+                pass
+                
+        # 2. Try YYYY-MM-DD or YYYY/MM/DD with 1 or 2 digit day/month
+        m2 = re.search(r"\b([0-9]{4})[-/]([0-9]{1,2})[-/]([0-9]{1,2})\b", date_str)
+        if m2:
+            try:
+                year, month, day = map(int, m2.groups())
+                return datetime(year, month, day).date()
+            except ValueError:
+                pass
+                
         return None
 
     def _get_events_for_date(self, target_date, inc_kws=None, exc_kws=None):

@@ -141,5 +141,22 @@ class TestFilterLogic(unittest.TestCase):
         self.assertEqual(len(self.app.tv.items), 1)
         root.destroy()
 
+    def test_parse_date_str_robustness(self):
+        from datetime import date
+        # Test parsing DD-MM-YYYY / DD/MM/YYYY with 1 or 2 digits
+        self.assertEqual(self.app._parse_date_str("01-07-2026"), date(2026, 7, 1))
+        self.assertEqual(self.app._parse_date_str("1-7-2026"), date(2026, 7, 1))
+        self.assertEqual(self.app._parse_date_str("01/07/2026"), date(2026, 7, 1))
+        self.assertEqual(self.app._parse_date_str("1/7-2026"), date(2026, 7, 1)) # mixed separator
+        
+        # Test parsing YYYY-MM-DD / YYYY/MM/DD with 1 or 2 digits
+        self.assertEqual(self.app._parse_date_str("2026-07-01"), date(2026, 7, 1))
+        self.assertEqual(self.app._parse_date_str("2026/7/1"), date(2026, 7, 1))
+        self.assertEqual(self.app._parse_date_str("2026-7-01"), date(2026, 7, 1))
+        
+        # Test invalid cases
+        self.assertIsNone(self.app._parse_date_str("invalid"))
+        self.assertIsNone(self.app._parse_date_str(None))
+
 if __name__ == '__main__':
     unittest.main()
