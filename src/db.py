@@ -488,3 +488,38 @@ def delete_tenders(bid_numbers):
                 try: conn.close()
                 except Exception: pass
         return load_all_tenders()
+
+def upsert_tender_field(bid_no, field, value):
+    """
+    Surgically update a single field for a tender.
+    Unlike upsert_tender(), this ALWAYS overwrites the existing value —
+    intended for explicit user edits (category, filing_status, remarks, tags).
+    Thread-safe.
+    """
+    if field not in COLUMNS:
+        logger.log_err(f"upsert_tender_field: unknown field '{field}'")
+        return False
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            if field == "tags":
+                db_val = json.dumps(value) if value else "[]"
+            elif field in ("is_want", "is_want_derived", "is_saved", "is_fetched"):
+                db_val = 1 if value else 0
+            else:
+                db_val = str(value) if value is not None else ""
+            cursor.execute(
+                f"UPDATE tenders SET {field}=? WHERE bid_no=?",
+                (db_val, bid_no)
+            )
+            conn.commit()
+            return cursor.rowcount > 0
+        except Exception as e:
+            logger.log_err(f"upsert_tender_field error for {bid_no}.{field}: {e}")
+            return False
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass

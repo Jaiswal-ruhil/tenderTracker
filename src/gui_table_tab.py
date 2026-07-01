@@ -404,16 +404,17 @@ class TableTabMixin:
             if not self._editing:
                 return
             self._editing = None
-            nv = e.get()
-            # For combobox, if FocusOut fired before <<ComboboxSelected>>
-            # the widget might be mid-selection and nv is still the old value.
-            # We trust the value only if it is a valid choice or free text.
+            # Use the StringVar (textvariable) — most reliable source,
+            # especially after <<ComboboxSelected>> fires.
+            nv = var.get()
             self.tv.set(iid, col_id, nv)
             bid_no = self.tv.set(iid, "bid_no")
             if bid_no:
+                changed_rec = None
                 for r in self._records:
                     if r.get("bid_no") == bid_no:
                         r[col_id] = nv
+                        changed_rec = r
                         if col_id == "category":
                             import parser
                             parser.learn_category_mapping(r.get("items"), nv)
@@ -425,8 +426,10 @@ class TableTabMixin:
                             raw_text = r.get("items") or r.get("category") or ""
                             r["category"] = parser.map_category(raw_text)
                     self._refresh_table_view()
+                # Direct targeted DB update for the changed record
+                if changed_rec is not None:
+                    db.upsert_tender_field(bid_no, col_id, nv)
             try:
-                e.unbind("<FocusOut>")
                 e.destroy()
             except:
                 pass
