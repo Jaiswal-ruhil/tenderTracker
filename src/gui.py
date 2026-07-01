@@ -1209,13 +1209,27 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 for r in self._records:
                     if r.get("bid_no") == bid_no:
                         r[col_id] = nv
+                        if col_id == "category":
+                            import parser
+                            parser.learn_category_mapping(r.get("items"), nv)
                         break
+                if col_id == "category":
+                    import parser
+                    for r in self._records:
+                        raw_text = r.get("items") or r.get("category") or ""
+                        r["category"] = parser.map_category(raw_text)
+                    self._refresh_table_view()
             e.destroy(); self._editing=None
             db.save_all_tenders(self._records)
             try:
-                if self.notebook.index(self.notebook.select()) == 1:
+                selected_tab = self.notebook.index(self.notebook.select())
+                if selected_tab == 1:
                     self._update_calendar()
                     self._update_details()
+                elif selected_tab == 2:
+                    self._update_matrix()
+                elif selected_tab == 3:
+                    self._update_analytics()
             except:
                 pass
         e.bind("<Return>",commit); e.bind("<Tab>",commit)

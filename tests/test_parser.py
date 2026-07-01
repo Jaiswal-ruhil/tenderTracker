@@ -198,22 +198,66 @@ class TestParser(unittest.TestCase):
 
     def test_category_mapping_and_splitting(self):
         # 1. Test splitting and mapping in parse_one
-        text = "Category: Handling and Transport on Lumpsum Basis - CANE TRANSPORTATION FOR CLUSTER NO 4"
+        text = "Category: Electric Motor - 5HP 1440RPM"
         r = parser.parse_one(text)
-        self.assertEqual(r["category"], "Cane Transportation")
-        self.assertEqual(r["items"], "CANE TRANSPORTATION FOR CLUSTER NO 4")
+        self.assertEqual(r["category"], "Motor")
+        self.assertEqual(r["items"], "5HP 1440RPM")
         
         # 2. Test fallback and mapping in convert_pdf_text_to_markdown
         pdf_text = """
         Bid Number: GEM/2026/B/1111111
         Core
         Category
-        CANE TRANSPORTATION FOR CLUSTER NO 4
+        Electric Motor - 5HP 1440RPM
         """
         md = parser.convert_pdf_text_to_markdown(pdf_text)
         r2 = parser.parse_one(md)
-        self.assertEqual(r2["category"], "Cane Transportation")
-        self.assertEqual(r2["items"], "CANE TRANSPORTATION FOR CLUSTER NO 4")
+        self.assertEqual(r2["category"], "Motor")
+        self.assertEqual(r2["items"], "5HP 1440RPM")
+
+    def test_ni_screen_example(self):
+        text = "Category: Ni Screen - 0.09Mm By 2.30Mmby .25 Mm , 0.06Mm By 2.20Mm By.27"
+        r = parser.parse_one(text)
+        self.assertEqual(r["category"], "Ni Screen")
+        self.assertEqual(r["items"], "0.09Mm By 2.30Mmby .25 Mm , 0.06Mm By 2.20Mm By.27")
+
+    def test_additional_categories(self):
+        examples = [
+            ("Category: Electric Motor - 5HP 1440RPM", "Motor", "5HP 1440RPM"),
+            ("Category: Copper Armoured Cable - 4 Core 10 Sqmm", "Cable", "4 Core 10 Sqmm"),
+            ("Category: Liquid Oxygen Gas - Refilling", "Oxygen", "Refilling"),
+            ("Category: Argon Gas Cylinder", "Argon", "Argon Gas Cylinder"),
+            ("Category: VFD Control Panel - 15KW", "VFD", "15KW"),
+            ("Category: Gland Packing Jointing Sheet", "Packing Jointing", "Gland Packing Jointing Sheet"),
+            ("Category: Welding Electrode - E6013 3.15mm", "Electrodes", "E6013 3.15mm"),
+        ]
+        for text, expected_cat, expected_item in examples:
+            r = parser.parse_one(text)
+            self.assertEqual(r["category"], expected_cat)
+            self.assertEqual(r["items"], expected_item)
+
+    def test_active_learning(self):
+        import db
+        # Backup old mappings to restore later
+        old_mappings = db.load_settings().get("category_mappings")
+        db.save_setting("category_mappings", [])
+        
+        try:
+            parser.learn_category_mapping("Super Premium Safety Helmet", "Safety")
+            mappings = db.load_settings().get("category_mappings", [])
+            self.assertTrue(len(mappings) >= 1)
+            
+            safety_entry = None
+            for m in mappings:
+                if m["name"] == "Safety":
+                    safety_entry = m
+                    break
+                    
+            self.assertIsNotNone(safety_entry)
+            self.assertIn("safety", safety_entry["keywords"])
+        finally:
+            if old_mappings is not None:
+                db.save_setting("category_mappings", old_mappings)
 
 if __name__ == '__main__':
     unittest.main()

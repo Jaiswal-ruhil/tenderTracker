@@ -1,0 +1,59 @@
+{
+    "category_mappings": [
+        {
+            "name": "Ni Screen",
+            "keywords": [
+                "screen"
+            ]
+        },
+        {
+            "name": "Motor",
+            "keywords": [
+                "motor"
+            ]
+        },
+        {
+            "name": "Cable",
+            "keywords": [
+                "cable"
+            ]
+        },
+        {
+            "name": "Oxygen",
+            "keywords": [
+                "oxygen"
+            ]
+        },
+        {
+            "name": "Argon",
+            "keywords": [
+                "argon"
+            ]
+        },
+        {
+            "name": "VFD",
+            "keywords": [
+                "vfd"
+            ]
+        },
+        {
+            "name": "Packing Jointing",
+            "keywords": [
+                "packing",
+                "jointing"
+            ]
+        },
+        {
+            "name": "Electrodes",
+            "keywords": [
+                "electrode"
+            ]
+        },
+        {
+            "name": "Safety",
+            "keywords": [
+                "safety"
+            ]
+        }
+    ]
+}

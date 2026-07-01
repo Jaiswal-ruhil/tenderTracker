@@ -463,3 +463,65 @@ def convert_pdf_text_to_markdown(pdf_text):
         lines.append(f"Location: {location}")
         
     return "\n".join(lines)
+
+def learn_category_mapping(items, new_category):
+    if not items or not new_category:
+        return
+        
+    new_cat_clean = new_category.strip()
+    if not new_cat_clean:
+        return
+        
+    # Load mappings
+    import db
+    settings = db.load_settings()
+    mappings = settings.get("category_mappings")
+    if not mappings:
+        try:
+            from config import CATEGORY_MAPPING
+            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+        except Exception:
+            mappings = []
+            
+    # Find or create category entry
+    cat_entry = None
+    for m in mappings:
+        if m["name"].lower() == new_cat_clean.lower():
+            cat_entry = m
+            break
+            
+    if not cat_entry:
+        cat_entry = {"name": new_cat_clean, "keywords": []}
+        mappings.append(cat_entry)
+        
+    # Extract keywords from items description
+    stop_words = {"and", "for", "with", "the", "by", "of", "in", "at", "on", "to", "from", "lumpsum", "basis", "qty", "detail", "required"}
+    
+    # Split items by non-alphanumeric chars
+    words = re.findall(r"\b[A-Za-z]+\b", str(items).lower())
+    
+    clean_words = []
+    for w in words:
+        if len(w) >= 3 and w not in stop_words:
+            clean_words.append(w)
+            
+    if not clean_words:
+        return
+        
+    # Try to find a word that overlaps with category name first
+    cat_words = re.findall(r"\b[A-Za-z]+\b", new_cat_clean.lower())
+    candidate = None
+    for w in clean_words:
+        if w in cat_words or any(w in cw or cw in w for cw in cat_words):
+            candidate = w
+            break
+            
+    # Fallback to the first clean word if no overlap
+    if not candidate:
+        candidate = clean_words[0]
+        
+    if candidate and candidate not in cat_entry["keywords"]:
+        cat_entry["keywords"].append(candidate)
+        db.save_setting("category_mappings", mappings)
+        import logger
+        logger.log("info", f"Active Learning: Extracted keyword '{candidate}' for category '{new_cat_clean}' from items '{items}'")
