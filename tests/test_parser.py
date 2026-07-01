@@ -6,6 +6,30 @@ import unittest
 import parser
 
 class TestParser(unittest.TestCase):
+    def setUp(self):
+        import db
+        self.old_db = db.DB_FILE
+        self.old_settings = db.SETTINGS_FILE
+        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_parser_tenders_db.db")
+        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_parser_settings.json")
+        if os.path.exists(db.DB_FILE):
+            try: os.remove(db.DB_FILE)
+            except: pass
+        if os.path.exists(db.SETTINGS_FILE):
+            try: os.remove(db.SETTINGS_FILE)
+            except: pass
+
+    def tearDown(self):
+        import db
+        if os.path.exists(db.DB_FILE):
+            try: os.remove(db.DB_FILE)
+            except: pass
+        if os.path.exists(db.SETTINGS_FILE):
+            try: os.remove(db.SETTINGS_FILE)
+            except: pass
+        db.DB_FILE = self.old_db
+        db.SETTINGS_FILE = self.old_settings
+
     def test_split_blocks(self):
         text = """
         BID NO: GEM/2026/B/7526729

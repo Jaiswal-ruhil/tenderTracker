@@ -6,7 +6,7 @@ import unittest
 import db
 
 TEST_DB_FILE = os.path.join(os.path.dirname(__file__), "test_tenders_db.db")
-TEST_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_settings.json")
+TEST_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "temp_test_settings.json")
 
 class TestDb(unittest.TestCase):
     def setUp(self):
