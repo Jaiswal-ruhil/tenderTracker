@@ -7,6 +7,7 @@ import calendar
 import webbrowser
 
 # Local imports
+import db
 from config import (
     BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, SUCCESS, ERR, WARN,
     FL, FB, FT, TV_IDS
@@ -138,9 +139,21 @@ class CalendarTabMixin:
                 return None
         return None
 
-    def _get_events_for_date(self, target_date):
+    def _get_events_for_date(self, target_date, inc_kws=None, exc_kws=None):
+        if inc_kws is None or exc_kws is None:
+            settings = db.load_settings()
+            inc_raw = settings.get("include_keywords", "")
+            exc_raw = settings.get("exclude_keywords", "")
+            inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+            exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
         events = []
         for r in self._records:
+            is_want = self._get_tender_status(r, inc_kws, exc_kws)
+            r["is_want_derived"] = is_want
+            if not is_want:
+                continue
+
             sd = self._parse_date_str(r.get("start_date"))
             ed = self._parse_date_str(r.get("end_date"))
             bo = self._parse_date_str(r.get("bid_opening"))
@@ -160,6 +173,13 @@ class CalendarTabMixin:
             try: frame.destroy()
             except: pass
         self.cal_day_frames.clear()
+
+        # Load keywords once to filter Wants in calendar view efficiently
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
 
         c = calendar.Calendar(firstweekday=calendar.MONDAY)
         try:
@@ -190,7 +210,7 @@ class CalendarTabMixin:
                                    bg=card_bg, fg=text_color)
                 num_lbl.pack(anchor="ne", padx=4, pady=2)
                 
-                events = self._get_events_for_date(dt)
+                events = self._get_events_for_date(dt, inc_kws, exc_kws)
                 
                 for evt in events[:2]:
                     evt_type, r = evt
@@ -236,7 +256,14 @@ class CalendarTabMixin:
         date_str = self.cal_selected_date.strftime("%A, %b %d, %Y")
         self.cal_sel_date_lbl.configure(text=f"Events for:\n{date_str}")
 
-        events = self._get_events_for_date(self.cal_selected_date)
+        # Load keywords once to filter Wants in details view
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
+        events = self._get_events_for_date(self.cal_selected_date, inc_kws, exc_kws)
         if not events:
             lbl = tk.Label(self.cal_details_fr, text="No events on this day.", font=FL, bg=PANEL, fg=MUTED)
             lbl.pack(pady=20)

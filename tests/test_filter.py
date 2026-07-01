@@ -85,5 +85,17 @@ class TestFilterLogic(unittest.TestCase):
         # Test non-existent
         self.assertFalse(self.app._is_bid_in_dont_wants("300"))
 
+    def test_calendar_only_shows_wants(self):
+        # Setup mock records in app
+        self.app._records = [
+            {"bid_no": "GEM/2026/B/100", "start_date": "01-07-2026", "is_want": False}, # Don't want
+            {"bid_no": "GEM/2026/B/200", "start_date": "01-07-2026", "is_want": True},  # Want
+        ]
+        from datetime import date
+        target = date(2026, 7, 1)
+        events = self.app._get_events_for_date(target, [], [])
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0][1]["bid_no"], "GEM/2026/B/200")
+
 if __name__ == '__main__':
     unittest.main()
