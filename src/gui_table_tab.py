@@ -381,9 +381,12 @@ class TableTabMixin:
             category_options = sorted(list(set(m["name"] for m in mappings if m.get("name"))))
             
             e = ttk.Combobox(self.tv, textvariable=var, values=category_options, font=FL)
-            e.place(x=x, y=y, width=w, height=h)
+            # Make it at least 160px wide so category names are readable
+            e.place(x=x, y=y, width=max(w, 160), height=h)
             e.focus_set()
             e.select_range(0, "end")
+            # Auto-open dropdown so user sees choices immediately
+            e.after(50, e.event_generate, "<<ComboboxDropdown>>")
         elif col_id == "filing_status":
             status_options = ["Not Filed", "Filed", "Disqualified", "Under Evaluation"]
             e = ttk.Combobox(self.tv, textvariable=var, values=status_options, font=FL, state="readonly")
@@ -402,6 +405,9 @@ class TableTabMixin:
                 return
             self._editing = None
             nv = e.get()
+            # For combobox, if FocusOut fired before <<ComboboxSelected>>
+            # the widget might be mid-selection and nv is still the old value.
+            # We trust the value only if it is a valid choice or free text.
             self.tv.set(iid, col_id, nv)
             bid_no = self.tv.set(iid, "bid_no")
             if bid_no:
@@ -438,10 +444,15 @@ class TableTabMixin:
                 pass
         e.bind("<Return>", commit)
         e.bind("<Tab>", commit)
-        e.bind("<FocusOut>", commit)
         e.bind("<Escape>", lambda ev: self._cancel_edit())
         if col_id in ("category", "filing_status"):
+            # For dropdowns: commit only on selection or keyboard confirm.
+            # Do NOT bind FocusOut — it fires before <<ComboboxSelected>>
+            # and would commit with the stale old value.
             e.bind("<<ComboboxSelected>>", commit)
+        else:
+            # Plain Entry: commit when focus leaves
+            e.bind("<FocusOut>", commit)
 
     def _cancel_edit(self, event=None):
         if self._editing:
