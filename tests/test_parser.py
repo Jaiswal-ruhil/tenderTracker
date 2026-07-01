@@ -196,5 +196,24 @@ class TestParser(unittest.TestCase):
         self.assertIn("276404", loc)
         self.assertIn("Azamgarh", loc)
 
+    def test_category_mapping_and_splitting(self):
+        # 1. Test splitting and mapping in parse_one
+        text = "Category: Handling and Transport on Lumpsum Basis - CANE TRANSPORTATION FOR CLUSTER NO 4"
+        r = parser.parse_one(text)
+        self.assertEqual(r["category"], "Cane Transportation")
+        self.assertEqual(r["items"], "CANE TRANSPORTATION FOR CLUSTER NO 4")
+        
+        # 2. Test fallback and mapping in convert_pdf_text_to_markdown
+        pdf_text = """
+        Bid Number: GEM/2026/B/1111111
+        Core
+        Category
+        CANE TRANSPORTATION FOR CLUSTER NO 4
+        """
+        md = parser.convert_pdf_text_to_markdown(pdf_text)
+        r2 = parser.parse_one(md)
+        self.assertEqual(r2["category"], "Cane Transportation")
+        self.assertEqual(r2["items"], "CANE TRANSPORTATION FOR CLUSTER NO 4")
+
 if __name__ == '__main__':
     unittest.main()

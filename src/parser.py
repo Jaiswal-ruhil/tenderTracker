@@ -4,6 +4,41 @@ try:
 except ImportError:  # geocode not available (e.g. build environment)
     def _enrich_location(loc): return loc
 
+try:
+    from config import CATEGORY_MAPPING
+except ImportError:
+    CATEGORY_MAPPING = []
+
+def map_category(raw_val):
+    if not raw_val or not str(raw_val).strip():
+        return ""
+    val_lower = str(raw_val).lower()
+    
+    # Try loading from settings
+    try:
+        import db
+        settings = db.load_settings()
+        mappings = settings.get("category_mappings")
+    except Exception:
+        mappings = None
+        
+    if not mappings:
+        # Fallback to config
+        try:
+            from config import CATEGORY_MAPPING
+            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+        except ImportError:
+            mappings = []
+            
+    for item in mappings:
+        keywords = item.get("keywords", [])
+        standard_name = item.get("name", "")
+        if keywords and standard_name:
+            if all(kw.lower() in val_lower for kw in keywords):
+                return standard_name
+                
+    return raw_val.strip().title()
+
 def split_blocks(text):
     parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
@@ -87,6 +122,27 @@ def parse_one(text):
     m = re.search(r"Location\s*:\s*(.+)", text, re.I)
     if m: r["location"] = m.group(1).strip()
 
+    if "category" in r:
+        raw_cat = r["category"]
+        if "-" in raw_cat:
+            parts = re.split(r"\s*-\s*", raw_cat, maxsplit=1)
+            cat_part = parts[0].strip()
+            item_part = parts[1].strip()
+        else:
+            cat_part = raw_cat
+            item_part = raw_cat
+            
+        mapped_cat = map_category(raw_cat)
+        if mapped_cat != raw_cat.strip().title():
+            r["category"] = mapped_cat
+        else:
+            r["category"] = map_category(cat_part)
+            
+        if "items" not in r:
+            r["items"] = item_part
+    elif "items" in r:
+        r["category"] = map_category(r["items"])
+
     return r
 
 def convert_pdf_text_to_markdown(pdf_text):
@@ -95,8 +151,43 @@ def convert_pdf_text_to_markdown(pdf_text):
     if not bid_no:
         bid_no = re.search(r"BID\s*NO(?:\.|\b)\s*(?::|\n)\s*(\S+)", pdf_text, re.I)
 
-    # 2. Item Category
-    item_cat = re.search(r"Item\s*Category\s*(?::|\n)\s*(.+)", pdf_text, re.I)
+    # 2. Item Category (with multi-line and fallback support)
+    item_cat_val = ""
+    pos = re.search(r"Item\s*Category\s*(?::|\n)\s*", pdf_text, re.I)
+    if pos:
+        sub = pdf_text[pos.end():pos.end()+500]
+        val_parts = []
+        headers = ["ministry", "department", "organisation", "office", "dated", "bid end", "bid opening", "estimated", "evaluation", "type of", "consignee", "reporting"]
+        for line in sub.splitlines():
+            line_clean = line.strip()
+            if not line_clean:
+                continue
+            if line_clean.startswith("/") or line_clean.startswith("*"):
+                break
+            if any(h in line_clean.lower() for h in headers):
+                break
+            if ":" in line_clean and re.match(r"^[A-Za-z0-9/\s]+:", line_clean):
+                break
+            ascii_ratio = sum(1 for c in line_clean if ord(c) < 128) / len(line_clean)
+            if ascii_ratio < 0.5:
+                break
+            val_parts.append(line_clean)
+        item_cat_val = " ".join(val_parts).strip()
+        
+    if not item_cat_val:
+        # Fallback to Core Category
+        pos_core = re.search(r"Core", pdf_text, re.I)
+        if pos_core:
+            sub = pdf_text[pos_core.end():pos_core.end()+500]
+            lines_core = sub.splitlines()
+            for idx, line in enumerate(lines_core):
+                if "category" in line.lower() and idx + 1 < len(lines_core):
+                    line_next = lines_core[idx+1].strip()
+                    if line_next and not line_next.startswith("/") and not line_next.startswith("*"):
+                        ascii_ratio = sum(1 for c in line_next if ord(c) < 128) / len(line_next)
+                        if ascii_ratio >= 0.5:
+                            item_cat_val = line_next
+                            break
 
     # 3. Quantity
     qty = re.search(r"Total\s*Quantity\s*(?::|\n)\s*(\d+)", pdf_text, re.I)
@@ -317,9 +408,16 @@ def convert_pdf_text_to_markdown(pdf_text):
     lines = []
     if bid_no:
         lines.append(f"BID NO: {bid_no.group(1).strip()}")
-    if item_cat:
-        lines.append(f"Items: {item_cat.group(1).strip()}")
-        lines.append(f"Category: {item_cat.group(1).strip()}")
+    if item_cat_val:
+        if "-" in item_cat_val:
+            parts = re.split(r"\s*-\s*", item_cat_val, maxsplit=1)
+            cat_part = parts[0].strip()
+            item_part = parts[1].strip()
+        else:
+            cat_part = item_cat_val
+            item_part = item_cat_val
+        lines.append(f"Items: {item_part}")
+        lines.append(f"Category: {map_category(cat_part)}")
     if qty:
         lines.append(f"Quantity: {qty.group(1).strip()}")
     if dept:

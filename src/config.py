@@ -46,3 +46,14 @@ TV_COLS = [
     ("remarks",      "Remarks",           120),
 ]
 TV_IDS = [c[0] for c in TV_COLS]
+
+# Intelligent Category Mapping Configuration
+CATEGORY_MAPPING = [
+    (["cane", "transport"], "Cane Transportation"),
+    (["cane", "loader"], "Cane Loading/Harvesting"),
+    (["loader", "loading"], "Loading Services"),
+    (["computer", "laptop", "desktop", "monitor", "ups", "server", "software"], "IT & Computers"),
+    (["printer", "scanner", "photocopier", "cartridge"], "Office & Printing"),
+    (["sugar", "mill", "chini"], "Sugar Mill Operations"),
+    (["manpower", "security", "guard", "staff"], "Manpower & Security"),
+]

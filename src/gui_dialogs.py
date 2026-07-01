@@ -1,6 +1,6 @@
 import os
 import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
+from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
 
 # Local imports
@@ -373,8 +373,8 @@ class DialogsMixin:
         win.resizable(False, False)
         
         x = self.winfo_x() + (self.winfo_width() - 550) // 2
-        y = self.winfo_y() + (self.winfo_height() - 600) // 2
-        win.geometry(f"550x600+{max(0, x)}+{max(0, y)}")
+        y = self.winfo_y() + (self.winfo_height() - 680) // 2
+        win.geometry(f"550x680+{max(0, x)}+{max(0, y)}")
         
         tk.Label(win, text="Keyword Refinement Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 4))
         
@@ -384,6 +384,15 @@ class DialogsMixin:
         
         inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
         exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
+        # Load category mappings
+        mappings_data = settings.get("category_mappings")
+        if not mappings_data:
+            try:
+                from config import CATEGORY_MAPPING
+                mappings_data = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+            except Exception:
+                mappings_data = []
 
         def style_mini_btn(btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT):
             btn.configure(bg=normal_bg, fg=fg, relief="flat", activebackground=hover_bg, activeforeground=TEXT, cursor="hand2", font=FL)
@@ -439,8 +448,19 @@ class DialogsMixin:
                 
             txt_widget.configure(state="disabled")
 
+        # Create Notebook for tabs
+        nb = ttk.Notebook(win)
+        nb.pack(fill="both", expand=True, padx=10, pady=(5, 5))
+        
+        tab_filters = tk.Frame(nb, bg=BG)
+        tab_mappings = tk.Frame(nb, bg=BG)
+        
+        nb.add(tab_filters, text="  Keyword Filters  ")
+        nb.add(tab_mappings, text="  Category Mappings  ")
+
+        # ── Tab 1: Keyword Filters ──
         # ── Include Section ──
-        inc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        inc_frame = tk.Frame(tab_filters, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         inc_frame.pack(fill="both", expand=True, padx=15, pady=6)
         
         inc_hdr = tk.Frame(inc_frame, bg=PANEL)
@@ -479,7 +499,7 @@ class DialogsMixin:
         inc_entry.bind("<Return>", lambda e: add_keyword(inc_entry, inc_kws, inc_txt, True))
 
         # ── Exclude Section ──
-        exc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        exc_frame = tk.Frame(tab_filters, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         exc_frame.pack(fill="both", expand=True, padx=15, pady=6)
         
         exc_hdr = tk.Frame(exc_frame, bg=PANEL)
@@ -517,9 +537,145 @@ class DialogsMixin:
         exc_add_btn.configure(command=lambda: add_keyword(exc_entry, exc_kws, exc_txt, False))
         exc_entry.bind("<Return>", lambda e: add_keyword(exc_entry, exc_kws, exc_txt, False))
 
-        # Initial Render
         render_chips(inc_txt, inc_kws, True)
         render_chips(exc_txt, exc_kws, False)
+
+        # ── Tab 2: Category Mappings ──
+        map_frame = tk.Frame(tab_mappings, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        map_frame.pack(fill="both", expand=True, padx=15, pady=6)
+        
+        # Category Selector Row
+        sel_fr = tk.Frame(map_frame, bg=PANEL)
+        sel_fr.pack(fill="x", pady=(4, 8))
+        
+        tk.Label(sel_fr, text="Select Category:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(side="left", padx=(0, 6))
+        
+        cat_cb = ttk.Combobox(sel_fr, state="readonly", font=FL)
+        cat_cb.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        
+        def add_category():
+            new_name = simpledialog.askstring("New Category", "Enter standard category name:", parent=win)
+            if not new_name:
+                return
+            new_name_clean = new_name.strip()
+            if not new_name_clean:
+                return
+            for m in mappings_data:
+                if m["name"].lower() == new_name_clean.lower():
+                    messagebox.showwarning("Duplicate Category", f"Category '{new_name_clean}' already exists.", parent=win)
+                    return
+            mappings_data.append({"name": new_name_clean, "keywords": []})
+            refresh_cat_list(new_name_clean)
+            
+        def delete_category():
+            sel = cat_cb.get()
+            if not sel:
+                return
+            confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete the category '{sel}' and its mapping keywords?", parent=win)
+            if not confirm:
+                return
+            idx_to_remove = -1
+            for idx, m in enumerate(mappings_data):
+                if m["name"] == sel:
+                    idx_to_remove = idx
+                    break
+            if idx_to_remove != -1:
+                mappings_data.pop(idx_to_remove)
+            refresh_cat_list()
+            
+        cat_new_btn = tk.Button(sel_fr, text=" + New ", command=add_category)
+        cat_new_btn.pack(side="left", padx=2)
+        style_mini_btn(cat_new_btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT)
+        
+        cat_del_btn = tk.Button(sel_fr, text=" 🗑 Delete ", command=delete_category)
+        cat_del_btn.pack(side="left", padx=2)
+        style_mini_btn(cat_del_btn, normal_bg=CARD, hover_bg="#2A1B1B", fg=ERR)
+
+        # Keyword management for Category
+        map_hdr = tk.Frame(map_frame, bg=PANEL)
+        map_hdr.pack(fill="x", pady=(8, 2))
+        tk.Label(map_hdr, text="Mapping Keywords for Selected:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(side="left")
+        
+        def clear_map_kws():
+            m = get_selected_mapping()
+            if not m:
+                return
+            m["keywords"].clear()
+            render_chips(map_txt, m["keywords"], True)
+            
+        map_clear_btn = tk.Button(map_hdr, text="Clear All", command=clear_map_kws)
+        map_clear_btn.pack(side="right")
+        style_mini_btn(map_clear_btn, normal_bg=PANEL, hover_bg="#2A1B1B", fg=ERR)
+        
+        tk.Label(map_frame, text="Tenders containing ALL of these words will map to this category.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(0, 4))
+        
+        map_input_row = tk.Frame(map_frame, bg=PANEL)
+        map_input_row.pack(fill="x", pady=4)
+        
+        map_entry = tk.Entry(map_input_row, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        map_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        
+        def add_map_kw():
+            m = get_selected_mapping()
+            if not m:
+                return
+            val = map_entry.get().strip().lower()
+            if not val:
+                return
+            new_kws = [k.strip() for k in val.split(",") if k.strip()]
+            for kw in new_kws:
+                if kw not in m["keywords"]:
+                    m["keywords"].append(kw)
+            map_entry.delete(0, "end")
+            render_chips(map_txt, m["keywords"], True)
+            
+        map_add_btn = tk.Button(map_input_row, text="  + Add  ", command=add_map_kw)
+        map_add_btn.pack(side="right")
+        style_mini_btn(map_add_btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT)
+        map_entry.bind("<Return>", lambda e: add_map_kw())
+        
+        # Chip Container for Category
+        map_chip_fr = tk.Frame(map_frame, bg=CARD, highlightthickness=1, highlightbackground="#30363D")
+        map_chip_fr.pack(fill="both", expand=True, pady=(4, 0))
+        
+        map_txt = tk.Text(map_chip_fr, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL, wrap="word", height=4)
+        map_sb = ttk.Scrollbar(map_chip_fr, orient="vertical", command=map_txt.yview)
+        map_txt.configure(yscrollcommand=map_sb.set)
+        map_sb.pack(side="right", fill="y")
+        map_txt.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+
+        def get_selected_mapping():
+            sel = cat_cb.get()
+            for m in mappings_data:
+                if m["name"] == sel:
+                    return m
+            return None
+            
+        def on_cat_change(event=None):
+            m = get_selected_mapping()
+            if m:
+                render_chips(map_txt, m["keywords"], True)
+            else:
+                map_txt.configure(state="normal")
+                map_txt.delete("1.0", "end")
+                map_txt.configure(state="disabled")
+                
+        cat_cb.bind("<<ComboboxSelected>>", on_cat_change)
+        
+        def refresh_cat_list(select_name=None):
+            names = [m["name"] for m in mappings_data]
+            cat_cb.configure(values=names)
+            if names:
+                if select_name in names:
+                    cat_cb.set(select_name)
+                else:
+                    cat_cb.set(names[0])
+            else:
+                cat_cb.set("")
+            on_cat_change()
+            
+        refresh_cat_list()
 
         def save_rules():
             # Save cleaned comma-separated list
@@ -527,8 +683,36 @@ class DialogsMixin:
             clean_exc = ",".join(k.strip().lower() for k in exc_kws if k.strip())
             db.save_setting("include_keywords", clean_inc)
             db.save_setting("exclude_keywords", clean_exc)
-            self._log("info", "Filter rules updated.")
+            
+            # Save Category Mappings
+            clean_mappings = []
+            for m in mappings_data:
+                clean_kws = [k.strip().lower() for k in m.get("keywords", []) if k.strip()]
+                clean_mappings.append({"name": m["name"].strip(), "keywords": clean_kws})
+            db.save_setting("category_mappings", clean_mappings)
+            
+            # Re-map all existing tenders in the DB!
+            import parser
+            for r in self._records:
+                raw_text = r.get("items") or r.get("category") or ""
+                r["category"] = parser.map_category(raw_text)
+                
+            db.save_all_tenders(self._records)
+            self._log("info", "Filter rules and Category mappings updated.")
             self._refresh_table_view()
+            
+            # Refresh other tabs
+            try:
+                selected_tab = self.notebook.index(self.notebook.select())
+                if selected_tab == 1:
+                    self._update_calendar()
+                elif selected_tab == 2:
+                    self._update_matrix()
+                elif selected_tab == 3:
+                    self._update_analytics()
+            except Exception:
+                pass
+                
             win.destroy()
             
         btn_fr = tk.Frame(win, bg=BG)
