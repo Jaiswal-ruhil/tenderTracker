@@ -41,6 +41,7 @@ class DialogsMixin:
         btn_db_row.pack(fill="x", pady=(4, 0))
         self._btn(btn_db_row, "Relocate Database...", run_db_change, bg=CARD).pack(side="left", padx=(0, 6))
         self._btn(btn_db_row, "Backup Database...", lambda: self._backup_db(win), bg=CARD).pack(side="left", padx=6)
+        self._btn(btn_db_row, "Restore Database...", lambda: self._restore_db(win), bg=CARD).pack(side="left", padx=6)
         self._btn(btn_db_row, "Clear Database", lambda: self._clear_db(win), bg=CARD, fg=ERR).pack(side="right")
 
         # Excel Frame
@@ -113,12 +114,12 @@ class DialogsMixin:
             return
             
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_name = f"tenders_db_backup_{timestamp}.json"
+        default_name = f"tenders_db_backup_{timestamp}.db"
         
         dest_path = filedialog.asksaveasfilename(
             title="Backup Database",
             initialfile=default_name,
-            filetypes=[("JSON Files", "*.json"), ("All Files", "*.*")],
+            filetypes=[("Database Files", "*.db"), ("All Files", "*.*")],
             parent=parent
         )
         if not dest_path:
@@ -132,6 +133,48 @@ class DialogsMixin:
         except Exception as e:
             self._log("err", f"Backup failed: {e}")
             messagebox.showerror("Backup Error", f"Failed to backup database:\n\n{e}", parent=parent)
+
+    def _restore_db(self, parent_win=None):
+        parent = parent_win or self
+        src_path = filedialog.askopenfilename(
+            title="Restore Database",
+            filetypes=[("Database Files", "*.db"), ("All Files", "*.*")],
+            parent=parent
+        )
+        if not src_path:
+            return
+            
+        confirm = messagebox.askyesno(
+            "Confirm Restore",
+            "Are you sure you want to restore the database from backup?\n\n"
+            "This will overwrite all current tenders with the backup data. This action cannot be undone.",
+            parent=parent
+        )
+        if not confirm:
+            return
+            
+        try:
+            import shutil
+            os.makedirs(os.path.dirname(db.DB_FILE), exist_ok=True)
+            shutil.copy2(src_path, db.DB_FILE)
+            self._records = db.load_all_tenders()
+            self._refresh_table_view()
+            # Also refresh other tabs if active
+            try:
+                selected_tab = self.notebook.index(self.notebook.select())
+                if selected_tab == 1:
+                    self._update_calendar()
+                elif selected_tab == 2:
+                    self._update_matrix()
+                elif selected_tab == 3:
+                    self._update_analytics()
+            except Exception:
+                pass
+            self._log("ok", f"Database restored successfully from: {src_path}")
+            messagebox.showinfo("Restore Successful", "Database successfully restored from backup.", parent=parent)
+        except Exception as e:
+            self._log("err", f"Restore failed: {e}")
+            messagebox.showerror("Restore Error", f"Failed to restore database:\n\n{e}", parent=parent)
 
     def _clear_db(self, parent_win=None):
         parent = parent_win or self
@@ -329,52 +372,167 @@ class DialogsMixin:
         win.configure(bg=BG)
         win.resizable(False, False)
         
-        x = self.winfo_x() + (self.winfo_width() - 500) // 2
-        y = self.winfo_y() + (self.winfo_height() - 340) // 2
-        win.geometry(f"500x340+{max(0, x)}+{max(0, y)}")
+        x = self.winfo_x() + (self.winfo_width() - 550) // 2
+        y = self.winfo_y() + (self.winfo_height() - 600) // 2
+        win.geometry(f"550x600+{max(0, x)}+{max(0, y)}")
         
-        tk.Label(win, text="Keyword Refinement Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 8))
+        tk.Label(win, text="Keyword Refinement Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 4))
         
-        # Include Keywords Frame
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
+        def style_mini_btn(btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT):
+            btn.configure(bg=normal_bg, fg=fg, relief="flat", activebackground=hover_bg, activeforeground=TEXT, cursor="hand2", font=FL)
+            btn.bind("<Enter>", lambda e: btn.configure(bg=hover_bg))
+            btn.bind("<Leave>", lambda e: btn.configure(bg=normal_bg))
+
+        def remove_keyword(val, lst, txt_widget, is_include):
+            if val in lst:
+                lst.remove(val)
+            render_chips(txt_widget, lst, is_include)
+
+        def add_keyword(entry_widget, lst, txt_widget, is_include):
+            val = entry_widget.get().strip().lower()
+            if not val:
+                return
+            new_kws = [k.strip() for k in val.split(",") if k.strip()]
+            for kw in new_kws:
+                if kw not in lst:
+                    lst.append(kw)
+            entry_widget.delete(0, "end")
+            render_chips(txt_widget, lst, is_include)
+
+        def clear_all(lst, txt_widget, is_include):
+            lst.clear()
+            render_chips(txt_widget, lst, is_include)
+
+        def render_chips(txt_widget, kw_list, is_include):
+            txt_widget.configure(state="normal")
+            txt_widget.delete("1.0", "end")
+            
+            bg_color = "#1A3A2A" if is_include else "#3A1A1A"
+            border_color = SUCCESS if is_include else ERR
+            
+            for kw in kw_list:
+                chip = tk.Frame(txt_widget, bg=bg_color, highlightthickness=1, highlightbackground=border_color, padx=6, pady=2)
+                
+                lbl = tk.Label(chip, text=kw, font=FL, bg=bg_color, fg=TEXT)
+                lbl.pack(side="left")
+                
+                def make_remove(val=kw, lst=kw_list, w=txt_widget, inc=is_include):
+                    return lambda: remove_keyword(val, lst, w, inc)
+                    
+                btn = tk.Button(chip, text="×", font=("Segoe UI", 9, "bold"), bg=bg_color, fg=MUTED,
+                                activebackground=bg_color, activeforeground=TEXT, relief="flat",
+                                cursor="hand2", command=make_remove(), padx=2, pady=0)
+                btn.pack(side="left", padx=(4, 0))
+                
+                btn.bind("<Enter>", lambda e, b=btn: b.configure(fg=ERR))
+                btn.bind("<Leave>", lambda e, b=btn: b.configure(fg=MUTED))
+                
+                txt_widget.window_create("end", window=chip)
+                txt_widget.insert("end", " ")
+                
+            txt_widget.configure(state="disabled")
+
+        # ── Include Section ──
         inc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
-        inc_frame.pack(fill="x", padx=15, pady=6)
+        inc_frame.pack(fill="both", expand=True, padx=15, pady=6)
         
-        tk.Label(inc_frame, text="Include Keywords (comma-separated):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
-        tk.Label(inc_frame, text="Only matching tenders will be categorized as 'Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(0, 4))
+        inc_hdr = tk.Frame(inc_frame, bg=PANEL)
+        inc_hdr.pack(fill="x")
+        tk.Label(inc_hdr, text="Include Keywords (Wants):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(side="left")
         
-        current_inc = db.load_settings().get("include_keywords", "")
-        inc_var = tk.StringVar(value=current_inc)
+        inc_clear_btn = tk.Button(inc_hdr, text="Clear All")
+        inc_clear_btn.pack(side="right")
+        style_mini_btn(inc_clear_btn, normal_bg=PANEL, hover_bg="#2A1B1B", fg=ERR)
         
-        inc_entry = tk.Entry(inc_frame, textvariable=inc_var, bg=CARD, fg=TEXT,
-                             insertbackground=TEXT, relief="flat", font=FL,
-                             highlightthickness=1, highlightbackground="#30363D",
-                             highlightcolor=ACCENT2)
-        pat_entry = inc_entry # match variable
-        inc_entry.pack(fill="x", pady=4)
+        tk.Label(inc_frame, text="Tenders matching these words are labeled as 'Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(2, 4))
         
-        # Exclude Keywords Frame
+        inc_input_row = tk.Frame(inc_frame, bg=PANEL)
+        inc_input_row.pack(fill="x", pady=4)
+        
+        inc_entry = tk.Entry(inc_input_row, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        inc_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        
+        inc_add_btn = tk.Button(inc_input_row, text="  + Add  ")
+        inc_add_btn.pack(side="right")
+        style_mini_btn(inc_add_btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT)
+        
+        # Chip Container
+        inc_chip_fr = tk.Frame(inc_frame, bg=CARD, highlightthickness=1, highlightbackground="#30363D")
+        inc_chip_fr.pack(fill="both", expand=True, pady=(4, 0))
+        
+        inc_txt = tk.Text(inc_chip_fr, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL, wrap="word", height=4)
+        inc_sb = ttk.Scrollbar(inc_chip_fr, orient="vertical", command=inc_txt.yview)
+        inc_txt.configure(yscrollcommand=inc_sb.set)
+        inc_sb.pack(side="right", fill="y")
+        inc_txt.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+
+        inc_clear_btn.configure(command=lambda: clear_all(inc_kws, inc_txt, True))
+        inc_add_btn.configure(command=lambda: add_keyword(inc_entry, inc_kws, inc_txt, True))
+        inc_entry.bind("<Return>", lambda e: add_keyword(inc_entry, inc_kws, inc_txt, True))
+
+        # ── Exclude Section ──
         exc_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
-        exc_frame.pack(fill="x", padx=15, pady=6)
+        exc_frame.pack(fill="both", expand=True, padx=15, pady=6)
         
-        tk.Label(exc_frame, text="Exclude Keywords (comma-separated):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
-        tk.Label(exc_frame, text="Matching tenders will be automatically ignored as 'Don't Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(0, 4))
+        exc_hdr = tk.Frame(exc_frame, bg=PANEL)
+        exc_hdr.pack(fill="x")
+        tk.Label(exc_hdr, text="Exclude Keywords (Don't Wants):", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(side="left")
         
-        current_exc = db.load_settings().get("exclude_keywords", "")
-        exc_var = tk.StringVar(value=current_exc)
+        exc_clear_btn = tk.Button(exc_hdr, text="Clear All")
+        exc_clear_btn.pack(side="right")
+        style_mini_btn(exc_clear_btn, normal_bg=PANEL, hover_bg="#2A1B1B", fg=ERR)
         
-        exc_entry = tk.Entry(exc_frame, textvariable=exc_var, bg=CARD, fg=TEXT,
-                             insertbackground=TEXT, relief="flat", font=FL,
-                             highlightthickness=1, highlightbackground="#30363D",
-                             highlightcolor=ACCENT2)
-        exc_entry.pack(fill="x", pady=4)
+        tk.Label(exc_frame, text="Tenders matching these words are ignored as 'Don't Wants'.", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=(2, 4))
         
+        exc_input_row = tk.Frame(exc_frame, bg=PANEL)
+        exc_input_row.pack(fill="x", pady=4)
+        
+        exc_entry = tk.Entry(exc_input_row, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                             highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        exc_entry.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        
+        exc_add_btn = tk.Button(exc_input_row, text="  + Add  ")
+        exc_add_btn.pack(side="right")
+        style_mini_btn(exc_add_btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT)
+        
+        # Chip Container
+        exc_chip_fr = tk.Frame(exc_frame, bg=CARD, highlightthickness=1, highlightbackground="#30363D")
+        exc_chip_fr.pack(fill="both", expand=True, pady=(4, 0))
+        
+        exc_txt = tk.Text(exc_chip_fr, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL, wrap="word", height=4)
+        exc_sb = ttk.Scrollbar(exc_chip_fr, orient="vertical", command=exc_txt.yview)
+        exc_txt.configure(yscrollcommand=exc_sb.set)
+        exc_sb.pack(side="right", fill="y")
+        exc_txt.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+
+        exc_clear_btn.configure(command=lambda: clear_all(exc_kws, exc_txt, False))
+        exc_add_btn.configure(command=lambda: add_keyword(exc_entry, exc_kws, exc_txt, False))
+        exc_entry.bind("<Return>", lambda e: add_keyword(exc_entry, exc_kws, exc_txt, False))
+
+        # Initial Render
+        render_chips(inc_txt, inc_kws, True)
+        render_chips(exc_txt, exc_kws, False)
+
         def save_rules():
-            db.save_setting("include_keywords", inc_var.get().strip())
-            db.save_setting("exclude_keywords", exc_var.get().strip())
+            # Save cleaned comma-separated list
+            clean_inc = ",".join(k.strip().lower() for k in inc_kws if k.strip())
+            clean_exc = ",".join(k.strip().lower() for k in exc_kws if k.strip())
+            db.save_setting("include_keywords", clean_inc)
+            db.save_setting("exclude_keywords", clean_exc)
             self._log("info", "Filter rules updated.")
             self._refresh_table_view()
             win.destroy()
             
         btn_fr = tk.Frame(win, bg=BG)
-        btn_fr.pack(fill="x", side="bottom", pady=12)
-        self._btn(btn_fr, "  Save & Apply  ", save_rules, bg=ACCENT2).pack(anchor="center")
+        btn_fr.pack(fill="x", side="bottom", pady=15)
+        
+        self._btn(btn_fr, "  Save & Apply  ", save_rules, bg=ACCENT2).pack(side="left", padx=(60, 10), expand=True, fill="x")
+        self._btn(btn_fr, "  Cancel  ", win.destroy, bg=CARD).pack(side="right", padx=(10, 60), expand=True, fill="x")

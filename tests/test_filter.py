@@ -18,16 +18,25 @@ class TestFilterLogic(unittest.TestCase):
         res = self.app._get_tender_status(rec, [], [])
         self.assertTrue(res)
 
-    def test_filter_include_keywords(self):
-        # Only matches containing include keywords
+    def test_filter_include_keywords_as_safeguard(self):
+        # Tenders not matching exclude keywords are considered wants
         rec1 = {"bid_no": "GEM/2026/B/1", "items": "Laptop Computer", "category": "IT"}
-        rec2 = {"bid_no": "GEM/2026/B/2", "items": "Sugar Federation", "category": "Sugar"}
         
-        inc = ["sugar", "transport"]
-        exc = []
+        # Tenders matching exclude keyword but also include keyword are considered wants (safeguard)
+        rec2 = {"bid_no": "GEM/2026/B/2", "items": "Sugar Federation Mill", "category": "Sugar"}
         
-        self.assertFalse(self.app._get_tender_status(rec1, inc, exc))
+        # Tenders matching exclude keyword but not include keyword are excluded
+        rec3 = {"bid_no": "GEM/2026/B/3", "items": "Kisan Chini Mill", "category": "Sugar"}
+        
+        inc = ["federation", "laptop"]
+        exc = ["mill"]
+        
+        # rec1: no exclude match -> True
+        self.assertTrue(self.app._get_tender_status(rec1, inc, exc))
+        # rec2: matches exclude ("mill") but also include ("federation") -> True
         self.assertTrue(self.app._get_tender_status(rec2, inc, exc))
+        # rec3: matches exclude ("mill") but not include -> False
+        self.assertFalse(self.app._get_tender_status(rec3, inc, exc))
 
     def test_filter_exclude_keywords(self):
         # Excludes matches containing exclude keywords

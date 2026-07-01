@@ -1373,19 +1373,19 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 pass
             return False
 
+        matches_exc = False
         for rule in exc_kws:
             if check_single_rule(rule):
-                return False
+                matches_exc = True
+                break
                 
-        if inc_kws:
-            matches_inc = False
-            for rule in inc_kws:
-                if check_single_rule(rule):
-                    matches_inc = True
-                    break
-            if not matches_inc:
-                return False
-                
+        if matches_exc:
+            if inc_kws:
+                for rule in inc_kws:
+                    if check_single_rule(rule):
+                        return True
+            return False
+            
         return True
 
     def _is_bid_in_dont_wants(self, bid_no_or_id):

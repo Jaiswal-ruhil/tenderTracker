@@ -85,7 +85,9 @@ def scrape_bid_page(url, log_fn=None, headless=False):
                     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
             )
-            with urllib.request.urlopen(req, timeout=15) as response:
+            import ssl
+            context = ssl._create_unverified_context()
+            with urllib.request.urlopen(req, timeout=15, context=context) as response:
                 pdf_bytes = response.read()
                 
             reader = pypdf.PdfReader(io.BytesIO(pdf_bytes))
@@ -129,8 +131,12 @@ def scrape_bid_page(url, log_fn=None, headless=False):
     driver = None
     try:
         if log_fn: log_fn("info", f"Opening Chrome (Selenium fallback) → {url}")
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=opts)
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=opts)
+        except Exception as manager_err:
+            if log_fn: log_fn("warn", f"webdriver-manager failed to install, trying Selenium built-in fallback: {manager_err}")
+            driver = webdriver.Chrome(options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
         driver.get(url)
@@ -286,8 +292,12 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
     driver = None
     try:
         log_local("info", f"[{bid_no}] Searching GeM portal for PDF document...")
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=opts)
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=opts)
+        except Exception as manager_err:
+            log_local("warn", f"[{bid_no}] webdriver-manager failed to install, trying Selenium built-in fallback: {manager_err}")
+            driver = webdriver.Chrome(options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
         
         driver.get("https://bidplus.gem.gov.in/all-bids")
@@ -328,7 +338,9 @@ def download_tender_pdf(bid_no, download_dir, log_fn=None, headless=True):
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             }
         )
-        with urllib.request.urlopen(req) as response:
+        import ssl
+        context = ssl._create_unverified_context()
+        with urllib.request.urlopen(req, context=context) as response:
             with open(dest_path, 'wb') as out_file:
                 out_file.write(response.read())
                 
@@ -376,8 +388,12 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
     scraped_count = 0
     try:
         log_local("info", "Starting Chrome for portal scraping...")
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=opts)
+        try:
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=opts)
+        except Exception as manager_err:
+            log_local("warn", f"webdriver-manager failed to install, trying Selenium built-in fallback: {manager_err}")
+            driver = webdriver.Chrome(options=opts)
         driver.execute_script("Object.defineProperty(navigator,'webdriver',{get:()=>undefined})")
 
         driver.get("https://bidplus.gem.gov.in/all-bids")
