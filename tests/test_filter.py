@@ -106,5 +106,40 @@ class TestFilterLogic(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0][1]["bid_no"], "GEM/2026/B/200")
 
+    def test_table_view_date_filtering(self):
+        import tkinter as tk
+        root = tk.Tk()
+        self.app.date_filter_type_var = tk.StringVar(value="Start Date")
+        self.app.date_from_var = tk.StringVar(value="01-07-2026")
+        self.app.date_to_var = tk.StringVar(value="15-07-2026")
+        self.app.view_var = tk.StringVar(value="All Tenders")
+        self.app.search_var = tk.StringVar(value="")
+        
+        class DummyTreeview:
+            def __init__(self):
+                self.items = []
+            def get_children(self):
+                return list(self.items)
+            def delete(self, item):
+                self.items.remove(item)
+            def insert(self, *args, **kwargs):
+                self.items.append("dummy")
+                return "dummy"
+        
+        self.app.tv = DummyTreeview()
+        self.app._refresh_alt = lambda: None
+        self.app._tv_insert = lambda rec: self.app.tv.insert()
+        self.app.count_lbl = tk.Label(root)
+        
+        self.app._records = [
+            {"bid_no": "GEM/2026/B/100", "start_date": "05-07-2026"}, 
+            {"bid_no": "GEM/2026/B/200", "start_date": "20-07-2026"}, 
+            {"bid_no": "GEM/2026/B/300", "start_date": "25-06-2026"}, 
+        ]
+        
+        self.app._refresh_table_view()
+        self.assertEqual(len(self.app.tv.items), 1)
+        root.destroy()
+
 if __name__ == '__main__':
     unittest.main()

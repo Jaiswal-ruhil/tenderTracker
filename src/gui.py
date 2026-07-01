@@ -291,6 +291,31 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         view_opt.pack(side="left", padx=4)
         view_opt.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
         
+        # Date Filter in Table View
+        tk.Label(filter_fr, text="Date Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
+        self.date_filter_type_var = tk.StringVar(value="None")
+        date_filter_cb = ttk.Combobox(filter_fr, textvariable=self.date_filter_type_var,
+                                      values=["None", "Start Date", "End Date", "Bid Opening Date"],
+                                      state="readonly", font=FL, width=12)
+        date_filter_cb.pack(side="left", padx=4)
+        date_filter_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
+
+        tk.Label(filter_fr, text="From:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
+        self.date_from_var = tk.StringVar()
+        self.date_from_var.trace_add("write", lambda *args: self._refresh_table_view())
+        self.date_from_ent = tk.Entry(filter_fr, textvariable=self.date_from_var, bg=CARD, fg=TEXT,
+                                      insertbackground=TEXT, relief="flat", font=FL, width=10,
+                                      highlightthickness=1, highlightbackground="#30363D")
+        self.date_from_ent.pack(side="left")
+
+        tk.Label(filter_fr, text="To:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
+        self.date_to_var = tk.StringVar()
+        self.date_to_var.trace_add("write", lambda *args: self._refresh_table_view())
+        self.date_to_ent = tk.Entry(filter_fr, textvariable=self.date_to_var, bg=CARD, fg=TEXT,
+                                    insertbackground=TEXT, relief="flat", font=FL, width=10,
+                                    highlightthickness=1, highlightbackground="#30363D")
+        self.date_to_ent.pack(side="left")
+        
         # Style Combobox listbox dropdown
         self.option_add("*TCombobox*Listbox.background", CARD)
         self.option_add("*TCombobox*Listbox.foreground", TEXT)
@@ -1445,6 +1470,11 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         view_filter = self.view_var.get()
         search_text = self.search_var.get().strip().lower()
         
+        # Load Date Filters
+        date_filter_type = self.date_filter_type_var.get()
+        from_date_parsed = self._parse_date_str(self.date_from_var.get().strip())
+        to_date_parsed = self._parse_date_str(self.date_to_var.get().strip())
+        
         visible_count = 0
         for rec in self._records:
             is_want = self._get_tender_status(rec, inc_kws, exc_kws)
@@ -1459,6 +1489,26 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 combined_text = " ".join(str(v) for v in rec.values()).lower()
                 if search_text not in combined_text:
                     continue
+            
+            # Apply Date Filtering
+            if date_filter_type != "None":
+                fld_map = {
+                    "Start Date": "start_date",
+                    "End Date": "end_date",
+                    "Bid Opening Date": "bid_opening"
+                }
+                fld_key = fld_map.get(date_filter_type)
+                if fld_key:
+                    bid_date_str = rec.get(fld_key)
+                    bid_date = self._parse_date_str(bid_date_str)
+                    if bid_date:
+                        if from_date_parsed and bid_date < from_date_parsed:
+                            continue
+                        if to_date_parsed and bid_date > to_date_parsed:
+                            continue
+                    else:
+                        if from_date_parsed or to_date_parsed:
+                            continue
                     
             self._tv_insert(rec)
             visible_count += 1
