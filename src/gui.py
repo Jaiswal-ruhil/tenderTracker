@@ -802,11 +802,12 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 else:
                     self._log("info", f"Skipped {bid_no}: Already exists with identical details")
             else:
+                is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+                rec["is_want_derived"] = is_want
                 self._records.append(rec)
                 self._tv_insert(rec)
                 added_count += 1
                 
-                is_want = self._get_tender_status(rec, inc_kws, exc_kws)
                 if is_want:
                     new_wants.append(rec)
                     self._log("ok", f"Added {bid_no} to database (matches Wants)")
@@ -986,6 +987,12 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         added_count = 0
         updated_count = 0
         
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+        
         children = self.tv.get_children()
         records_by_bid = {}
         for iid in children:
@@ -1001,6 +1008,9 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
         for rec in recs:
             bid_no = rec.get("bid_no")
+            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+            rec["is_want_derived"] = is_want
+            
             if bid_no in records_by_bid:
                 existing_rec, iid = records_by_bid[bid_no]
                 merged_fields = []
