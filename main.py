@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
 
-from gui import TenderApp
+from app_gui import TenderApp
 
 if __name__ == "__main__":
     app = TenderApp()

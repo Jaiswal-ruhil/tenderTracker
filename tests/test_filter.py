@@ -5,7 +5,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'core'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src', 'gui'))
 
 import unittest
-from gui import TenderApp
+from app_gui import TenderApp
 
 class TestFilterLogic(unittest.TestCase):
     def setUp(self):

@@ -88,7 +88,7 @@ tenderTracker/
 │   │   ├── scraper.py          # Selenium webdriver crawler logic
 │   │   └── vector_search.py    # FAISS Vector Indexing & Semantic Search
 │   └── gui/                    # Desktop UI windows and tabs
-│       ├── gui.py              # Main UI launcher configuration
+│       ├── app_gui.py          # Main UI launcher configuration
 │       ├── gui_analytics.py    # Responsive analytics and charts
 │       ├── gui_calendar.py     # Hover-animated calendar
 │       ├── gui_dialogs.py      # Popup dialog configurations (rules, tags)
