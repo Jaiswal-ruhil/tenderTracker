@@ -143,6 +143,13 @@ def parse_one(text):
     elif "items" in r:
         r["category"] = map_category(r["items"])
 
+    # Apply custom field value mappings
+    try:
+        import db
+        r = db.apply_value_mappings(r)
+    except Exception:
+        pass
+
     return r
 
 def convert_pdf_text_to_markdown(pdf_text):

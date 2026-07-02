@@ -380,6 +380,34 @@ def unify_organization_names(record, cursor=None):
                 
     return record
 
+def apply_value_mappings(record):
+    """
+    Applies custom user field mapping rules (e.g. mapping phrases to keys for specific headers)
+    to a tender record.
+    """
+    settings = load_settings()
+    mappings = settings.get("value_mappings", [])
+    if not mappings:
+        return record
+
+    def normalize_whitespace(s):
+        if not s:
+            return ""
+        return " ".join(str(s).split()).lower()
+
+    for rule in mappings:
+        field = rule.get("field")
+        phrase = rule.get("phrase")
+        key = rule.get("key")
+        
+        if field and phrase and key and field in record:
+            val = record[field]
+            if val and str(val).strip():
+                if normalize_whitespace(phrase) in normalize_whitespace(val):
+                    record[field] = key
+                    
+    return record
+
 def upsert_tender(record):
     """Insert or update a single tender record. Thread-safe."""
     with _lock:
@@ -387,6 +415,7 @@ def upsert_tender(record):
         if not bid_no:
             return load_all_tenders()
             
+        record = apply_value_mappings(record)
         # Unify organization names before upserting
         record = unify_organization_names(record)
             
@@ -437,6 +466,7 @@ def upsert_tenders(new_records):
                     if not bid_no:
                         continue
                         
+                    record = apply_value_mappings(record)
                     # Unify organization names using existing cursor
                     record = unify_organization_names(record, cursor)
                     

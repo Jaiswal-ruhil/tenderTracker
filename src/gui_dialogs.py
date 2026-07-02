@@ -4,7 +4,7 @@ from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
 
 # Local imports
-from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, FT, FL
+from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, FT, FL, TV_COLS
 import db
 
 class DialogsMixin:
@@ -454,9 +454,11 @@ class DialogsMixin:
         
         tab_filters = tk.Frame(nb, bg=BG)
         tab_mappings = tk.Frame(nb, bg=BG)
+        tab_val_mappings = tk.Frame(nb, bg=BG)
         
         nb.add(tab_filters, text="  Keyword Filters  ")
         nb.add(tab_mappings, text="  Category Mappings  ")
+        nb.add(tab_val_mappings, text="  Field Mappings  ")
 
         # ── Tab 1: Keyword Filters ──
         # ── Include Section ──
@@ -677,6 +679,121 @@ class DialogsMixin:
             
         refresh_cat_list()
 
+        # ── Tab 3: Field Value Mappings ──
+        val_mappings_data = settings.get("value_mappings", [])
+        
+        # Build maps for human-readable labels to DB columns
+        id_to_label = {col[0]: col[1] for col in TV_COLS}
+        label_to_id = {col[1]: col[0] for col in TV_COLS}
+        
+        # Scrollable treeview inside Field Mappings
+        tree_frame = tk.Frame(tab_val_mappings, bg=PANEL, padx=10, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        tree_frame.pack(fill="both", expand=True, padx=15, pady=6)
+        
+        val_cols = ("field", "key", "phrase")
+        val_tree = ttk.Treeview(tree_frame, columns=val_cols, show="headings", height=5)
+        val_tree.heading("field", text="Table Header")
+        val_tree.heading("key", text="Mapped Key")
+        val_tree.heading("phrase", text="Phrases to Link To")
+        
+        val_tree.column("field", width=120, anchor="w")
+        val_tree.column("key", width=100, anchor="w")
+        val_tree.column("phrase", width=260, anchor="w")
+        
+        val_vsb = ttk.Scrollbar(tree_frame, orient="vertical", command=val_tree.yview)
+        val_tree.configure(yscrollcommand=val_vsb.set)
+        val_vsb.pack(side="right", fill="y")
+        val_tree.pack(side="left", fill="both", expand=True)
+        
+        def refresh_val_tree():
+            for row in val_tree.get_children():
+                val_tree.delete(row)
+            for rule in val_mappings_data:
+                field_id = rule.get("field", "")
+                field_lbl = id_to_label.get(field_id, field_id)
+                val_tree.insert("", "end", values=(field_lbl, rule.get("key", ""), rule.get("phrase", "")))
+                
+        refresh_val_tree()
+        
+        # Add New Rule Form
+        input_frame = tk.Frame(tab_val_mappings, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        input_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(input_frame, text="Add New Field Mapping Rule:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 4))
+        
+        tk.Label(input_frame, text="Table Header:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", pady=3)
+        field_labels = sorted(list(id_to_label.values()))
+        field_sel_cb = ttk.Combobox(input_frame, values=field_labels, state="readonly", font=FL)
+        field_sel_cb.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=3)
+        if field_labels:
+            default_sel = "Consignee/Location" if "Consignee/Location" in field_labels else field_labels[0]
+            field_sel_cb.set(default_sel)
+            
+        tk.Label(input_frame, text="Mapped Key:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=3)
+        key_entry_var = tk.StringVar()
+        key_entry = tk.Entry(input_frame, textvariable=key_entry_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL, highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        key_entry.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        tk.Label(input_frame, text="Phrase to Link:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=3, column=0, sticky="nw", pady=3)
+        phrase_txt = tk.Text(input_frame, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL, height=3, highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, wrap="word")
+        phrase_txt.grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        input_frame.columnconfigure(1, weight=1)
+        
+        # Action Buttons
+        btn_row = tk.Frame(tab_val_mappings, bg=BG)
+        btn_row.pack(fill="x", padx=15, pady=4)
+        
+        def add_val_mapping():
+            lbl = field_sel_cb.get()
+            field_id = label_to_id.get(lbl, lbl)
+            key_val = key_entry_var.get().strip()
+            phrase_val = phrase_txt.get("1.0", "end").strip()
+            
+            if not key_val:
+                messagebox.showwarning("Validation Error", "Mapped Key is required.", parent=win)
+                return
+            if not phrase_val:
+                messagebox.showwarning("Validation Error", "Phrase to Link is required.", parent=win)
+                return
+                
+            for rule in val_mappings_data:
+                if rule.get("field") == field_id and rule.get("phrase") == phrase_val:
+                    messagebox.showwarning("Duplicate Rule", "A mapping for this field and phrase already exists.", parent=win)
+                    return
+                    
+            val_mappings_data.append({
+                "field": field_id,
+                "key": key_val,
+                "phrase": phrase_val
+            })
+            key_entry_var.set("")
+            phrase_txt.delete("1.0", "end")
+            refresh_val_tree()
+            
+        def delete_val_mapping():
+            sel = val_tree.selection()
+            if not sel:
+                messagebox.showwarning("No Selection", "Please select a mapping rule to delete.", parent=win)
+                return
+            for iid in sel:
+                vals = val_tree.item(iid, "values")
+                field_lbl, key_val, phrase_val = vals
+                field_id = label_to_id.get(field_lbl, field_lbl)
+                for idx, rule in enumerate(val_mappings_data):
+                    if rule.get("field") == field_id and rule.get("key") == key_val and rule.get("phrase") == phrase_val:
+                        val_mappings_data.pop(idx)
+                        break
+            refresh_val_tree()
+            
+        add_btn = tk.Button(btn_row, text=" + Add Mapping Rule ", command=add_val_mapping)
+        add_btn.pack(side="left", padx=2)
+        style_mini_btn(add_btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT)
+        
+        del_btn = tk.Button(btn_row, text=" 🗑 Delete Rule ", command=delete_val_mapping)
+        del_btn.pack(side="right", padx=2)
+        style_mini_btn(del_btn, normal_bg=CARD, hover_bg="#2A1B1B", fg=ERR)
+
         def save_rules():
             # Save cleaned comma-separated list
             clean_inc = ",".join(k.strip().lower() for k in inc_kws if k.strip())
@@ -690,15 +807,21 @@ class DialogsMixin:
                 clean_kws = [k.strip().lower() for k in m.get("keywords", []) if k.strip()]
                 clean_mappings.append({"name": m["name"].strip(), "keywords": clean_kws})
             db.save_setting("category_mappings", clean_mappings)
+
+            # Save Field Value Mappings
+            db.save_setting("value_mappings", val_mappings_data)
             
             # Re-map all existing tenders in the DB!
             import parser
             for r in self._records:
+                # 1. Apply value mappings first
+                db.apply_value_mappings(r)
+                # 2. Apply category mappings next
                 raw_text = r.get("items") or r.get("category") or ""
                 r["category"] = parser.map_category(raw_text)
                 
             db.save_all_tenders(self._records)
-            self._log("info", "Filter rules and Category mappings updated.")
+            self._log("info", "Filter rules, Category mappings, and Field mappings updated.")
             self._refresh_table_view()
             
             # Refresh other tabs
