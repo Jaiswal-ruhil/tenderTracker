@@ -290,7 +290,7 @@ class TableTabMixin:
         # View dropdown
         tk.Label(filter_fr, text="Category View:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
         
-        self.view_var = tk.StringVar(value="All Tenders")
+        self.view_var = tk.StringVar(value="Wants (Matches)")
         view_opt = ttk.Combobox(filter_fr, textvariable=self.view_var, 
                                 values=["All Tenders", "Wants (Matches)", "Don't Wants (Filtered)"],
                                 state="readonly", font=FL, width=20)
