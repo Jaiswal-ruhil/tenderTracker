@@ -63,13 +63,12 @@ def split_blocks(text):
     return [p.strip() for p in parts if p.strip()]
 
 def parse_one(text):
-    # LLM Parsing if enabled
+    # LLM Parsing as primary (if provider is configured)
     try:
         import db
         settings = db.load_settings()
-        use_llm = settings.get("llm_use_parsing", False)
         provider = settings.get("llm_provider", "Disabled")
-        if use_llm and provider != "Disabled":
+        if provider != "Disabled":
             import llm
             api_key = settings.get("llm_api_key", "")
             base_url = settings.get("llm_base_url", "")
@@ -203,34 +202,11 @@ def parse_one(text):
     except Exception:
         pass
 
-    # Fallback to LLM if regex parsing failed to find a valid bid_no and LLM provider is configured
+    # Warn if the regex parser failed to extract a valid bid number
     has_bid = r.get("bid_no") and re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", r["bid_no"], re.I)
     if not has_bid:
-        try:
-            import db
-            settings = db.load_settings()
-            provider = settings.get("llm_provider", "Disabled")
-            if provider != "Disabled":
-                import llm
-                api_key = settings.get("llm_api_key", "")
-                base_url = settings.get("llm_base_url", "")
-                model = settings.get("llm_model", "")
-                import logger
-                logger.log("info", "Regex parsing failed to find a valid bid number. Invoking LLM fallback parser...")
-                parsed = llm.llm_parse_tender(text, provider, api_key, base_url, model)
-                if parsed and isinstance(parsed, dict) and parsed.get("bid_no"):
-                    if parsed.get("location"):
-                        parsed["location"] = _enrich_location(parsed["location"])
-                    if parsed.get("category"):
-                        parsed["category"] = map_category(parsed["category"])
-                    try:
-                        parsed = db.apply_value_mappings(parsed)
-                    except Exception:
-                        pass
-                    return parsed
-        except Exception as e:
-            import logger
-            logger.log("warn", f"LLM fallback parsing failed: {e}")
+        import logger
+        logger.log("warn", "Regex parsing failed to find a valid bid number.")
 
     return r
 
