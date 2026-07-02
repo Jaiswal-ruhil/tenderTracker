@@ -1,3 +1,4 @@
+# FAISS Vector Indexing & Semantic Search module
 import faiss
 import numpy as np
 import json
