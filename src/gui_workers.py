@@ -510,29 +510,58 @@ class WorkersMixin:
                 self.after(0, lambda: self._log("info", f"Fetching details for {bid}"))
                 if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=("fetching",)))
                 
+                extra = None
                 try:
                     headless_opt = db.load_settings().get("selenium_headless", False)
                     extra = scrape_bid_page(url, log_fn=self._log, headless=headless_opt)
-                    if extra:
-                        rec.update(extra)
-                        rec["is_fetched"] = True
-                        
-                        def update_tv(i=iid, r=rec, e=extra):
-                            if i:
-                                for cid in TV_IDS:
-                                    if cid in r:
-                                        self.tv.set(i, cid, r[cid])
-                                self.tv.item(i, tags=("fetched",))
-                            db.upsert_tender(r)
-                            
-                        self.after(0, update_tv)
-                        self.after(0, lambda e_len=len(extra): self._log("ok", f"{bid} — merged {e_len} extra fields"))
-                    else:
-                        if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=()))
-                        self.after(0, lambda: self._log("warn", f"{bid} — no extra data scraped"))
                 except Exception as ex:
+                    self.after(0, lambda b=bid, err=ex: self._log("err", f"Selenium scraping error for {b}: {err}"))
+                    
+                # LLM Rescue if Selenium failed or returned incomplete/empty results
+                if not extra:
+                    try:
+                        settings = db.load_settings()
+                        provider = settings.get("llm_provider", "Disabled")
+                        if provider != "Disabled":
+                            self.after(0, lambda: self._log("info", f"Selenium failed. Attempting LLM rescue via PDF download for {bid}..."))
+                            dl_dir = os.path.dirname(db.DB_FILE)
+                            pdf_path = download_tender_pdf(url, dl_dir, log_fn=self._log, headless=headless_opt)
+                            if pdf_path and os.path.exists(pdf_path):
+                                reader = pypdf.PdfReader(pdf_path)
+                                pdf_text = ""
+                                for page in reader.pages:
+                                    t = page.extract_text()
+                                    if t:
+                                        pdf_text += t + "\n"
+                                md_text = convert_pdf_text_to_markdown(pdf_text)
+                                import llm
+                                api_key = settings.get("llm_api_key", "")
+                                base_url = settings.get("llm_base_url", "")
+                                model = settings.get("llm_model", "")
+                                parsed = llm.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                                if parsed and isinstance(parsed, dict) and parsed.get("bid_no"):
+                                    extra = parsed
+                                    rec["pdf_path"] = os.path.abspath(pdf_path)
+                    except Exception as rescue_err:
+                        self.after(0, lambda b=bid, err=rescue_err: self._log("err", f"LLM rescue failed for {b}: {err}"))
+                
+                if extra:
+                    rec.update(extra)
+                    rec["is_fetched"] = True
+                    
+                    def update_tv(i=iid, r=rec, e=extra):
+                        if i:
+                            for cid in TV_IDS:
+                                if cid in r:
+                                    self.tv.set(i, cid, r[cid])
+                            self.tv.item(i, tags=("fetched",))
+                        db.upsert_tender(r)
+                        
+                    self.after(0, update_tv)
+                    self.after(0, lambda e_len=len(extra): self._log("ok", f"{bid} — merged {e_len} extra fields"))
+                else:
                     if iid: self.after(0, lambda i=iid: self.tv.item(i, tags=()))
-                    self.after(0, lambda b=bid, err=ex: self._log("err", f"Failed to fetch details for {b}: {err}"))
+                    self.after(0, lambda: self._log("warn", f"{bid} — no extra data scraped"))
 
             with ThreadPoolExecutor(max_workers=2) as executor:
                 futures = {executor.submit(fetch_one, idx, rec): rec for idx, rec in targets}

@@ -243,6 +243,29 @@ def scrape_bid_page(url, log_fn=None, headless=False):
         # Remove empty values
         extra = {k:v for k,v in extra.items() if v}
 
+        # Check if scraped data is incomplete (e.g. missing both dept and location)
+        has_min_details = extra.get("dept") or extra.get("location")
+        if not has_min_details:
+            try:
+                import db
+                settings = db.load_settings()
+                provider = settings.get("llm_provider", "Disabled")
+                if provider != "Disabled":
+                    if log_fn: log_fn("info", "Selenium extraction returned incomplete data. Invoking LLM to parse page body text...")
+                    page_text = driver.find_element("tag name", "body").text
+                    import llm
+                    api_key = settings.get("llm_api_key", "")
+                    base_url = settings.get("llm_base_url", "")
+                    model = settings.get("llm_model", "")
+                    parsed = llm.llm_parse_tender(page_text, provider, api_key, base_url, model)
+                    if parsed and isinstance(parsed, dict):
+                        # Merge LLM parsed fields into extra
+                        for k, v in parsed.items():
+                            if v and not extra.get(k):
+                                extra[k] = v
+            except Exception as llm_err:
+                if log_fn: log_fn("warn", f"LLM page body parsing failed: {llm_err}")
+
         if log_fn:
             log_fn("ok", f"Scraped {len(extra)} extra fields from HTML: {', '.join(extra.keys())}")
 

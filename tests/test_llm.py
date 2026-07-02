@@ -189,5 +189,91 @@ class TestLLM(unittest.TestCase):
         res = parser.map_category("Stainless Steel Screen")
         self.assertEqual(res, "Ni Screen")
 
+    @patch('urllib.request.urlopen')
+    def test_auto_load_local_model_already_loaded(self, mock_urlopen):
+        # Mock /v1/models returning our model already loaded
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{"data": [{"id": "my-local-model"}]}'
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+        
+        # Call it. It should make a GET request to /models and return immediately without POSTing to load or pull
+        llm.auto_load_local_model("http://localhost:1234/v1", "my-local-model")
+        
+        # Verify it was called once
+        self.assertEqual(mock_urlopen.call_count, 1)
+
+    @patch('urllib.request.urlopen')
+    def test_auto_load_local_model_triggers_load(self, mock_urlopen):
+        # Mock /v1/models returning empty (needs load)
+        mock_response_list = MagicMock()
+        mock_response_list.read.return_value = b'{"data": []}'
+        mock_response_list.__enter__.return_value = mock_response_list
+        
+        # Mock /load endpoint returning success
+        mock_response_load = MagicMock()
+        mock_response_load.read.return_value = b'{"status": "success"}'
+        mock_response_load.__enter__.return_value = mock_response_load
+        
+        mock_urlopen.side_effect = [mock_response_list, mock_response_load]
+        
+        llm.auto_load_local_model("http://localhost:1234/v1", "my-local-model")
+        
+        # Verify it did a GET to /models and then a POST to load
+        self.assertEqual(mock_urlopen.call_count, 2)
+
+    @patch('llm.llm_parse_tender')
+    def test_parser_level_1_regex_fail_llm_fallback(self, mock_llm_parse):
+        # Enable LLM provider but keep use_parsing disabled
+        db.save_setting("llm_provider", "Google AI Studio (Gemini)")
+        db.save_setting("llm_api_key", "test_key")
+        db.save_setting("llm_use_parsing", False)
+
+        mock_llm_parse.return_value = {
+            "bid_no": "GEM/2026/B/99999",
+            "category": "Cable",
+            "items": "Armoured Cable"
+        }
+
+        # Raw text without valid bid no format
+        text = "This is a random text block without any bid number."
+        r = parser.parse_one(text)
+        self.assertEqual(r["bid_no"], "GEM/2026/B/99999")
+        self.assertTrue(mock_llm_parse.called)
+
+    @patch('scraper._try_import_selenium')
+    @patch('llm.llm_parse_tender')
+    def test_scrape_bid_page_incomplete_llm_fallback(self, mock_llm_parse, mock_selenium_import):
+        # Mock selenium imports
+        mock_driver = MagicMock()
+        mock_selenium_import.return_value = (
+            MagicMock(), # webdriver
+            MagicMock(), # Options
+            MagicMock(), # Service
+            MagicMock(), # By
+            MagicMock(), # WebDriverWait
+            MagicMock(), # EC
+            MagicMock()  # ChromeDriverManager
+        )
+        
+        # Mock webdriver instance
+        mock_selenium_import.return_value[0].Chrome.return_value = mock_driver
+        mock_driver.page_source = "<html><body>Some page text</body></html>"
+        mock_driver.find_element.return_value.text = "Some body text"
+        
+        # Enable LLM
+        db.save_setting("llm_provider", "Google AI Studio (Gemini)")
+        db.save_setting("llm_api_key", "test_key")
+        
+        mock_llm_parse.return_value = {
+            "bid_no": "GEM/2026/B/12345",
+            "location": "New Delhi"
+        }
+        
+        from scraper import scrape_bid_page
+        res = scrape_bid_page("https://bidplus.gem.gov.in/showbidDocument/12345")
+        self.assertEqual(res.get("location"), "New Delhi")
+        self.assertTrue(mock_llm_parse.called)
+
 if __name__ == '__main__':
     unittest.main()
