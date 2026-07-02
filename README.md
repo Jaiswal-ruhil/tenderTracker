@@ -32,14 +32,19 @@ flowchart TD
         B --> C{Is PDF Path?}
         C -->|Yes| D[Parse local PDF file]
         C -->|No| E[Parse text metadata block]
+        E -->|Regex Fails| E_LLM[LLM Fallback Parser]
+        E_LLM -->|RAG memory lookup| DB_RAG[(SQLite Past Examples)]
+        DB_RAG -->|Few-Shot Inject| E_LLM
     end
 
     subgraph Database Check & Fetching
-        D & E --> F{Is in SQLite 'Don't Wants'?}
+        D & E & E_LLM --> F{Is in SQLite 'Don't Wants'?}
         F -->|Yes| G[Skip block / Ignore]
         F -->|No| H{Has full details?}
         H -->|Yes| I[Use parsed details]
-        H -->|No| J[Concurrent Selenium Crawl / PDF download]
+        H -->|No| J[Concurrent Selenium Crawl]
+        J -->|Incomplete/Failed| J_LLM[LLM Scraper Rescue / PDF extract]
+        J_LLM --> I
     end
 
     subgraph Storage & Filtering
@@ -48,11 +53,16 @@ flowchart TD
         L --> M{Matches 'Wants'?}
         M -->|Yes| N[Trigger Custom Match Toast Notification]
         M -->|No| O[Save as Don't Want / Hide in Table View]
+        K -->|Async Sync| FAISS_BG[Background Embedding Worker]
+        FAISS_BG -->|Cache Vector| K
+        FAISS_BG -->|Update Index| FAISS_DB[[FAISS In-Memory Vector Index]]
     end
 
     subgraph UI & Output
         N & O --> P[Update UI Views: Table, Calendar, Matrix, Analytics]
         P --> Q[Copy Rows to Clipboard / Export formatted Excel]
+        R[User Semantic Search Query] -->|Embedding API| FAISS_DB
+        FAISS_DB -->|Rank & Re-order| P
     end
 ```
 
