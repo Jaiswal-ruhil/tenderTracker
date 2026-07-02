@@ -9,7 +9,7 @@ import webbrowser
 # Local imports
 import db
 from config import (
-    BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, SUCCESS, ERR, WARN,
+    BG, PANEL, CARD, ACCENT, ACCENT2, MUTED, TEXT, TEXTSUB, SUCCESS, ERR, WARN, SEL_BG,
     FL, FB, FT, TV_IDS
 )
 
@@ -25,17 +25,17 @@ class CalendarTabMixin:
         self.cal_pane.add(left_fr, minsize=500, stretch="always")
 
         # Month Navigation Bar
-        nav_fr = tk.Frame(left_fr, bg=PANEL, pady=6, padx=10,
+        nav_fr = tk.Frame(left_fr, bg=PANEL, pady=8, padx=12,
                           highlightthickness=1, highlightbackground="#30363D")
         nav_fr.pack(fill="x", pady=(0, 6))
 
-        self.cal_prev_btn = self._btn(nav_fr, " ◀ ", self._cal_prev_month, bg=CARD)
+        self.cal_prev_btn = self._btn(nav_fr, "  ◀  ", self._cal_prev_month, bg=CARD)
         self.cal_prev_btn.pack(side="left")
 
         self.cal_month_lbl = tk.Label(nav_fr, text="", font=FT, bg=PANEL, fg=TEXT)
         self.cal_month_lbl.pack(side="left", expand=True)
 
-        self.cal_next_btn = self._btn(nav_fr, " ▶ ", self._cal_next_month, bg=CARD)
+        self.cal_next_btn = self._btn(nav_fr, "  ▶  ", self._cal_next_month, bg=CARD)
         self.cal_next_btn.pack(side="right")
 
         # Grid of Days (Mon to Sun headers + 6 weeks of cards)
@@ -46,8 +46,8 @@ class CalendarTabMixin:
         weekdays = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
         for idx, day in enumerate(weekdays):
             self.cal_grid_fr.columnconfigure(idx, weight=1, uniform="daycol")
-            lbl = tk.Label(self.cal_grid_fr, text=day[:3], font=("Segoe UI", 9, "bold"),
-                           bg=BG, fg=MUTED, pady=4)
+            lbl = tk.Label(self.cal_grid_fr, text=day[:3].upper(), font=("Segoe UI", 9, "bold"),
+                           bg=BG, fg=MUTED, pady=6)
             lbl.grid(row=0, column=idx, sticky="ew")
 
         # 6 rows for weeks
@@ -60,7 +60,7 @@ class CalendarTabMixin:
 
         # Selected Date Label Header
         self.cal_sel_date_lbl = tk.Label(right_fr, text="", font=("Segoe UI", 10, "bold"),
-                                         bg=PANEL, fg=ACCENT2, pady=8, wraplength=300)
+                                         bg=PANEL, fg=ACCENT2, pady=10, wraplength=300)
         self.cal_sel_date_lbl.pack(fill="x", padx=10)
 
         # Divider line
@@ -180,7 +180,7 @@ class CalendarTabMixin:
         return events
 
     def _update_calendar(self):
-        self.cal_month_lbl.configure(text=f"{calendar.month_name[self.cal_month]} {self.cal_year}")
+        self.cal_month_lbl.configure(text=f"{calendar.month_name[self.cal_month]} {self.cal_year}".upper())
         
         for frame in self.cal_day_frames:
             try: frame.destroy()
@@ -213,7 +213,7 @@ class CalendarTabMixin:
                 day_card.grid(row=r_idx, column=c_idx, sticky="nsew", padx=2, pady=2)
                 self.cal_day_frames.append(day_card)
                 
-                # Check selection / today
+                # Check selection / today highlights
                 if dt == self.cal_selected_date:
                     day_card.configure(highlightbackground=ACCENT2, highlightthickness=2)
                 elif dt == datetime.now().date():
@@ -221,7 +221,7 @@ class CalendarTabMixin:
                     
                 num_lbl = tk.Label(day_card, text=str(dt.day), font=("Segoe UI", 9, "bold"),
                                    bg=card_bg, fg=text_color)
-                num_lbl.pack(anchor="ne", padx=4, pady=2)
+                num_lbl.pack(anchor="ne", padx=6, pady=3)
                 
                 events = self._get_events_for_date(dt, inc_kws, exc_kws)
                 
@@ -229,24 +229,41 @@ class CalendarTabMixin:
                     evt_type, r = evt
                     bid = r.get("bid_no", "GEM/...")
                     bid_short = bid.split("/")[-1] if "/" in bid else bid
-                    txt = f"{evt_type.upper()}: {bid_short}"
+                    txt = f" {evt_type.upper()[:5]}: {bid_short}"
                     
                     if evt_type == "end":
-                        fg_c, bg_c = "#FF6B6B", "#2A1D1D"
+                        fg_c, bg_c = "#FF6B6B", "#2D1E1E"
                     elif evt_type == "opening":
-                        fg_c, bg_c = SUCCESS, "#1A2E1A"
+                        fg_c, bg_c = SUCCESS, "#1E2D1E"
                     else:
-                        fg_c, bg_c = ACCENT2, "#1A2A3A"
+                        fg_c, bg_c = ACCENT2, "#1D2837"
                         
                     evt_lbl = tk.Label(day_card, text=txt, font=("Segoe UI", 7, "bold"),
-                                       bg=bg_c, fg=fg_c, anchor="w", padx=4, pady=1)
+                                       bg=bg_c, fg=fg_c, anchor="w", padx=4, pady=2)
                     evt_lbl.pack(fill="x", padx=4, pady=1)
                     
                 if len(events) > 2:
-                    more_lbl = tk.Label(day_card, text=f"+{len(events)-2} more",
+                    more_lbl = tk.Label(day_card, text=f"+{len(events)-2} MORE",
                                         font=("Segoe UI", 7, "bold"), bg=card_bg, fg=MUTED, anchor="center")
-                    more_lbl.pack(fill="x", padx=4, pady=1)
-                    
+                    more_lbl.pack(fill="x", padx=4, pady=2)
+
+                # Smooth hover highlights for premium look and feel
+                def on_enter(event, card=day_card, original_bg=card_bg):
+                    hover_bg = "#2C313C" if original_bg == CARD else "#1C212D"
+                    card.configure(bg=hover_bg)
+                    for child in card.winfo_children():
+                        if child.cget("bg") == original_bg:
+                            child.configure(bg=hover_bg)
+
+                def on_leave(event, card=day_card, original_bg=card_bg):
+                    card.configure(bg=original_bg)
+                    for child in card.winfo_children():
+                        if child.cget("bg") in ("#2C313C", "#1C212D"):
+                            child.configure(bg=original_bg)
+
+                day_card.bind("<Enter>", on_enter)
+                day_card.bind("<Leave>", on_leave)
+
                 def make_clickable(widget, date_val=dt):
                     widget.bind("<Button-1>", lambda e: self._select_date(date_val))
                 
@@ -267,7 +284,7 @@ class CalendarTabMixin:
             child.destroy()
 
         date_str = self.cal_selected_date.strftime("%A, %b %d, %Y")
-        self.cal_sel_date_lbl.configure(text=f"Events for:\n{date_str}")
+        self.cal_sel_date_lbl.configure(text=f"EVENTS FOR:\n{date_str}".upper())
 
         # Load keywords once to filter Wants in details view
         settings = db.load_settings()
@@ -279,7 +296,7 @@ class CalendarTabMixin:
         events = self._get_events_for_date(self.cal_selected_date, inc_kws, exc_kws)
         if not events:
             lbl = tk.Label(self.cal_details_fr, text="No events on this day.", font=FL, bg=PANEL, fg=MUTED)
-            lbl.pack(pady=20)
+            lbl.pack(pady=30)
             return
 
         tenders_events = {}
@@ -293,26 +310,26 @@ class CalendarTabMixin:
             rec = val["rec"]
             types = val["types"]
             
-            card_fr = tk.Frame(self.cal_details_fr, bg=CARD, highlightthickness=1, highlightbackground="#30363D", padx=10, pady=8)
-            card_fr.pack(fill="x", padx=10, pady=5)
+            card_fr = tk.Frame(self.cal_details_fr, bg=CARD, highlightthickness=1, highlightbackground="#30363D", padx=12, pady=10)
+            card_fr.pack(fill="x", padx=10, pady=6)
             
             tk.Label(card_fr, text=rec.get("bid_no","GEM/..."), font=("Segoe UI", 9, "bold"), bg=CARD, fg=TEXT, anchor="w").pack(fill="x")
             
             items = rec.get("items", rec.get("category", "N/A"))
-            if len(items) > 60:
-                items = items[:57] + "..."
-            tk.Label(card_fr, text=items, font=("Segoe UI", 8), bg=CARD, fg=TEXTSUB, anchor="w", justify="left", wraplength=260).pack(fill="x", pady=2)
+            if len(items) > 70:
+                items = items[:67] + "..."
+            tk.Label(card_fr, text=items, font=("Segoe UI", 8), bg=CARD, fg=TEXTSUB, anchor="w", justify="left", wraplength=250).pack(fill="x", pady=2)
             
             tags_row = tk.Frame(card_fr, bg=CARD)
-            tags_row.pack(fill="x", pady=2)
+            tags_row.pack(fill="x", pady=4)
             for t in types:
                 if t == "end":
-                    lbl_text, fg, bg = "DEADLINE / END", "#FF6B6B", "#2A1D1D"
+                    lbl_text, fg, bg = "DEADLINE / END", "#FF6B6B", "#2D1E1E"
                 elif t == "opening":
-                    lbl_text, fg, bg = "BID OPENING", SUCCESS, "#1A2E1A"
+                    lbl_text, fg, bg = "BID OPENING", SUCCESS, "#1E2D1E"
                 else:
-                    lbl_text, fg, bg = "START DATE", ACCENT2, "#1A2A3A"
-                tk.Label(tags_row, text=lbl_text, font=("Segoe UI", 7, "bold"), bg=bg, fg=fg, padx=4, pady=1).pack(side="left", padx=(0,4))
+                    lbl_text, fg, bg = "START DATE", ACCENT2, "#1D2837"
+                tk.Label(tags_row, text=lbl_text, font=("Segoe UI", 7, "bold"), bg=bg, fg=fg, padx=5, pady=2).pack(side="left", padx=(0,4))
                 
             dates_fr = tk.Frame(card_fr, bg=CARD)
             dates_fr.pack(fill="x", pady=2)
@@ -321,7 +338,7 @@ class CalendarTabMixin:
                 if val:
                     r_fr = tk.Frame(dates_fr, bg=CARD)
                     r_fr.pack(fill="x")
-                    tk.Label(r_fr, text=lbl, font=("Segoe UI", 8), bg=CARD, fg=MUTED, width=10, anchor="w").pack(side="left")
+                    tk.Label(r_fr, text=lbl, font=("Segoe UI", 8), bg=CARD, fg=MUTED, width=11, anchor="w").pack(side="left")
                     tk.Label(r_fr, text=val, font=("Segoe UI", 8), bg=CARD, fg=TEXTSUB, anchor="w").pack(side="left")
                     
             add_date_row("End Date:", rec.get("end_date"))
@@ -329,7 +346,7 @@ class CalendarTabMixin:
             add_date_row("Start Date:", rec.get("start_date"))
             
             act_fr = tk.Frame(card_fr, bg=CARD)
-            act_fr.pack(fill="x", pady=(6, 0))
+            act_fr.pack(fill="x", pady=(8, 0))
             
             if rec.get("bid_url"):
                 def make_open_url(url=rec["bid_url"]):

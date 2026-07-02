@@ -3,7 +3,7 @@ import tkinter as tk
 from tkinter import ttk
 
 # Local imports
-from config import BG, PANEL, CARD, MUTED, TEXT, SUCCESS, ERR, WARN, FL, FB, FT
+from config import BG, PANEL, CARD, MUTED, TEXT, SUCCESS, ERR, WARN, FL, FB, FT, ACCENT2
 import db
 
 class AnalyticsTabMixin:
@@ -38,6 +38,7 @@ class AnalyticsTabMixin:
         
         bottom_fr.columnconfigure(0, weight=1)
         bottom_fr.columnconfigure(1, weight=1)
+        bottom_fr.rowconfigure(0, weight=1)
         
         # Left Panel: Top Ministries Chart
         chart_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
@@ -46,6 +47,9 @@ class AnalyticsTabMixin:
         
         self.chart_canvas = tk.Canvas(chart_fr, bg=PANEL, highlightthickness=0, height=260)
         self.chart_canvas.pack(fill="both", expand=True)
+        
+        # Bind Configure event to make the chart canvas responsive!
+        self.chart_canvas.bind("<Configure>", lambda e: self._redraw_chart())
         
         # Right Panel: Upcoming Deadlines
         deadlines_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
@@ -86,6 +90,8 @@ class AnalyticsTabMixin:
         self.deadlines_scroll.pack(side="right", fill="y")
         self.deadlines_list.pack(side="left", fill="both", expand=True)
 
+        self._last_ministry_data = []
+
     def _update_analytics(self):
         total = len(self._records)
         wants = 0
@@ -124,47 +130,9 @@ class AnalyticsTabMixin:
         self.lbl_filtered_dont_wants.configure(text=str(dont_wants))
         self.lbl_not_filed.configure(text=str(not_filed))
         
-        # Draw ministries bar chart
-        self.chart_canvas.delete("all")
-        sorted_mins = sorted(ministry_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-        
-        if not sorted_mins:
-            self.chart_canvas.create_text(150, 100, text="No ministry data available", fill=MUTED, font=FL)
-        else:
-            max_count = sorted_mins[0][1]
-            canvas_w = self.chart_canvas.winfo_width() or 300
-            bar_max_w = max(100, canvas_w - 200)
-            
-            # Draw background grid lines and labels
-            for ratio in [0.25, 0.5, 0.75, 1.0]:
-                grid_x = 130 + int(ratio * bar_max_w)
-                grid_val = int(ratio * max_count)
-                # Draw vertical grid line
-                self.chart_canvas.create_line(grid_x, 15, grid_x, 240, fill="#21262D", dash=(3, 3))
-                # Label at bottom
-                self.chart_canvas.create_text(grid_x, 248, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
-                
-            for idx, (min_name, count) in enumerate(sorted_mins):
-                y_offset = idx * 46 + 32
-                disp_name = min_name[:18] + "..." if len(min_name) > 18 else min_name
-                
-                # Draw label
-                self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w")
-                
-                bar_w = int((count / max_count) * bar_max_w)
-                bar_w = max(4, bar_w)
-                
-                # Color coding: top gets bright blue, others get standard accent blue
-                bar_color = "#388BFD" if idx == 0 else "#1F6FEB"
-                
-                # Draw drop shadow (offset by 2px down/right)
-                self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13")
-                
-                # Draw rounded bar
-                self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color)
-                
-                # Draw count label
-                self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
+        # Save last ministry count sorted list for redrawing on configure
+        self._last_ministry_data = sorted(ministry_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        self._redraw_chart()
 
         # Update deadlines
         for child in self.deadlines_inner_fr.winfo_children():
@@ -178,19 +146,22 @@ class AnalyticsTabMixin:
             lbl.pack(pady=30)
         else:
             for dt, end_str, r in display_deadlines:
-                row = tk.Frame(self.deadlines_inner_fr, bg=PANEL, pady=6)
+                row = tk.Frame(self.deadlines_inner_fr, bg=PANEL, pady=8)
                 row.pack(fill="x", padx=10)
                 
                 days_left = (dt - datetime.now().date()).days
                 if days_left == 0:
                     status_lbl = "TODAY"
                     status_color = ERR
+                    status_bg = "#2A1D1D"
                 elif days_left == 1:
-                    status_lbl = "1 day left"
+                    status_lbl = "1 DAY LEFT"
                     status_color = ERR
+                    status_bg = "#2A1D1D"
                 else:
-                    status_lbl = f"{days_left} days left"
+                    status_lbl = f"{days_left} DAYS LEFT"
                     status_color = WARN if days_left < 4 else SUCCESS
+                    status_bg = "#2D261A" if days_left < 4 else "#1E2D1E"
                     
                 lbl_left = tk.Label(row, text=r.get("bid_no", ""), font=FB, bg=PANEL, fg=TEXT, width=18, anchor="w")
                 lbl_left.pack(side="left")
@@ -198,8 +169,54 @@ class AnalyticsTabMixin:
                 lbl_mid = tk.Label(row, text=r.get("items", "")[:25], font=FL, bg=PANEL, fg=MUTED, anchor="w")
                 lbl_mid.pack(side="left", fill="x", expand=True, padx=10)
                 
-                lbl_right = tk.Label(row, text=status_lbl, font=FB, bg=PANEL, fg=status_color, width=12, anchor="e")
-                lbl_right.pack(side="right")
+                # Modern styled status badge
+                badge = tk.Label(row, text=status_lbl, font=("Segoe UI", 8, "bold"), bg=status_bg, fg=status_color, padx=6, pady=2)
+                badge.pack(side="right")
                 
                 sep = tk.Frame(self.deadlines_inner_fr, bg="#30363D", height=1)
                 sep.pack(fill="x", padx=10)
+
+    def _redraw_chart(self):
+        self.chart_canvas.delete("all")
+        if not self._last_ministry_data:
+            self.chart_canvas.create_text(150, 100, text="No ministry data available", fill=MUTED, font=FL)
+            return
+
+        max_count = self._last_ministry_data[0][1]
+        canvas_w = self.chart_canvas.winfo_width()
+        # If canvas is not yet initialized or zero size, default to 320
+        if canvas_w < 50:
+            canvas_w = 320
+            
+        bar_max_w = max(100, canvas_w - 220)
+        
+        # Draw background grid lines and labels
+        for ratio in [0.25, 0.5, 0.75, 1.0]:
+            grid_x = 130 + int(ratio * bar_max_w)
+            grid_val = int(ratio * max_count)
+            # Draw vertical grid line
+            self.chart_canvas.create_line(grid_x, 15, grid_x, 240, fill="#21262D", dash=(3, 3))
+            # Label at bottom
+            self.chart_canvas.create_text(grid_x, 248, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
+            
+        for idx, (min_name, count) in enumerate(self._last_ministry_data):
+            y_offset = idx * 46 + 32
+            disp_name = min_name[:18] + "..." if len(min_name) > 18 else min_name
+            
+            # Draw label
+            self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w")
+            
+            bar_w = int((count / max_count) * bar_max_w)
+            bar_w = max(4, bar_w)
+            
+            # Color coding: top gets bright blue, others get standard accent blue
+            bar_color = "#388BFD" if idx == 0 else "#1F6FEB"
+            
+            # Draw drop shadow (offset by 2px down/right)
+            self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13")
+            
+            # Draw rounded bar
+            self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color)
+            
+            # Draw count label
+            self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
