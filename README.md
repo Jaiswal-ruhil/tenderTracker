@@ -7,10 +7,14 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 ## Key Features
 
 * **Sleek Custom Desktop UI**: Modern dark-themed dashboard with HSL panels, interactive data tables (Treeview), styled progress meters, and dynamic action logs.
+* **Hybrid SQL + Vector DB Search**: SQLite metadata combined with an in-memory FAISS vector index, allowing real-time semantic query searches across tenders (e.g., finding relevant bids based on conceptual descriptions).
+* **Local LLM Auto-Loading**: Auto-loads local models on-demand in LM Studio (`/api/v1/models/load`) or pulls models in Ollama (`/api/pull`) when needed, preventing cold-start errors.
+* **Retrieval-Augmented Generation (RAG) Memory**: Continuous active learning using past tender classifications and category mappings directly injected as few-shot examples inside LLM prompts.
+* **Multi-Stage Parser Fallbacks**: Multi-stage parsing layers (Regex -> LLM page scraping -> PDF extraction rescue) to maximize successful data extraction.
+* **Visual Analytics Hub**: Responsive, configure-bound ministries bar chart that auto-resizes, alongside a dark-themed calendar with smooth hover cell micro-animations.
 * **SQLite Database Backend**: Self-healing SQLite3 database (`tenders_db.db`) replacing flat JSON files, featuring transaction timeouts, concurrent lock protection, and automatic backward-compatible migration of legacy JSON records.
 * **Concurrent Ingestion Engine**: Parallel pipelines using `ThreadPoolExecutor` (max 3 workers for PDF downloads, max 2 workers for Selenium scraping) to optimize crawling speeds without blocking the UI.
 * **Advanced Logical Rules Filter**: Advanced boolean matching (`AND`, `OR`, `NOT` grouping with parentheses) and regular expressions prefixed with `rx:` to refine "Want" alerts.
-* **Visual Analytics Hub**: Interactive dashboard tab rendering custom-drawn ministry bar charts, deadline status progress, and metric status cards.
 * **Custom Toast Alerts**: Border-accented bottom-right notifications that fade out smoothly via alpha blending when new matching tenders are parsed or when crawls complete.
 * **Tags System & Multi-Tag Selection**: A custom-made tags manager allows defining, deleting, and assigning multiple color-coded tag labels to tenders.
 * **Export & Copy Table**: Export formatted Excel spreadsheets (e.g. `Tenders_FY_2026-27.xlsx`) or copy table selections directly to the clipboard in tab-separated (TSV) values.
@@ -59,22 +63,43 @@ flowchart TD
 ```text
 tenderTracker/
 ├── .github/workflows/
-│   └── build.yml             # GitHub Actions CI build & release pipeline
+│   └── build.yml               # GitHub Actions CI build & release pipeline
 ├── .git/hooks/
-│   └── pre-commit            # Local git hook running unit tests
-├── src/                      # Application source modules
-│   ├── config.py             # Theme styles, fonts, and Treeview layout
-│   ├── excel.py              # Financial year and Excel workbook helpers
-│   ├── gui.py                # Main UI layout, event loop, and workers
-│   ├── parser.py             # Clipboard block and PDF parsing logic
-│   └── scraper.py            # Selenium webdriver crawler logic
-├── tests/
-│   └── test_parser.py        # Comprehensive test suite covering parser regexes
+│   └── pre-commit              # Local git hook running unit tests
+├── src/                        # Application source modules
+│   ├── core/                   # Core business logic and database models
+│   │   ├── config.py           # Theme styles, fonts, and Treeview layout
+│   │   ├── db.py               # SQLite database mapping and settings management
+│   │   ├── excel.py            # Financial year and Excel workbook helpers
+│   │   ├── geocode.py          # Location lookup helpers
+│   │   ├── llm.py              # LLM connectivity, auto-loading, and RAG logic
+│   │   ├── logger.py           # Logging configuration
+│   │   ├── parser.py           # Clipboard block and PDF parsing logic
+│   │   ├── scraper.py          # Selenium webdriver crawler logic
+│   │   └── vector_search.py    # FAISS Vector Indexing & Semantic Search
+│   └── gui/                    # Desktop UI windows and tabs
+│       ├── gui.py              # Main UI launcher configuration
+│       ├── gui_analytics.py    # Responsive analytics and charts
+│       ├── gui_calendar.py     # Hover-animated calendar
+│       ├── gui_dialogs.py      # Popup dialog configurations (rules, tags)
+│       ├── gui_matrix.py       # Matrix View tab
+│       ├── gui_table_tab.py    # Main table dashboard tab
+│       └── gui_workers.py      # Background scraping and parsing workers
+├── tests/                      # Core test suites
+│   ├── test_db.py
+│   ├── test_download.py
+│   ├── test_excel.py
+│   ├── test_filter.py
+│   ├── test_llm.py
+│   ├── test_parser.py
+│   ├── test_value_mappings.py
+│   └── test_vector_search.py   # FAISS semantic search unit tests
 ├── sample/
-│   └── GeM-Bidding-9520877.pdf # Sample GeM bidding PDF for testing
-├── main.py                   # Entry point launcher script
-├── requirements.txt          # Third-party Python dependencies
-└── README.md                 # Project documentation
+│   └── GeM-Bidding-9520877.pdf   # Sample GeM bidding PDF for testing
+├── build.py                    # Build, dependency checks, and PyInstaller builder script
+├── main.py                     # Entry point launcher script
+├── requirements.txt            # Third-party Python dependencies
+└── README.md                   # Project documentation
 ```
 
 ---
@@ -107,17 +132,17 @@ python main.py
 
 ### Run Unit Tests
 ```bash
-python -m unittest tests/test_parser.py
+python -m unittest discover tests
 ```
 
 ---
 
 ## Standalone Executable Compilation
 
-To compile a standalone, self-signed Windows executable (`TenderTracker.exe`) containing all Webdriver and styling resources:
+To compile a standalone, self-signed Windows executable (`TenderTracker.exe`) with pre-commit validation and FAISS / Selenium resource bundling:
 
 ```bash
-python -m PyInstaller --onefile --name "TenderTracker" --paths src --collect-all selenium --collect-all webdriver_manager --hidden-import pandas --hidden-import openpyxl --hidden-import openpyxl.styles --hidden-import openpyxl.utils --noconsole main.py
+python build.py
 ```
 
 The compiled binary will be located inside the `dist/` directory.
