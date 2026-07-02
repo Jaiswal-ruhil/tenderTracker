@@ -15,6 +15,7 @@ from config import (
 import db
 from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf, scrape_portal_search
+from vector_search import start_background_embedding_worker
 
 class WorkersMixin:
     def _do_parse(self):
@@ -237,6 +238,7 @@ class WorkersMixin:
 
         db.save_all_tenders(self._records)
         self._refresh_table_view()
+        start_background_embedding_worker(callback_fn=self._refresh_table_view)
         
         if new_wants:
             w_count = len(new_wants)
@@ -453,6 +455,7 @@ class WorkersMixin:
 
         db.save_all_tenders(self._records)
         self._refresh_table_view()
+        start_background_embedding_worker(callback_fn=self._refresh_table_view)
         
         msg = f"Portal Scraper: {added_count} added, {updated_count} updated"
         self._log("ok", msg)
@@ -574,6 +577,7 @@ class WorkersMixin:
             self.after(0, lambda: self._set_prog(100, "Fetch complete."))
             msg = f"Selenium fetch done: {total} URL(s) processed"
             self.after(0, lambda: self._log("info", f"--- {msg} ---"))
+            start_background_embedding_worker(callback_fn=self._refresh_table_view)
             
             # Show toast when fetch is done
             self._show_toast("Detail Fetching Complete", f"Successfully processed {total} URL(s).", "info")

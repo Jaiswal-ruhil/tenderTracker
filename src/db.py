@@ -143,7 +143,8 @@ def get_conn():
                     filing_status TEXT,
                     remarks TEXT,
                     tags TEXT,
-                    pdf_path TEXT
+                    pdf_path TEXT,
+                    embedding TEXT
                 )
             """)
             conn.commit()
@@ -188,7 +189,8 @@ COLUMNS = [
     "items", "quantity", "location", "contract_dur", "est_value", "eval_method",
     "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
     "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
-    "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path"
+    "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path",
+    "embedding"
 ]
 
 def row_to_dict(row):
@@ -201,6 +203,13 @@ def row_to_dict(row):
                 tags_list = json.loads(val) if val else []
                 if tags_list:
                     d[col] = tags_list
+            except Exception:
+                pass
+        elif col == "embedding":
+            try:
+                emb_list = json.loads(val) if val else []
+                if emb_list:
+                    d[col] = emb_list
             except Exception:
                 pass
         elif col in ("is_want", "is_want_derived", "is_saved", "is_fetched"):
@@ -220,6 +229,8 @@ def dict_to_row(d):
         val = d.get(col)
         if col == "tags":
             vals.append(json.dumps(val) if val else "[]")
+        elif col == "embedding":
+            vals.append(json.dumps(val) if val else "")
         elif col in ("is_want", "is_want_derived", "is_saved", "is_fetched"):
             if val is None:
                 vals.append(None)

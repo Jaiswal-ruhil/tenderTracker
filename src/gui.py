@@ -452,6 +452,10 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
             self._records = db.load_all_tenders()
             self._refresh_table_view()
             
+            # Start background embedding worker on startup
+            from vector_search import start_background_embedding_worker
+            start_background_embedding_worker(callback_fn=self._refresh_table_view)
+            
             display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
             self._set_status(f"Database: {display_path}", SUCCESS)
             self._log("info", f"Loaded {len(self._records)} historical tender(s) from database: {db.DB_FILE}")

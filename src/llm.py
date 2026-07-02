@@ -398,3 +398,102 @@ Provide ONLY the valid JSON object.
     except Exception as e:
         logger.log("err", f"LLM category mapping failed: {e}")
         raise e
+
+def get_embedding(text, provider, api_key, base_url, model):
+    """
+    Generates a vector embedding for the given text using the configured LLM provider.
+    Returns a list of floats (the embedding vector).
+    """
+    if not provider or provider == "Disabled":
+        raise ValueError("LLM provider is disabled.")
+        
+    if provider == "Google AI Studio (Gemini)":
+        if not api_key:
+            raise ValueError("Google AI Studio API Key is required.")
+        # Default embedding model for Gemini
+        model_name = "text-embedding-004"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:embedContent?key={api_key}"
+        body = {
+            "content": {
+                "parts": [{"text": text}]
+            }
+        }
+        headers = {"Content-Type": "application/json"}
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+    elif provider == "Local LLM (LM Studio / Ollama)":
+        # Automatically load model on demand
+        try:
+            auto_load_local_model(base_url, model, api_key)
+        except Exception as e:
+            logger.log("warn", f"Auto-loading model failed: {e}")
+
+        url_base = base_url.strip() if base_url else "http://localhost:1234/v1"
+        url = url_base.rstrip("/")
+        
+        # Build embeddings URL
+        if not url.endswith("/embeddings"):
+            if url.endswith("/v1"):
+                url = f"{url}/embeddings"
+            else:
+                url = f"{url}/v1/embeddings"
+                
+        model_name = model.strip() if model else "local-model"
+        body = {
+            "model": model_name,
+            "input": text
+        }
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            
+        req = urllib.request.Request(
+            url,
+            data=json.dumps(body).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+    else:
+        raise ValueError(f"Unknown LLM provider: {provider}")
+
+    try:
+        with urllib.request.urlopen(req, timeout=10) as response:
+            res_data = response.read().decode("utf-8")
+            res_json = json.loads(res_data)
+            
+            if provider == "Google AI Studio (Gemini)":
+                return res_json["embedding"]["values"]
+            else:
+                # OpenAI-compatible /v1/embeddings
+                return res_json["data"][0]["embedding"]
+    except Exception as e:
+        logger.log("err", f"Failed to get embedding: {e}")
+        # Try Ollama native /api/embeddings fallback if it was a local provider
+        if provider == "Local LLM (LM Studio / Ollama)":
+            try:
+                # Parse server root
+                server_root = url_base
+                if server_root.endswith("/v1"):
+                    server_root = server_root[:-3]
+                ollama_url = f"{server_root}/api/embeddings"
+                body = {
+                    "model": model_name,
+                    "prompt": text
+                }
+                req = urllib.request.Request(
+                    ollama_url,
+                    data=json.dumps(body).encode("utf-8"),
+                    headers={"Content-Type": "application/json"},
+                    method="POST"
+                )
+                with urllib.request.urlopen(req, timeout=10) as response:
+                    res_data = response.read().decode("utf-8")
+                    res_json = json.loads(res_data)
+                    return res_json["embedding"]
+            except Exception as e2:
+                logger.log("err", f"Ollama native embedding fallback failed: {e2}")
+        raise e

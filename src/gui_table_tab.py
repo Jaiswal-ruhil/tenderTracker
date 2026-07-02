@@ -11,6 +11,7 @@ from config import (
 )
 from excel import financial_year, xl_path, ensure_workbook, xl_append
 import db
+from vector_search import semantic_search
 
 class DatePickerPopup(tk.Toplevel):
     def __init__(self, parent, entry_var, x, y):
@@ -286,6 +287,15 @@ class TableTabMixin:
                               highlightthickness=1, highlightbackground="#30363D",
                               highlightcolor=ACCENT2)
         self.search_ent.pack(side="left", padx=(4, 15))
+
+        # Semantic Search Checkbox
+        self.semantic_search_var = tk.BooleanVar(value=False)
+        self.semantic_search_cb = tk.Checkbutton(
+            filter_fr, text="Semantic Search", variable=self.semantic_search_var,
+            bg=PANEL, fg=TEXT, selectcolor=CARD, activebackground=PANEL, activeforeground=TEXT,
+            font=FL, command=self._refresh_table_view
+        )
+        self.semantic_search_cb.pack(side="left", padx=(0, 15))
 
         # View dropdown
         tk.Label(filter_fr, text="Category View:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
@@ -817,8 +827,29 @@ class TableTabMixin:
         from_date_parsed = self._parse_date_str(self.date_from_var.get().strip())
         to_date_parsed = self._parse_date_str(self.date_to_var.get().strip())
         
+        # Determine if semantic search is active
+        is_semantic = False
+        if "semantic_search_var" in self.__dict__:
+            try:
+                is_semantic = self.semantic_search_var.get() and search_text
+            except Exception:
+                pass
+        semantic_ranks = {}
+        if is_semantic:
+            # Run semantic search in FAISS
+            results = semantic_search(search_text, limit=100)
+            semantic_ranks = {bid_no: idx for idx, (bid_no, _) in enumerate(results)}
+
+        # Sort/Filter records list for iteration
+        records_to_render = self._records
+        if is_semantic:
+            # Filter to only those matched by semantic search, and sort by relevance rank
+            matched_recs = [r for r in self._records if r.get("bid_no") in semantic_ranks]
+            matched_recs.sort(key=lambda r: semantic_ranks[r["bid_no"]])
+            records_to_render = matched_recs
+        
         visible_count = 0
-        for rec in self._records:
+        for rec in records_to_render:
             is_want = self._get_tender_status(rec, inc_kws, exc_kws)
             rec["is_want_derived"] = is_want
             
@@ -827,7 +858,7 @@ class TableTabMixin:
             if view_filter == "Don't Wants (Filtered)" and is_want:
                 continue
                 
-            if search_text:
+            if search_text and not is_semantic:
                 combined_text = " ".join(str(v) for v in rec.values()).lower()
                 if search_text not in combined_text:
                     continue
