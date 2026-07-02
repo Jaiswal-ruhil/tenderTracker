@@ -21,6 +21,7 @@ def map_category(raw_val):
         mappings = settings.get("category_mappings")
     except Exception:
         mappings = None
+        settings = {}
         
     if not mappings:
         # Fallback to config
@@ -30,6 +31,24 @@ def map_category(raw_val):
         except ImportError:
             mappings = []
             
+    # LLM category mapping if enabled
+    try:
+        use_llm = settings.get("llm_use_mapping", False)
+        provider = settings.get("llm_provider", "Disabled")
+        if use_llm and provider != "Disabled":
+            existing_categories = [m["name"] for m in mappings if m.get("name")]
+            import llm
+            api_key = settings.get("llm_api_key", "")
+            base_url = settings.get("llm_base_url", "")
+            model = settings.get("llm_model", "")
+            mapped_val = llm.llm_map_category(raw_val, existing_categories, provider, api_key, base_url, model)
+            if mapped_val:
+                return mapped_val
+    except Exception as e:
+        import logger
+        logger.log("warn", f"LLM category mapping failed: {e}. Falling back to keyword mapping.")
+
+    # Fallback to keyword matching
     for item in mappings:
         keywords = item.get("keywords", [])
         standard_name = item.get("name", "")
@@ -44,6 +63,40 @@ def split_blocks(text):
     return [p.strip() for p in parts if p.strip()]
 
 def parse_one(text):
+    # LLM Parsing if enabled
+    try:
+        import db
+        settings = db.load_settings()
+        use_llm = settings.get("llm_use_parsing", False)
+        provider = settings.get("llm_provider", "Disabled")
+        if use_llm and provider != "Disabled":
+            import llm
+            api_key = settings.get("llm_api_key", "")
+            base_url = settings.get("llm_base_url", "")
+            model = settings.get("llm_model", "")
+            parsed = llm.llm_parse_tender(text, provider, api_key, base_url, model)
+            if parsed and isinstance(parsed, dict) and parsed.get("bid_no"):
+                # Enrich location if it exists
+                if parsed.get("location"):
+                    parsed["location"] = _enrich_location(parsed["location"])
+                
+                # Apply standard category mapping to parsed category field
+                if parsed.get("category"):
+                    parsed["category"] = map_category(parsed["category"])
+                
+                # Apply custom value mappings
+                try:
+                    parsed = db.apply_value_mappings(parsed)
+                except Exception:
+                    pass
+                return parsed
+            else:
+                import logger
+                logger.log("warn", "LLM parser returned empty or invalid data. Falling back to regex parser.")
+    except Exception as e:
+        import logger
+        logger.log("warn", f"LLM parsing failed: {e}. Falling back to regex parser.")
+
     r = {}
     m = re.search(r"BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*\[([^\]]+)\]\((https?://[^)]+)\)", text, re.I)
     if m:

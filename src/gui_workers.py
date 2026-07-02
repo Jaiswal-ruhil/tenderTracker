@@ -61,6 +61,7 @@ class WorkersMixin:
                             md_text = convert_pdf_text_to_markdown(pdf_text)
                             rec = parse_one(md_text)
                             if rec.get("bid_no"):
+                                rec["pdf_path"] = os.path.abspath(blk)
                                 self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
                                 return rec
                             else:
@@ -144,6 +145,7 @@ class WorkersMixin:
                                 pdf_rec = parse_one(md_text)
                                 if bid_url and "bid_url" not in pdf_rec:
                                     pdf_rec["bid_url"] = bid_url
+                                pdf_rec["pdf_path"] = os.path.abspath(dest_path)
                                 return pdf_rec
                             else:
                                 self.after(0, lambda: self._log("err", f"Failed to download PDF for {bid_no or bid_url}"))
@@ -281,6 +283,9 @@ class WorkersMixin:
         from_date_str = self.scrape_date_from_var.get().strip()
         to_date_str = self.scrape_date_to_var.get().strip()
         
+        from_date_parsed = None
+        to_date_parsed = None
+        
         if date_filter_type in ("Start Date", "End Date"):
             if from_date_str:
                 from_date_parsed = self._parse_date_str(from_date_str)
@@ -292,6 +297,9 @@ class WorkersMixin:
                 if not to_date_parsed:
                     messagebox.showerror("Invalid Date", "To Date must be in DD-MM-YYYY format.", parent=self)
                     return
+
+        # Pre-read filter option on main thread to avoid thread safety issues
+        filter_only = self.scrape_filter_only_var.get()
 
         if not _try_import_selenium():
             messagebox.showerror("Missing library",
@@ -323,10 +331,6 @@ class WorkersMixin:
 
             def record_callback(page_recs):
                 recs = []
-                date_filter_type = self.scrape_date_type_var.get()
-                from_date_parsed = self._parse_date_str(self.scrape_date_from_var.get().strip())
-                to_date_parsed = self._parse_date_str(self.scrape_date_to_var.get().strip())
-                
                 for blk in page_recs:
                     rec = parse_one(blk)
                     if rec.get("bid_no"):
@@ -348,7 +352,7 @@ class WorkersMixin:
                                     continue
 
                         # Check if we should only save matches
-                        if self.scrape_filter_only_var.get():
+                        if filter_only:
                             settings = db.load_settings()
                             inc_raw = settings.get("include_keywords", "")
                             exc_raw = settings.get("exclude_keywords", "")

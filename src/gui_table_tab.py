@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import re
 from datetime import datetime
 import calendar
@@ -375,6 +375,22 @@ class TableTabMixin:
         detail_title = tk.Label(self.detail_panel, text="TENDER DETAILS", font=FT, bg=PANEL, fg=TEXT)
         detail_title.pack(anchor="w", pady=(0, 6))
 
+        # PDF Control Frame
+        self.pdf_frame = tk.Frame(self.detail_panel, bg=PANEL)
+        self.pdf_frame.pack(fill="x", pady=(0, 8))
+        
+        self.pdf_lbl = tk.Label(self.pdf_frame, text="PDF: Not Linked", font=FL, bg=PANEL, fg=TEXTSUB, anchor="w")
+        self.pdf_lbl.pack(side="left", fill="x", expand=True)
+        
+        self.btn_open_pdf = self._btn(self.pdf_frame, "📄 Open", self._open_associated_pdf, bg=CARD)
+        self.btn_open_pdf.pack(side="right", padx=2)
+        
+        self.btn_link_pdf = self._btn(self.pdf_frame, "🔗 Link", self._link_associated_pdf, bg=CARD)
+        self.btn_link_pdf.pack(side="right", padx=2)
+        
+        self.btn_unlink_pdf = self._btn(self.pdf_frame, "❌", self._unlink_associated_pdf, bg=CARD)
+        self.btn_unlink_pdf.pack(side="right", padx=2)
+
         # Detail Scrollable Text widget
         txt_fr = tk.Frame(self.detail_panel, bg=PANEL)
         txt_fr.pack(fill="both", expand=True)
@@ -428,6 +444,10 @@ class TableTabMixin:
         self.ctx_menu.add_command(label="Mark as Don't Want (Ignore)", command=self._mark_selected_dont_want)
         self.ctx_menu.add_command(label="Reset Manual Tag", command=self._reset_selected_tag)
         self.ctx_menu.add_command(label="Manage Tags...", command=self._show_tags_dialog)
+        self.ctx_menu.add_separator()
+        self.ctx_menu.add_command(label="Link PDF File...", command=self._link_associated_pdf)
+        self.ctx_menu.add_command(label="Open Associated PDF", command=self._open_associated_pdf)
+        self.ctx_menu.add_command(label="Unlink PDF File", command=self._unlink_associated_pdf)
         self.ctx_menu.add_separator()
         self.ctx_menu.add_command(label="Delete Selected", command=self._del_sel)
         self.ctx_menu.add_command(label="Fetch Details (Selenium)", command=self._do_fetch_sel)
@@ -843,6 +863,23 @@ class TableTabMixin:
         if iid:
             if iid not in self.tv.selection():
                 self.tv.selection_set(iid)
+                
+            # Dynamically set PDF options state
+            bid_no = self.tv.set(iid, "bid_no")
+            rec = None
+            for r in self._records:
+                if r.get("bid_no") == bid_no:
+                    rec = r
+                    break
+            
+            pdf_path = rec.get("pdf_path", "") if rec else ""
+            if pdf_path:
+                self.ctx_menu.entryconfigure("Open Associated PDF", state="normal")
+                self.ctx_menu.entryconfigure("Unlink PDF File", state="normal")
+            else:
+                self.ctx_menu.entryconfigure("Open Associated PDF", state="disabled")
+                self.ctx_menu.entryconfigure("Unlink PDF File", state="disabled")
+                
             self.ctx_menu.post(event.x_root, event.y_root)
 
     def _mark_selected_want(self):
@@ -916,6 +953,11 @@ class TableTabMixin:
         self.detail_txt.delete("1.0", "end")
         self.detail_txt.insert("end", "\n\nSelect a tender from the table to view its full details here.", "value")
         self.detail_txt.configure(state="disabled")
+        
+        if hasattr(self, "pdf_lbl"):
+            self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
+            self.btn_open_pdf.configure(state="disabled")
+            self.btn_unlink_pdf.configure(state="disabled")
 
     def _on_treeview_select(self, event):
         sel = self.tv.selection()
@@ -934,6 +976,21 @@ class TableTabMixin:
             self._clear_detail_panel()
             return
             
+        # Update PDF frame widgets
+        pdf_path = rec.get("pdf_path", "")
+        if pdf_path:
+            import os
+            filename = os.path.basename(pdf_path)
+            if len(filename) > 25:
+                filename = filename[:22] + "..."
+            self.pdf_lbl.configure(text=f"PDF: {filename}", fg=SUCCESS)
+            self.btn_open_pdf.configure(state="normal")
+            self.btn_unlink_pdf.configure(state="normal")
+        else:
+            self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
+            self.btn_open_pdf.configure(state="disabled")
+            self.btn_unlink_pdf.configure(state="disabled")
+
         self.detail_txt.configure(state="normal")
         self.detail_txt.delete("1.0", "end")
         
@@ -944,7 +1001,7 @@ class TableTabMixin:
             "Dates & Schedule": ["start_date", "end_date", "bid_opening"],
             "Financial Details": ["est_value", "emd", "epbg", "min_turnover"],
             "Qualifications": ["exp_years", "contract_dur", "mii", "mse_pref", "mse_relax", "startup_relax"],
-            "Status & Metadata": ["filing_status", "tags", "remarks"]
+            "Status & Metadata": ["filing_status", "tags", "remarks", "pdf_path"]
         }
         
         # Mapping DB field keys to human readable labels
@@ -957,7 +1014,7 @@ class TableTabMixin:
             "min_turnover": "Min Turnover", "exp_years": "Exp Years Required", "contract_dur": "Contract Duration", 
             "mii": "MII Compliant", "mse_pref": "MSE Pref", "mse_relax": "MSE Relaxation", 
             "startup_relax": "Startup Relaxation", "filing_status": "Filing Status", "tags": "Tags", 
-            "remarks": "Remarks"
+            "remarks": "Remarks", "pdf_path": "Associated PDF"
         }
         
         first = True
@@ -1063,3 +1120,94 @@ class TableTabMixin:
         x = button.winfo_rootx()
         y = button.winfo_rooty() + button.winfo_height()
         DatePickerPopup(self, var, x, y)
+
+    def _link_associated_pdf(self):
+        sel = self.tv.selection()
+        if not sel:
+            messagebox.showwarning("Selection Required", "Please select a tender from the table first.")
+            return
+        bid_no = self.tv.set(sel[0], "bid_no")
+        if not bid_no:
+            return
+            
+        file_path = filedialog.askopenfilename(
+            title="Select PDF File to Link",
+            filetypes=[("PDF Files", "*.pdf")]
+        )
+        if not file_path:
+            return
+            
+        file_path = os.path.abspath(file_path)
+        updated = False
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                r["pdf_path"] = file_path
+                updated = True
+                break
+                
+        if updated:
+            import db
+            db.upsert_tender_field(bid_no, "pdf_path", file_path)
+            self._log("ok", f"Linked PDF to {bid_no}: {os.path.basename(file_path)}")
+            self._on_treeview_select(None)
+
+    def _unlink_associated_pdf(self):
+        sel = self.tv.selection()
+        if not sel:
+            return
+        bid_no = self.tv.set(sel[0], "bid_no")
+        if not bid_no:
+            return
+            
+        updated = False
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                r["pdf_path"] = ""
+                updated = True
+                break
+                
+        if updated:
+            import db
+            db.upsert_tender_field(bid_no, "pdf_path", "")
+            self._log("info", f"Unlinked PDF for {bid_no}")
+            self._on_treeview_select(None)
+
+    def _open_associated_pdf(self):
+        sel = self.tv.selection()
+        if not sel:
+            return
+        bid_no = self.tv.set(sel[0], "bid_no")
+        if not bid_no:
+            return
+            
+        rec = None
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                rec = r
+                break
+        if not rec:
+            return
+            
+        pdf_path = rec.get("pdf_path")
+        if not pdf_path or not os.path.exists(pdf_path):
+            messagebox.showerror("File Error", f"Associated PDF file not found or not linked.\nPath: {pdf_path}")
+            return
+            
+        import sys
+        import subprocess
+        import webbrowser
+        try:
+            if sys.platform == "win32":
+                os.startfile(pdf_path)
+            elif sys.platform == "darwin":
+                subprocess.run(["open", pdf_path])
+            else:
+                subprocess.run(["xdg-open", pdf_path])
+            self._log("ok", f"Opened PDF for {bid_no}")
+        except Exception as e:
+            try:
+                webbrowser.open(f"file:///{os.path.abspath(pdf_path)}")
+                self._log("ok", f"Opened PDF for {bid_no} in browser")
+            except Exception as ex:
+                self._log("err", f"Failed to open PDF: {e}")
+                messagebox.showerror("Open Error", f"Could not open PDF file:\n{e}")

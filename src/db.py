@@ -142,7 +142,8 @@ def get_conn():
                     is_fetched INTEGER,
                     filing_status TEXT,
                     remarks TEXT,
-                    tags TEXT
+                    tags TEXT,
+                    pdf_path TEXT
                 )
             """)
             conn.commit()
@@ -187,7 +188,7 @@ COLUMNS = [
     "items", "quantity", "location", "contract_dur", "est_value", "eval_method",
     "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
     "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
-    "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags"
+    "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path"
 ]
 
 def row_to_dict(row):

@@ -336,6 +336,31 @@ class CalendarTabMixin:
                     return lambda: webbrowser.open(url)
                 self._btn(act_fr, "🌐 Open URL", make_open_url(), bg=PANEL).pack(side="left")
                 
+            pdf_path = rec.get("pdf_path")
+            if pdf_path and os.path.exists(pdf_path):
+                def make_open_pdf(path=pdf_path):
+                    import sys
+                    import subprocess
+                    from tkinter import messagebox
+                    def open_fn():
+                        try:
+                            if sys.platform == "win32":
+                                os.startfile(path)
+                            elif sys.platform == "darwin":
+                                subprocess.run(["open", path])
+                            else:
+                                subprocess.run(["xdg-open", path])
+                            self._log("ok", f"Opened PDF: {os.path.basename(path)}")
+                        except Exception as e:
+                            try:
+                                webbrowser.open(f"file:///{os.path.abspath(path)}")
+                                self._log("ok", f"Opened PDF in browser: {os.path.basename(path)}")
+                            except Exception as ex:
+                                self._log("err", f"Failed to open PDF: {e}")
+                                messagebox.showerror("Open Error", f"Could not open PDF file:\n{e}")
+                    return open_fn
+                self._btn(act_fr, "📄 Open PDF", make_open_pdf(), bg=PANEL).pack(side="left", padx=(6, 0))
+                
             def make_locate(bid=rec.get("bid_no")):
                 return lambda: self._locate_in_table(bid)
             self._btn(act_fr, "🔍 Locate", make_locate(), bg=PANEL).pack(side="right")

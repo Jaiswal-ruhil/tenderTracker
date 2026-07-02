@@ -17,8 +17,8 @@ class DialogsMixin:
         win.resizable(False, False)
 
         x = self.winfo_x() + (self.winfo_width() - 600) // 2
-        y = self.winfo_y() + (self.winfo_height() - 480) // 2
-        win.geometry(f"600x480+{max(0, x)}+{max(0, y)}")
+        y = self.winfo_y() + (self.winfo_height() - 740) // 2
+        win.geometry(f"600x740+{max(0, x)}+{max(0, y)}")
 
         # Title Label
         tk.Label(win, text="Application Settings", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
@@ -94,10 +94,144 @@ class DialogsMixin:
                              font=FL, relief="flat", highlightthickness=0)
         chk.pack(anchor="w")
 
+        # LLM Frame
+        llm_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        llm_frame.pack(fill="x", padx=15, pady=6)
+        
+        tk.Label(llm_frame, text="LLM Service Integration:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
+        
+        # Provider Selection
+        tk.Label(llm_frame, text="LLM Provider:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", pady=3)
+        
+        provider_var = tk.StringVar(value=db.load_settings().get("llm_provider", "Disabled"))
+        provider_cb = ttk.Combobox(llm_frame, textvariable=provider_var, values=["Disabled", "Google AI Studio (Gemini)", "Local LLM (LM Studio / Ollama)"], state="readonly", font=FL)
+        provider_cb.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # API Key
+        tk.Label(llm_frame, text="API Key:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=3)
+        key_var = tk.StringVar(value=db.load_settings().get("llm_api_key", ""))
+        key_ent = tk.Entry(llm_frame, textvariable=key_var, show="*", bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                           highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        key_ent.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # Base URL
+        url_lbl = tk.Label(llm_frame, text="API Base URL:", font=FL, bg=PANEL, fg=TEXTSUB)
+        url_lbl.grid(row=3, column=0, sticky="w", pady=3)
+        url_var = tk.StringVar(value=db.load_settings().get("llm_base_url", "http://localhost:1234/v1"))
+        url_ent = tk.Entry(llm_frame, textvariable=url_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                           highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        url_ent.grid(row=3, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # Model Name
+        model_lbl = tk.Label(llm_frame, text="Model Name:", font=FL, bg=PANEL, fg=TEXTSUB)
+        model_lbl.grid(row=4, column=0, sticky="w", pady=3)
+        model_var = tk.StringVar(value=db.load_settings().get("llm_model", "gemini-1.5-flash"))
+        model_ent = tk.Entry(llm_frame, textvariable=model_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                            highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        model_ent.grid(row=4, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        llm_frame.columnconfigure(1, weight=1)
+        
+        # Checkboxes for actions
+        chk_frame = tk.Frame(llm_frame, bg=PANEL)
+        chk_frame.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 4))
+        
+        use_parsing_var = tk.BooleanVar(value=db.load_settings().get("llm_use_parsing", False))
+        chk_parse = tk.Checkbutton(chk_frame, text="Use LLM for parsing tender text & PDFs",
+                                   variable=use_parsing_var, bg=PANEL, fg=TEXT, selectcolor=BG,
+                                   activebackground=PANEL, activeforeground=TEXT,
+                                   font=FL, relief="flat", highlightthickness=0)
+        chk_parse.pack(anchor="w")
+        
+        use_mapping_var = tk.BooleanVar(value=db.load_settings().get("llm_use_mapping", False))
+        chk_map = tk.Checkbutton(chk_frame, text="Use LLM for intelligent category mapping",
+                                 variable=use_mapping_var, bg=PANEL, fg=TEXT, selectcolor=BG,
+                                 activebackground=PANEL, activeforeground=TEXT,
+                                 font=FL, relief="flat", highlightthickness=0)
+        chk_map.pack(anchor="w")
+
+        # Test Connection button and Status label
+        test_frame = tk.Frame(llm_frame, bg=PANEL)
+        test_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        
+        test_status_var = tk.StringVar(value="Status: Ready")
+        test_status_lbl = tk.Label(test_frame, textvariable=test_status_var, font=("Segoe UI", 8, "italic"), bg=PANEL, fg=TEXTSUB, anchor="w")
+        test_status_lbl.pack(side="right", fill="x", expand=True, padx=(10, 0))
+        
+        import threading
+        import llm
+        
+        def run_test():
+            prov = provider_var.get()
+            key = key_var.get().strip()
+            url = url_var.get().strip()
+            mdl = model_var.get().strip()
+            
+            if prov == "Disabled":
+                test_status_lbl.configure(fg=WARN)
+                test_status_var.set("Status: Select a provider first.")
+                return
+                
+            test_status_lbl.configure(fg=MUTED)
+            test_status_var.set("Status: Connecting...")
+            
+            def thread_fn():
+                success, msg = llm.test_llm_connection(prov, key, url, mdl)
+                if success:
+                    win.after(0, lambda: test_status_lbl.configure(fg=SUCCESS))
+                    win.after(0, lambda: test_status_var.set("Status: Success!"))
+                else:
+                    win.after(0, lambda: test_status_lbl.configure(fg=ERR))
+                    win.after(0, lambda: test_status_var.set(f"Status: Fail ({msg[:30]}...)"))
+            
+            threading.Thread(target=thread_fn, daemon=True).start()
+            
+        self._btn(test_frame, "Test Connection", run_test, bg=CARD).pack(side="left")
+
+        def update_llm_fields_state(*args):
+            prov = provider_var.get()
+            if prov == "Disabled":
+                key_ent.configure(state="disabled")
+                url_ent.configure(state="disabled")
+                model_ent.configure(state="disabled")
+                chk_parse.configure(state="disabled")
+                chk_map.configure(state="disabled")
+            elif prov == "Google AI Studio (Gemini)":
+                key_ent.configure(state="normal")
+                url_ent.configure(state="disabled")
+                model_ent.configure(state="normal")
+                chk_parse.configure(state="normal")
+                chk_map.configure(state="normal")
+                # Pre-fill default model name if empty
+                if not model_var.get().strip():
+                    model_var.set("gemini-1.5-flash")
+            elif prov == "Local LLM (LM Studio / Ollama)":
+                key_ent.configure(state="normal")
+                url_ent.configure(state="normal")
+                model_ent.configure(state="normal")
+                chk_parse.configure(state="normal")
+                chk_map.configure(state="normal")
+                # Pre-fill default url/model if empty
+                if not url_var.get().strip():
+                    url_var.set("http://localhost:1234/v1")
+                if not model_var.get().strip():
+                    model_var.set("local-model")
+                    
+        provider_var.trace_add("write", update_llm_fields_state)
+        update_llm_fields_state()
+
         # Bottom Close Button
         def save_and_close():
             db.save_setting("excel_filename_pattern", pattern_var.get().strip())
             db.save_setting("selenium_headless", headless_var.get())
+            # Save LLM Settings
+            db.save_setting("llm_provider", provider_var.get())
+            db.save_setting("llm_api_key", key_var.get().strip())
+            db.save_setting("llm_base_url", url_var.get().strip())
+            db.save_setting("llm_model", model_var.get().strip())
+            db.save_setting("llm_use_parsing", use_parsing_var.get())
+            db.save_setting("llm_use_mapping", use_mapping_var.get())
+            
             self._log("info", "Settings saved successfully.")
             win.destroy()
             
