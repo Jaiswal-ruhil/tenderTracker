@@ -15,8 +15,10 @@ Run:
 import os
 import sys
 
-# Ensure src/ is in python path
+# Ensure src and its subdirectories are in python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
 
 from gui import TenderApp
 

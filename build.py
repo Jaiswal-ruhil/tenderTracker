@@ -7,8 +7,10 @@ def run_tests():
     print("=========================================")
     print("RUNNING UNIT TESTS...")
     print("=========================================")
-    # Add src to sys.path
+    # Add src and its subdirectories to sys.path
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
     
     loader = unittest.TestLoader()
     suite = loader.discover(start_dir='tests')
@@ -24,7 +26,7 @@ def check_imports():
     print("\n=========================================")
     print("CHECKING DEPENDENCIES...")
     print("=========================================")
-    required_mods = ["openpyxl", "selenium", "webdriver_manager", "pypdf", "sqlite3"]
+    required_mods = ["openpyxl", "selenium", "webdriver_manager", "pypdf", "sqlite3", "faiss", "numpy"]
     missing = []
     for mod in required_mods:
         try:
