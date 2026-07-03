@@ -1,10 +1,67 @@
 import logging
 import os
 import queue
+import time
+import threading
 
 log_queue = queue.Queue()
 _file_handler = None
 
+# ── Freeze Watchdog ───────────────────────────────────────────────────────────
+# Monitors the Tkinter main thread via a shared heartbeat timestamp.
+# If the main thread doesn't update the heartbeat within the threshold,
+# it logs a warning/error with the freeze duration.
+
+_heartbeat_time = time.monotonic()
+_heartbeat_lock = threading.Lock()
+_watchdog_running = False
+
+FREEZE_WARN_MS   = 1000   # warn if UI unresponsive > 1s
+FREEZE_CRIT_MS   = 3000   # escalate to error if > 3s
+WATCHDOG_INTERVAL = 0.5   # check every 500ms
+
+def update_heartbeat():
+    """Call this from the Tkinter main-thread poll loop (_poll_log_queue)."""
+    global _heartbeat_time
+    with _heartbeat_lock:
+        _heartbeat_time = time.monotonic()
+
+def _watchdog_loop():
+    last_warned = 0.0
+    while _watchdog_running:
+        time.sleep(WATCHDOG_INTERVAL)
+        with _heartbeat_lock:
+            elapsed_ms = (time.monotonic() - _heartbeat_time) * 1000
+        now = time.monotonic()
+        if elapsed_ms >= FREEZE_CRIT_MS:
+            if now - last_warned > 2.0:
+                log("err", f"UI FREEZE: Main thread unresponsive for {elapsed_ms:.0f}ms")
+                last_warned = now
+        elif elapsed_ms >= FREEZE_WARN_MS:
+            if now - last_warned > 2.0:
+                log("warn", f"UI SLOW: Main thread delayed {elapsed_ms:.0f}ms")
+                last_warned = now
+
+def start_watchdog():
+    """Start the UI freeze watchdog. Call once after app startup."""
+    global _watchdog_running
+    if _watchdog_running:
+        return
+    _watchdog_running = True
+    t = threading.Thread(target=_watchdog_loop, daemon=True, name="UIFreezeWatchdog")
+    t.start()
+
+def stop_watchdog():
+    global _watchdog_running
+    _watchdog_running = False
+
+# ── Timer helper ──────────────────────────────────────────────────────────────
+def elapsed_since(start: float) -> str:
+    """Human-readable elapsed time from a monotonic start timestamp."""
+    ms = (time.monotonic() - start) * 1000
+    return f"{ms:.0f}ms" if ms < 1000 else f"{ms/1000:.2f}s"
+
+# ── File logger setup ─────────────────────────────────────────────────────────
 def get_log_file_path(db_path):
     """Derive log file path from database path."""
     if db_path.lower().endswith(".db"):
@@ -15,61 +72,72 @@ def setup_file_logger(db_path):
     """Set up or reconfigure the file handler targeting the database folder."""
     global _file_handler
     log_path = get_log_file_path(db_path)
-    
     root_logger = logging.getLogger()
-    
-    # Remove existing file handler if any
     if _file_handler:
         root_logger.removeHandler(_file_handler)
         _file_handler.close()
-        
     try:
-        # Create parent directory if it doesn't exist
         parent_dir = os.path.dirname(os.path.abspath(log_path))
         if parent_dir:
             os.makedirs(parent_dir, exist_ok=True)
-            
-        _file_handler = logging.FileHandler(log_path, encoding='utf-8')
-        _file_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s: %(message)s', datefmt='%H:%M:%S'))
-        _file_handler.setLevel(logging.INFO)
+        _file_handler = logging.FileHandler(log_path, encoding="utf-8")
+        _file_handler.setFormatter(logging.Formatter(
+            "[%(asctime)s] %(levelname)-7s %(message)s", datefmt="%H:%M:%S"
+        ))
+        _file_handler.setLevel(logging.DEBUG)
         root_logger.addHandler(_file_handler)
+        log("info", f"Log file: {log_path}")
     except Exception as e:
         print(f"Failed to setup file logger at {log_path}: {e}")
 
 # Base logger configuration
 logging.basicConfig(
-    level=logging.INFO,
-    format='[%(asctime)s] %(levelname)s: %(message)s',
-    datefmt='%H:%M:%S',
-    handlers=[logging.StreamHandler()] # Print to stdout/stderr by default
+    level=logging.DEBUG,
+    format="[%(asctime)s] %(levelname)-7s %(message)s",
+    datefmt="%H:%M:%S",
+    handlers=[logging.StreamHandler()]
 )
 
+# ── Core log function ─────────────────────────────────────────────────────────
 def log(level, message):
     """
     Log a message with a specific UI level (info, ok, warn, err).
-    Saves to the file logger and sends to the UI queue.
+    Writes to the file logger and queues for the GUI log panel.
     """
-    # Map level to standard logging
     if level == "ok":
-        logging.info(message)
+        logging.info(f"[OK]   {message}")
     elif level == "warn":
-        logging.warning(message)
+        logging.warning(f"[WARN] {message}")
     elif level == "err":
-        logging.error(message)
+        logging.error(f"[ERR]  {message}")
     else:
-        logging.info(message)
-        
-    # Queue for GUI main thread consumption
+        logging.info(f"[INFO] {message}")
     log_queue.put((level, message))
 
-def log_info(msg):
-    log("info", msg)
+def log_info(msg): log("info", msg)
+def log_ok(msg):   log("ok",   msg)
+def log_warn(msg): log("warn", msg)
+def log_err(msg):  log("err",  msg)
 
-def log_ok(msg):
-    log("ok", msg)
+# ── Structured UI event helpers ───────────────────────────────────────────────
+def log_button_click(label: str):
+    """Log a button press from the UI."""
+    log("info", f"[BTN]  '{label}' clicked")
 
-def log_warn(msg):
-    log("warn", msg)
+def log_tab_change(tab_name: str):
+    """Log a notebook tab transition."""
+    log("info", f"[TAB]  → {tab_name}")
 
-def log_err(msg):
-    log("err", msg)
+def log_worker_start(name: str) -> float:
+    """Log background worker start; returns a monotonic start timestamp."""
+    log("info", f"[WORK] ▶ {name} started")
+    return time.monotonic()
+
+def log_worker_done(name: str, start: float):
+    """Log background worker completion with elapsed time."""
+    log("ok", f"[WORK] ✓ {name} finished in {elapsed_since(start)}")
+
+def log_worker_error(name: str, start: float, error):
+    """Log background worker failure with elapsed time."""
+    log("err", f"[WORK] ✗ {name} failed after {elapsed_since(start)}: {error}")
+

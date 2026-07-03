@@ -13,6 +13,7 @@ from config import (
     FL, FB, FH, FT, TV_IDS
 )
 import db
+import logger as _logger
 from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf, scrape_portal_search
 from vector_search import start_background_embedding_worker
@@ -23,6 +24,7 @@ class WorkersMixin:
         if not raw: self._log("warn","Paste area is empty."); return
         self._log("info", f"--- Parse started {datetime.now().strftime('%H:%M:%S')} ---")
         self._set_prog(0,"Processing input…")
+        _t0 = _logger.log_worker_start("ParseWorker")
 
         def worker():
             # Step 1: Split raw text into initial blocks.
@@ -180,6 +182,8 @@ class WorkersMixin:
                     
             self.after(0, lambda: self._set_prog(100, "Done."))
             self.after(0, lambda: self._add_rows(recs, total))
+            _elapsed = _logger.elapsed_since(_t0)
+            self.after(0, lambda e=_elapsed: _logger.log_worker_done("ParseWorker", _t0))
         threading.Thread(target=worker, daemon=True).start()
 
     def _add_rows(self, recs, total):

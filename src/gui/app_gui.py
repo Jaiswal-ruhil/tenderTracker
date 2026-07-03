@@ -61,6 +61,9 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         self._fy_tick()
         self._poll_log_queue()
         self._bind_shortcuts()
+        # Start UI freeze watchdog after the app is fully up
+        import logger as _logger_mod
+        _logger_mod.start_watchdog()
 
     # ── styles ────────────────────────────────────────────────────────────────
     def _style(self):
@@ -294,7 +297,12 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
     # ── widget helpers ────────────────────────────────────────────────────────
     def _btn(self, parent, text, cmd, bg=CARD, fg=TEXT, pad=6):
-        btn = tk.Button(parent, text=text, command=cmd,
+        import logger as _logger_mod
+        label = text.strip()
+        def _traced_cmd(lbl=label, c=cmd):
+            _logger_mod.log_button_click(lbl)
+            c()
+        btn = tk.Button(parent, text=text, command=_traced_cmd,
                         bg=bg, fg=fg, relief="flat", font=FL,
                         padx=pad, pady=4,
                         activebackground=ACCENT2, activeforeground=TEXT,
@@ -332,6 +340,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
     def _poll_log_queue(self):
         import logger
+        logger.update_heartbeat()  # keep watchdog informed the main thread is alive
         while not logger.log_queue.empty():
             try:
                 level, msg = logger.log_queue.get_nowait()
@@ -393,6 +402,22 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                     pass
                     
         self.after(3000, fade_out)
+
+    def _on_tab_changed(self, event):
+        import logger as _logger_mod
+        TAB_NAMES = ["Table View", "Calendar View", "Matrix View", "Analytics View"]
+        try:
+            selected_tab = self.notebook.index(self.notebook.select())
+            _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
+            if selected_tab == 1:
+                self._update_calendar()
+                self._update_details()
+            elif selected_tab == 2:
+                self._update_matrix()
+            elif selected_tab == 3:
+                self._update_analytics()
+        except Exception as e:
+            self._log("err", f"Tab changed error: {e}")
 
     def _set_status(self, msg, color=MUTED):
         if threading.current_thread() is not threading.main_thread():
