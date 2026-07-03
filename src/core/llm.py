@@ -399,6 +399,72 @@ Provide ONLY the valid JSON object.
         logger.log("err", f"LLM category mapping failed: {e}")
         raise e
 
+def suggest_category_keywords(item_name, provider, api_key, base_url, model):
+    """
+    Asks the LLM to suggest a short list of 3-6 concise keyword tokens
+    that best identify the item description. Returns a list of keywords.
+    """
+    prompt = f"""You are given an item description from a government tender:
+"{item_name}"
+
+Suggest up to 6 short keyword tokens (single words or short phrases up to 3 words)
+that best summarize this item for automated category mapping. Return a JSON
+object exactly like: {"keywords": ["kw1", "kw2"]}
+Provide only valid JSON in the response.
+"""
+    try:
+        response_text = call_llm(prompt, provider, api_key, base_url, model, response_json=True)
+        cleaned_json_str = clean_json_response(response_text)
+        parsed = json.loads(cleaned_json_str)
+        kws = parsed.get("keywords") or parsed.get("keyword") or []
+        if isinstance(kws, str):
+            # split by commas
+            kws = [k.strip() for k in re.split(r"[,;\\n]", kws) if k.strip()]
+        if not isinstance(kws, list):
+            return []
+        # normalize keywords to lowercase tokens
+        cleaned = []
+        for k in kws:
+            kk = str(k).strip().lower()
+            if kk and kk not in cleaned:
+                cleaned.append(kk)
+        return cleaned[:6]
+    except Exception as e:
+        logger.log("warn", f"LLM keyword suggestion failed: {e}")
+        return []
+
+def is_server_reachable(base_url, timeout=3):
+    """Quick health check to see if the LM Studio / Ollama base URL responds."""
+    try:
+        url = base_url.rstrip("/")
+        # Prefer models endpoint if available
+        test_url = url + ("/v1/models" if url.endswith("/v1") or url.endswith("/v1/") else "/v1/models")
+        req = urllib.request.Request(test_url, headers={"Content-Type": "application/json"}, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            return True
+    except Exception:
+        return False
+
+def ensure_server_running(base_url, start_cmd=None):
+    """If server not reachable and a start_cmd is provided, attempt to run it."""
+    if is_server_reachable(base_url):
+        return True
+    if not start_cmd:
+        return False
+    try:
+        import subprocess
+        # Start as a detached background process
+        subprocess.Popen(start_cmd, shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        # Wait briefly for server to start
+        import time
+        for _ in range(6):
+            if is_server_reachable(base_url, timeout=2):
+                return True
+            time.sleep(1)
+    except Exception as e:
+        logger.log("warn", f"Failed to start LLM server with start_cmd: {e}")
+    return is_server_reachable(base_url)
+
 def get_embedding(text, provider, api_key, base_url, model):
     """
     Generates a vector embedding for the given text using the configured LLM provider.

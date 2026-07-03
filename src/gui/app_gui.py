@@ -32,8 +32,9 @@ from gui_analytics import AnalyticsTabMixin
 from gui_dialogs import DialogsMixin
 from gui_table_tab import TableTabMixin, DatePickerPopup
 from gui_workers import WorkersMixin
+from gui_kanban import KanbanTabMixin
 
-class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin):
+class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin, KanbanTabMixin):
     def __init__(self):
         super().__init__()
         self.title("GEM Tender Logger  v4")
@@ -294,6 +295,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
         self.notebook.add(self.tab_matrix, text="  Matrix View  ")
         self.notebook.add(self.tab_analytics, text="  Analytics View  ")
+        # Board / Kanban View
+        self._build_kanban_tab()
 
         # Build Table tab layouts
         self._build_table_tab()
@@ -453,6 +456,11 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 self._update_matrix()
             elif selected_tab == 3:
                 self._update_analytics()
+            elif selected_tab == 4:
+                try:
+                    self._update_kanban()
+                except Exception:
+                    pass
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -534,6 +542,10 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 self._log("info", f"Migrated filing_status for {len(needs_migration)} existing tender(s).")
 
             self._refresh_table_view()
+            try:
+                self._update_kanban()
+            except Exception:
+                pass
             
             # Start background embedding worker on startup
             from vector_search import start_background_embedding_worker

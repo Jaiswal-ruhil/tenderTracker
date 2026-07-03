@@ -586,6 +586,51 @@ def learn_category_mapping(items, new_category):
     new_cat_clean = new_category.strip()
     if not new_cat_clean:
         return
+
+    # If LLM mapping is enabled, ask the LLM to normalize/suggest a canonical
+    # category name for these items. This helps keep category names consistent.
+    try:
+        import db
+        settings = db.load_settings()
+        use_llm = settings.get("llm_use_mapping", False)
+        provider = settings.get("llm_provider", "Disabled")
+        if use_llm and provider != "Disabled":
+            try:
+                import llm as _llm
+                api_key = settings.get("llm_api_key", "")
+                base_url = settings.get("llm_base_url", "")
+                model = settings.get("llm_model", "")
+                # Ensure server is running (attempt auto-start if a start command is configured)
+                start_cmd = settings.get("llm_start_cmd")
+                try:
+                    _llm.ensure_server_running(base_url, start_cmd)
+                except Exception:
+                    pass
+
+                suggested = _llm.llm_map_category(items, [m.get("name") for m in mappings if m.get("name")], provider, api_key, base_url, model)
+                if suggested and suggested.strip():
+                    # Prefer LLM suggestion as canonical name
+                    new_cat_clean = suggested.strip()
+
+                # Ask LLM for suggested keywords to improve mapping
+                try:
+                    kws = _llm.suggest_category_keywords(items, provider, api_key, base_url, model)
+                    if kws:
+                        # Store suggestions in settings for user review instead of auto-merging
+                        pending = settings.get("llm_pending_keyword_suggestions", {}) or {}
+                        existing = pending.get(new_cat_clean, [])
+                        for k in kws:
+                            if k not in existing:
+                                existing.append(k)
+                        pending[new_cat_clean] = existing
+                        db.save_setting("llm_pending_keyword_suggestions", pending)
+                except Exception:
+                    pass
+            except Exception as e:
+                import logger
+                logger.log("warn", f"LLM category mapping failed: {e}. Falling back to keyword mapping.")
+    except Exception:
+        pass
         
     # Load mappings
     import db

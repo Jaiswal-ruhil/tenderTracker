@@ -606,14 +606,27 @@ class TableTabMixin:
                     self._update_analytics()
             except:
                 pass
+        def on_focus_out(ev):
+            # Delay check slightly so <<ComboboxSelected>> has time to fire and update StringVar
+            def check():
+                try:
+                    if not self._editing:
+                        return
+                    focus = self.focus_get()
+                    # If focus is still within the combobox or its popdown dropdown list, do not close
+                    if focus and (str(focus).startswith(str(e)) or "popdown" in str(focus).lower()):
+                        return
+                    commit()
+                except Exception:
+                    pass
+            e.after(150, check)
+
         e.bind("<Return>", commit)
         e.bind("<Tab>", commit)
         e.bind("<Escape>", lambda ev: self._cancel_edit())
         if col_id in ("category", "filing_status"):
-            # For dropdowns: commit only on selection or keyboard confirm.
-            # Do NOT bind FocusOut — it fires before <<ComboboxSelected>>
-            # and would commit with the stale old value.
             e.bind("<<ComboboxSelected>>", commit)
+            e.bind("<FocusOut>", on_focus_out)
         else:
             # Plain Entry: commit when focus leaves
             e.bind("<FocusOut>", commit)

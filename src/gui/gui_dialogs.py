@@ -129,12 +129,19 @@ class DialogsMixin:
         model_ent = tk.Entry(llm_frame, textvariable=model_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
                             highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
         model_ent.grid(row=4, column=1, sticky="ew", padx=(10, 0), pady=3)
+        # Optional start command (used if server not reachable)
+        start_lbl = tk.Label(llm_frame, text="Start Command:", font=FL, bg=PANEL, fg=TEXTSUB)
+        start_lbl.grid(row=5, column=0, sticky="w", pady=3)
+        start_var = tk.StringVar(value=db.load_settings().get("llm_start_cmd", ""))
+        start_ent = tk.Entry(llm_frame, textvariable=start_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                    highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        start_ent.grid(row=5, column=1, sticky="ew", padx=(10, 0), pady=3)
         
         llm_frame.columnconfigure(1, weight=1)
         
         # Checkboxes for actions
         chk_frame = tk.Frame(llm_frame, bg=PANEL)
-        chk_frame.grid(row=5, column=0, columnspan=2, sticky="w", pady=(6, 4))
+        chk_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 4))
         
         use_parsing_var = tk.BooleanVar(value=db.load_settings().get("llm_use_parsing", False))
         chk_parse = tk.Checkbutton(chk_frame, text="Use LLM for parsing tender text & PDFs",
@@ -152,7 +159,7 @@ class DialogsMixin:
 
         # Test Connection button and Status label
         test_frame = tk.Frame(llm_frame, bg=PANEL)
-        test_frame.grid(row=6, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        test_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         
         test_status_var = tk.StringVar(value="Status: Ready")
         test_status_lbl = tk.Label(test_frame, textvariable=test_status_var, font=("Segoe UI", 8, "italic"), bg=PANEL, fg=TEXTSUB, anchor="w")
@@ -176,6 +183,12 @@ class DialogsMixin:
             test_status_var.set("Status: Connecting...")
             
             def thread_fn():
+                # Attempt to ensure server running using configured start command
+                start_cmd_val = start_var.get().strip()
+                try:
+                    llm.ensure_server_running(url, start_cmd_val)
+                except Exception:
+                    pass
                 success, msg = llm.test_llm_connection(prov, key, url, mdl)
                 if success:
                     win.after(0, lambda: test_status_lbl.configure(fg=SUCCESS))
@@ -229,6 +242,7 @@ class DialogsMixin:
             db.save_setting("llm_api_key", key_var.get().strip())
             db.save_setting("llm_base_url", url_var.get().strip())
             db.save_setting("llm_model", model_var.get().strip())
+            db.save_setting("llm_start_cmd", start_var.get().strip())
             db.save_setting("llm_use_parsing", use_parsing_var.get())
             db.save_setting("llm_use_mapping", use_mapping_var.get())
             
@@ -731,6 +745,98 @@ class DialogsMixin:
         map_hdr = tk.Frame(map_frame, bg=PANEL)
         map_hdr.pack(fill="x", pady=(8, 2))
         tk.Label(map_hdr, text="Mapping Keywords for Selected:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(side="left")
+        # Button to review LLM suggestions
+        def open_llm_suggestions():
+            pending = db.load_settings().get("llm_pending_keyword_suggestions", {}) or {}
+            if not pending:
+                messagebox.showinfo("No Suggestions", "No pending LLM keyword suggestions found.", parent=win)
+                return
+            sug_win = tk.Toplevel(win)
+            sug_win.grab_set()
+            sug_win.transient(win)
+            sug_win.title("LLM Suggested Keywords")
+            sug_win.configure(bg=BG)
+            sug_win.geometry("600x400")
+
+            tk.Label(sug_win, text="LLM Suggested Keywords — Review and accept to merge into mappings", font=FT, bg=BG, fg=TEXT).pack(pady=(8,6))
+
+            list_fr = tk.Frame(sug_win, bg=PANEL, padx=8, pady=8)
+            list_fr.pack(fill="both", expand=True, padx=10, pady=6)
+
+            canvas = tk.Canvas(list_fr, bg=PANEL, highlightthickness=0)
+            vsb = ttk.Scrollbar(list_fr, orient="vertical", command=canvas.yview)
+            inner = tk.Frame(canvas, bg=PANEL)
+            canvas.create_window((0,0), window=inner, anchor="nw")
+            canvas.configure(yscrollcommand=vsb.set)
+            vsb.pack(side="right", fill="y")
+            canvas.pack(side="left", fill="both", expand=True)
+
+            def on_cfg(e):
+                canvas.configure(scrollregion=canvas.bbox("all"))
+            inner.bind("<Configure>", on_cfg)
+
+            # Render suggestions
+            rows = []
+            for cat, kws in pending.items():
+                fr = tk.Frame(inner, bg=CARD, padx=8, pady=6, highlightthickness=1, highlightbackground="#30363D")
+                fr.pack(fill="x", pady=6, padx=6)
+                tk.Label(fr, text=cat, font=("Segoe UI",9,"bold"), bg=CARD, fg=TEXT).pack(anchor="w")
+                tk.Label(fr, text=", ".join(kws), font=("Segoe UI",8), bg=CARD, fg=TEXTSUB, wraplength=520, justify="left").pack(anchor="w", pady=(4,6))
+
+                btn_row = tk.Frame(fr, bg=CARD)
+                btn_row.pack(fill="x")
+
+                def make_accept(c=cat, ks=kws):
+                    def _accept():
+                        settings_inner = db.load_settings()
+                        mappings_inner = settings_inner.get("category_mappings")
+                        if not mappings_inner:
+                            try:
+                                from config import CATEGORY_MAPPING
+                                mappings_inner = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+                            except Exception:
+                                mappings_inner = []
+                        # Find or create category entry
+                        ent = None
+                        for m in mappings_inner:
+                            if m.get("name","").lower() == c.lower():
+                                ent = m
+                                break
+                        if not ent:
+                            ent = {"name": c, "keywords": []}
+                            mappings_inner.append(ent)
+                        for k in ks:
+                            if k not in ent["keywords"]:
+                                ent["keywords"].append(k)
+                        db.save_setting("category_mappings", mappings_inner)
+                        # remove pending
+                        pending2 = settings_inner.get("llm_pending_keyword_suggestions", {}) or {}
+                        if c in pending2:
+                            pending2.pop(c, None)
+                        db.save_setting("llm_pending_keyword_suggestions", pending2)
+                        messagebox.showinfo("Accepted", f"Merged suggestions into category '{c}'", parent=sug_win)
+                        sug_win.destroy()
+                    return _accept
+
+                def make_reject(c=cat):
+                    def _reject():
+                        settings_inner = db.load_settings()
+                        pending2 = settings_inner.get("llm_pending_keyword_suggestions", {}) or {}
+                        if c in pending2:
+                            pending2.pop(c, None)
+                        db.save_setting("llm_pending_keyword_suggestions", pending2)
+                        messagebox.showinfo("Discarded", f"Discarded suggestions for '{c}'", parent=sug_win)
+                        sug_win.destroy()
+                    return _reject
+
+                tk.Button(btn_row, text="Accept & Merge", command=make_accept(), bg=ACCENT2).pack(side="left", padx=6)
+                tk.Button(btn_row, text="Discard", command=make_reject(), bg=CARD).pack(side="left", padx=6)
+
+            return
+
+        sug_btn = tk.Button(map_hdr, text="🔍 Review LLM Suggestions", command=open_llm_suggestions)
+        sug_btn.pack(side="right")
+        style_mini_btn(sug_btn, normal_bg=PANEL, hover_bg="#30363D", fg=TEXT)
         
         def clear_map_kws():
             m = get_selected_mapping()

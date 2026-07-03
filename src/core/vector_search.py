@@ -1,5 +1,10 @@
 # FAISS Vector Indexing & Semantic Search module
-import faiss
+try:
+    import faiss
+    _has_faiss = True
+except Exception:
+    faiss = None
+    _has_faiss = False
 import numpy as np
 import json
 import threading
@@ -34,6 +39,12 @@ def rebuild_vector_index():
     global _faiss_index, _bid_nos, _dimension
     with _lock:
         try:
+            if not _has_faiss:
+                logger.log("warn", "FAISS not available in this environment; skipping index build.")
+                _faiss_index = None
+                _bid_nos = []
+                _dimension = None
+                return False
             tenders = db.load_all_tenders()
             # Filter for tenders that have a valid embedding float list
             embedded_tenders = [t for t in tenders if t.get("embedding") and isinstance(t["embedding"], list)]
