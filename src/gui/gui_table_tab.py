@@ -1146,6 +1146,10 @@ class TableTabMixin:
         return "break"
 
     def _shortcut_clipboard_parse(self):
+        # If focus is on any text input widget, let the native paste work
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry)):
+            return
         try:
             clipboard = self.clipboard_get()
             if clipboard:
