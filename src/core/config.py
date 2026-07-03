@@ -41,7 +41,7 @@ TV_COLS = [
     ("bid_opening",  "Bid Opening",       140),
     ("start_date",   "Start Date",        100),
     ("end_date",     "End Date",          140),
-    ("filing_status", "Filing Status",    110),
+    ("filing_status", "Filing Status",    130),
     ("tags",         "Tags",              120),
     ("remarks",      "Remarks",           140),
 ]

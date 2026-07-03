@@ -457,6 +457,20 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         self._set_status("Loading tenders from database...", MUTED)
         try:
             self._records = db.load_all_tenders()
+
+            # Migrate existing tenders that have no filing_status (or a legacy value)
+            VALID_STATUSES = {"To Be Filed", "Evaluating", "Filed"}
+            needs_migration = [
+                r for r in self._records
+                if r.get("filing_status", "") not in VALID_STATUSES
+            ]
+            if needs_migration:
+                from parser import assign_tender_status
+                for r in needs_migration:
+                    assign_tender_status(r)
+                db.save_all_tenders(self._records)
+                self._log("info", f"Migrated filing_status for {len(needs_migration)} existing tender(s).")
+
             self._refresh_table_view()
             
             # Start background embedding worker on startup

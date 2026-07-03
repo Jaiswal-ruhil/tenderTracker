@@ -298,7 +298,7 @@ class TableTabMixin:
         self.semantic_search_cb.pack(side="left", padx=(0, 15))
 
         # View dropdown
-        tk.Label(filter_fr, text="Category View:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
+        tk.Label(filter_fr, text="Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
         
         self.view_var = tk.StringVar(value="Wants (Matches)")
         view_opt = ttk.Combobox(filter_fr, textvariable=self.view_var, 
@@ -307,8 +307,11 @@ class TableTabMixin:
         view_opt.pack(side="left", padx=4)
         view_opt.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
 
+        # Visual separator
+        tk.Label(filter_fr, text="│", font=FL, bg=PANEL, fg="#30363D").pack(side="left", padx=(6, 6))
+
         # Status View dropdown
-        tk.Label(filter_fr, text="Status:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
+        tk.Label(filter_fr, text="Status:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
         self.status_view_var = tk.StringVar(value="To Be Filed")
         status_view_opt = ttk.Combobox(filter_fr, textvariable=self.status_view_var,
                                        values=["All", "To Be Filed", "Evaluating", "Filed"],
