@@ -85,3 +85,38 @@ jobs:
           files: dist\TenderTracker.exe
           draft: false
           prerelease: false
+
+      - name: Prune old releases (keep last 10)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          KEEP=10
+          echo "Fetching all releases..."
+          # Get release IDs and tag names sorted oldest-first (API returns newest-first, so reverse)
+          releases=$(gh api repos/${{ github.repository }}/releases \
+            --paginate \
+            --jq '.[] | {id: .id, tag: .tag_name, created: .created_at}' \
+            | jq -s 'sort_by(.created)')
+
+          total=$(echo "$releases" | jq 'length')
+          echo "Total releases: $total"
+
+          if [ "$total" -le "$KEEP" ]; then
+            echo "Nothing to prune ($total <= $KEEP)."
+            exit 0
+          fi
+
+          to_delete=$(echo "$releases" | jq -r ".[0:($total - $KEEP)] | .[] | \"\(.id) \(.tag)\"")
+          echo "Pruning $(($total - $KEEP)) old release(s)..."
+
+          while IFS= read -r line; do
+            rel_id=$(echo "$line" | awk '{print $1}')
+            tag=$(echo "$line" | awk '{print $2}')
+            echo "  Deleting release $rel_id (tag: $tag)..."
+            gh api -X DELETE repos/${{ github.repository }}/releases/$rel_id || true
+            gh api -X DELETE repos/${{ github.repository }}/git/refs/tags/$tag || true
+          done <<< "$to_delete"
+
+          echo "Done. Kept the $KEEP most recent releases."
