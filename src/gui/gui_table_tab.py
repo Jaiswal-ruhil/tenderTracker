@@ -1,7 +1,7 @@
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import re
-from datetime import datetime
+from datetime import datetime, date, timedelta
 import calendar
 
 # Local imports
@@ -321,12 +321,20 @@ class TableTabMixin:
         
         # Date Filter in Table View
         tk.Label(filter_fr, text="Date Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
-        self.date_filter_type_var = tk.StringVar(value="None")
+        self.date_filter_type_var = tk.StringVar(value="End Date")
         date_filter_cb = ttk.Combobox(filter_fr, textvariable=self.date_filter_type_var,
-                                      values=["None", "Start Date", "End Date", "Bid Opening Date"],
+                                      values=["None", "End Date"],
                                       state="readonly", font=FL, width=12)
         date_filter_cb.pack(side="left", padx=4)
         date_filter_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
+
+        tk.Label(filter_fr, text="Preset:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 0))
+        self.date_filter_preset_var = tk.StringVar(value="Today")
+        preset_cb = ttk.Combobox(filter_fr, textvariable=self.date_filter_preset_var,
+                                 values=["Today", "Tomorrow", "Next 3 Days", "This Week", "Clear"],
+                                 state="readonly", font=FL, width=12)
+        preset_cb.pack(side="left", padx=4)
+        preset_cb.bind("<<ComboboxSelected>>", lambda e: self._apply_date_filter_preset())
 
         tk.Label(filter_fr, text="From:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
         self.date_from_var = tk.StringVar()
@@ -355,6 +363,9 @@ class TableTabMixin:
                                     activebackground=ACCENT)
         self.btn_to_cal.pack(side="left", padx=(2, 6))
         self.btn_to_cal.configure(command=lambda: self._show_datepicker(self.btn_to_cal, self.date_to_var))
+
+        # Initialize default preset values for End Date filtering
+        self._apply_date_filter_preset(initial=True)
         
 
 
@@ -590,6 +601,66 @@ class TableTabMixin:
                 # Direct targeted DB update for the changed record
                 if changed_rec is not None:
                     db.upsert_tender_field(bid_no, col_id, nv)
+                # If category changed, optionally ask LLM for keyword suggestions
+                if col_id == "category":
+                    try:
+                        settings = db.load_settings()
+                        if settings.get("llm_use_mapping") and settings.get("llm_provider") and settings.get("llm_provider") != "Disabled":
+                            import llm
+                            provider = settings.get("llm_provider")
+                            api_key = settings.get("llm_api_key", "")
+                            base_url = settings.get("llm_base_url", "")
+                            model = settings.get("llm_model", "")
+                            kws = llm.suggest_category_keywords(changed_rec.get("items") or changed_rec.get("category") or "", provider, api_key, base_url, model)
+                            if kws:
+                                # show simple review dialog
+                                def open_review():
+                                    dlg = tk.Toplevel(self)
+                                    dlg.transient(self)
+                                    dlg.grab_set()
+                                    dlg.title("LLM Keyword Suggestions")
+                                    dlg.geometry("420x220")
+                                    tk.Label(dlg, text=f"LLM suggested keywords for '{nv}':", font=FL).pack(anchor="w", padx=10, pady=(8,4))
+                                    vars = {}
+                                    box = tk.Frame(dlg)
+                                    box.pack(fill="both", expand=True, padx=10)
+                                    for k in kws:
+                                        v = tk.BooleanVar(value=True)
+                                        vars[k]=v
+                                        chk = tk.Checkbutton(box, text=k, variable=v, bg=PANEL, fg=TEXT, selectcolor=BG)
+                                        chk.pack(anchor="w")
+
+                                    def accept():
+                                        selected = [kk for kk, vv in vars.items() if vv.get()]
+                                        if selected:
+                                            settings2 = db.load_settings()
+                                            mappings = settings2.get("category_mappings") or []
+                                            ent = None
+                                            for m in mappings:
+                                                if m.get("name","").lower() == nv.lower():
+                                                    ent = m; break
+                                            if not ent:
+                                                ent = {"name": nv, "keywords": []}
+                                                mappings.append(ent)
+                                            for s in selected:
+                                                if s not in ent["keywords"]:
+                                                    ent["keywords"].append(s)
+                                            db.save_setting("category_mappings", mappings)
+                                        dlg.destroy()
+
+                                    def cancel():
+                                        dlg.destroy()
+
+                                    btns = tk.Frame(dlg)
+                                    btns.pack(fill="x", pady=8)
+                                    tk.Button(btns, text="Accept", command=accept, bg=ACCENT2).pack(side="right", padx=8)
+                                    tk.Button(btns, text="Cancel", command=cancel, bg=CARD).pack(side="right")
+                                try:
+                                    open_review()
+                                except Exception:
+                                    pass
+                    except Exception:
+                        pass
             try:
                 e.destroy()
             except:
@@ -910,7 +981,7 @@ class TableTabMixin:
                         if from_date_parsed or to_date_parsed:
                             continue
                     
-            self._tv_insert(rec)
+                self._tv_insert(rec)
             visible_count += 1
             
         self._refresh_alt()
@@ -1005,6 +1076,35 @@ class TableTabMixin:
         count = len(rows_to_copy)
         scope = "selected" if selected else "all visible"
         self._log("ok", f"Copied {count} {scope} row(s) to clipboard.")
+
+    def _apply_date_filter_preset(self, initial=False):
+        preset = self.date_filter_preset_var.get()
+        today = date.today()
+        if preset == "Today":
+            from_date = today
+            to_date = today
+        elif preset == "Tomorrow":
+            from_date = today + timedelta(days=1)
+            to_date = today + timedelta(days=1)
+        elif preset == "Next 3 Days":
+            from_date = today
+            to_date = today + timedelta(days=3)
+        elif preset == "This Week":
+            # Use ISO weekday: Monday=1, Sunday=7, and include the rest of this week.
+            weekday = today.isoweekday()
+            from_date = today
+            to_date = today + timedelta(days=(7 - weekday))
+        elif preset == "Clear":
+            from_date = None
+            to_date = None
+        else:
+            from_date = today
+            to_date = today
+
+        self.date_from_var.set(from_date.strftime("%d-%m-%Y") if from_date else "")
+        self.date_to_var.set(to_date.strftime("%d-%m-%Y") if to_date else "")
+        if not initial:
+            self._refresh_table_view()
 
     def _clear_detail_panel(self):
         self.detail_txt.configure(state="normal")

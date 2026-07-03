@@ -224,6 +224,31 @@ class TestLLM(unittest.TestCase):
         # Verify it did a GET to /models and then a POST to load
         self.assertEqual(mock_urlopen.call_count, 2)
 
+    @patch('urllib.request.urlopen')
+    def test_is_server_reachable_local_roots(self, mock_urlopen):
+        mock_response = MagicMock()
+        mock_response.read.return_value = b'{}'
+        mock_response.__enter__.return_value = mock_response
+        mock_urlopen.return_value = mock_response
+
+        self.assertTrue(llm.is_server_reachable("http://localhost:1234"))
+
+    @patch('urllib.request.urlopen')
+    def test_get_embedding_local_fallback(self, mock_urlopen):
+        # First request fails on /v1/embeddings, second succeeds on /api/embeddings
+        def side_effect(req, timeout=10):
+            url = req.full_url
+            mock_resp = MagicMock()
+            mock_resp.__enter__.return_value = mock_resp
+            if url.endswith("/v1/embeddings"):
+                raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+            mock_resp.read.return_value = b'{"data": [{"embedding": [0.1, 0.2, 0.3]}]}'
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        emb = llm.get_embedding("test text", "Local LLM (LM Studio / Ollama)", "", "http://localhost:1234/v1", "my-local-model")
+        self.assertEqual(emb, [0.1, 0.2, 0.3])
+
     @patch('llm.llm_parse_tender')
     def test_parser_level_1_regex_fail_llm_fallback(self, mock_llm_parse):
         # Enable LLM provider but keep use_parsing disabled

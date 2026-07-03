@@ -2,6 +2,7 @@ import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
 from datetime import datetime
+import keyring
 
 # Local imports
 from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, FT, FL, TV_COLS
@@ -107,9 +108,14 @@ class DialogsMixin:
         provider_cb = ttk.Combobox(llm_frame, textvariable=provider_var, values=["Disabled", "Google AI Studio (Gemini)", "Local LLM (LM Studio / Ollama)"], state="readonly", font=FL)
         provider_cb.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=3)
         
-        # API Key
+        # API Key (stored securely in OS keyring)
         tk.Label(llm_frame, text="API Key:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=3)
-        key_var = tk.StringVar(value=db.load_settings().get("llm_api_key", ""))
+        saved_key = None
+        try:
+            saved_key = keyring.get_password('tendertracker', 'llm_api_key')
+        except Exception:
+            saved_key = None
+        key_var = tk.StringVar(value=saved_key or db.load_settings().get("llm_api_key", ""))
         key_ent = tk.Entry(llm_frame, textvariable=key_var, show="*", bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
                            highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
         key_ent.grid(row=2, column=1, sticky="ew", padx=(10, 0), pady=3)
@@ -239,7 +245,14 @@ class DialogsMixin:
             db.save_setting("selenium_headless", headless_var.get())
             # Save LLM Settings
             db.save_setting("llm_provider", provider_var.get())
-            db.save_setting("llm_api_key", key_var.get().strip())
+            # Store API key securely in keyring when available
+            try:
+                key_to_store = key_var.get().strip()
+                if key_to_store:
+                    keyring.set_password('tendertracker', 'llm_api_key', key_to_store)
+            except Exception:
+                # Fallback to settings file if keyring unavailable
+                db.save_setting("llm_api_key", key_var.get().strip())
             db.save_setting("llm_base_url", url_var.get().strip())
             db.save_setting("llm_model", model_var.get().strip())
             db.save_setting("llm_start_cmd", start_var.get().strip())

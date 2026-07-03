@@ -10,6 +10,12 @@ import json
 import threading
 import os
 import re
+try:
+    from annoy import AnnoyIndex
+    _has_annoy = True
+except Exception:
+    AnnoyIndex = None
+    _has_annoy = False
 
 # Local imports
 import db
@@ -39,8 +45,8 @@ def rebuild_vector_index():
     global _faiss_index, _bid_nos, _dimension
     with _lock:
         try:
-            if not _has_faiss:
-                logger.log("warn", "FAISS not available in this environment; skipping index build.")
+            if not _has_faiss and not _has_annoy:
+                logger.log("warn", "No vector backend (FAISS or Annoy) available; skipping index build.")
                 _faiss_index = None
                 _bid_nos = []
                 _dimension = None
@@ -62,12 +68,19 @@ def rebuild_vector_index():
             # Convert float lists to np.float32 array
             embeddings_array = np.array([t["embedding"] for t in embedded_tenders], dtype=np.float32)
             
-            # Initialize FAISS index
-            # FlatL2 is suitable for small-to-medium datasets (thousands of records)
-            index = faiss.IndexFlatL2(_dimension)
-            index.add(embeddings_array)
-            
-            _faiss_index = index
+            if _has_faiss:
+                # Initialize FAISS index
+                # FlatL2 is suitable for small-to-medium datasets (thousands of records)
+                index = faiss.IndexFlatL2(_dimension)
+                index.add(embeddings_array)
+                _faiss_index = index
+            else:
+                # Build Annoy index as a fallback
+                idx = AnnoyIndex(_dimension, 'euclidean')
+                for i, vec in enumerate(embeddings_array.tolist()):
+                    idx.add_item(i, vec)
+                idx.build(10)
+                _faiss_index = idx
             _bid_nos = [t["bid_no"] for t in embedded_tenders]
             logger.log("ok", f"FAISS Vector Index: Rebuilt index with {len(_bid_nos)} tenders (dimension {_dimension}).")
             return True
@@ -120,14 +133,19 @@ def semantic_search(query_text, limit=20):
             if _faiss_index is None or len(query_vector) != _dimension:
                 return []
                 
-        # Query FAISS index
-        query_np = np.array([query_vector], dtype=np.float32)
-        distances, indices = _faiss_index.search(query_np, min(limit, len(_bid_nos)))
-        
         results = []
-        for dist, idx in zip(distances[0], indices[0]):
-            if idx != -1 and idx < len(_bid_nos):
-                results.append((_bid_nos[idx], float(dist)))
+        if _has_faiss:
+            query_np = np.array([query_vector], dtype=np.float32)
+            distances, indices = _faiss_index.search(query_np, min(limit, len(_bid_nos)))
+            for dist, idx in zip(distances[0], indices[0]):
+                if idx != -1 and idx < len(_bid_nos):
+                    results.append((_bid_nos[idx], float(dist)))
+        else:
+            # Annoy fallback
+            idxs, dists = _faiss_index.get_nns_by_vector(query_vector, n=min(limit, len(_bid_nos)), include_distances=True)
+            for idx, dist in zip(idxs, dists):
+                if idx != -1 and idx < len(_bid_nos):
+                    results.append((_bid_nos[idx], float(dist)))
                 
         # Return results sorted by distance ascending (nearest neighbor first)
         return results

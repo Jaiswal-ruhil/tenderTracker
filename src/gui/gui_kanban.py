@@ -80,6 +80,65 @@ class KanbanTabMixin:
             card = tk.Frame(parent, bg=CARD, padx=8, pady=6, highlightthickness=1, highlightbackground="#30363D")
             card.pack(fill="x", pady=6, padx=4)
 
+            # Enable simple drag-and-drop
+            def on_press(e, widget=card):
+                widget._drag_start_x = e.x
+                widget._drag_start_y = e.y
+                widget.lift()
+
+            def on_motion(e, widget=card):
+                try:
+                    widget.place(in_=self.tab_kanban, x=widget.winfo_x() + e.x - widget._drag_start_x, y=widget.winfo_y() + e.y - widget._drag_start_y)
+                except Exception:
+                    pass
+
+            def on_release(e, widget=card):
+                # Find column under pointer and reparent
+                try:
+                    x_root = widget.winfo_rootx() + e.x
+                    y_root = widget.winfo_rooty() + e.y
+                    target = self.tab_kanban.winfo_containing(x_root, y_root)
+                    # climb until we find a kanban column inner frame
+                    while target and getattr(target, 'master', None):
+                        if target in self.kanban_cols.values() or getattr(target, 'tk', None) is None:
+                            break
+                        target = target.master
+                    # If found a valid column, move the card
+                    for name, col in self.kanban_cols.items():
+                        if target == col or (hasattr(target, 'master') and target.master == col):
+                            widget.place_forget()
+                            widget.master = col
+                            widget.pack(in_=col, fill="x", pady=6, padx=4)
+                            # update record filing_status
+                            bid_lbl = None
+                            for ch in widget.winfo_children():
+                                if isinstance(ch, tk.Label) and ch.cget("font") and "bold" in str(ch.cget("font")):
+                                    bid_lbl = ch.cget("text")
+                                    break
+                            if bid_lbl:
+                                for rec in self._records:
+                                    if rec.get("bid_no") == bid_lbl:
+                                        if name == "Evaluating":
+                                            rec["filing_status"] = "Evaluating"
+                                        elif name == "To Be Filed":
+                                            rec["filing_status"] = "To Be Filed"
+                                        elif name == "Filed":
+                                            rec["filing_status"] = "Filed"
+                                        elif name == "Urgent (Due)":
+                                            rec["filing_status"] = "To Be Filed"
+                                        try:
+                                            import db
+                                            db.save_all_tenders(self._records)
+                                        except Exception:
+                                            pass
+                            break
+                except Exception:
+                    pass
+
+            card.bind("<Button-1>", on_press)
+            card.bind("<B1-Motion>", on_motion)
+            card.bind("<ButtonRelease-1>", on_release)
+
             tk.Label(card, text=r.get("bid_no",""), font=("Segoe UI",9,"bold"), bg=CARD, fg=TEXT).pack(anchor="w")
             items = r.get("items", r.get("category",""))
             if items and len(items) > 80:
