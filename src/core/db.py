@@ -443,6 +443,9 @@ def upsert_tender(record):
                     for k, v in record.items():
                         if v is not None and str(v).strip() != "":
                             if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                                # Never overwrite a manually-filed status
+                                if k == "filing_status" and existing.get("filing_status") == "Filed":
+                                    continue
                                 existing[k] = v
                     row_data = dict_to_row(existing)
                 else:
@@ -490,6 +493,9 @@ def upsert_tenders(new_records):
                         for k, v in record.items():
                             if v is not None and str(v).strip() != "":
                                 if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                                    # Never overwrite a manually-filed status
+                                    if k == "filing_status" and existing.get("filing_status") == "Filed":
+                                        continue
                                     existing[k] = v
                         row_data = dict_to_row(existing)
                     else:

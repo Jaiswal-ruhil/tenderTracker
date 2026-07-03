@@ -306,6 +306,15 @@ class TableTabMixin:
                                 state="readonly", font=FL, width=20)
         view_opt.pack(side="left", padx=4)
         view_opt.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
+
+        # Status View dropdown
+        tk.Label(filter_fr, text="Status:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
+        self.status_view_var = tk.StringVar(value="To Be Filed")
+        status_view_opt = ttk.Combobox(filter_fr, textvariable=self.status_view_var,
+                                       values=["All", "To Be Filed", "Evaluating", "Filed"],
+                                       state="readonly", font=FL, width=13)
+        status_view_opt.pack(side="left", padx=4)
+        status_view_opt.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
         
         # Date Filter in Table View
         tk.Label(filter_fr, text="Date Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
@@ -543,7 +552,7 @@ class TableTabMixin:
             # Auto-open dropdown so user sees choices immediately
             e.after(50, e.event_generate, "<<ComboboxDropdown>>")
         elif col_id == "filing_status":
-            status_options = ["Not Filed", "Filed", "Disqualified", "Under Evaluation"]
+            status_options = ["To Be Filed", "Evaluating", "Filed"]
             e = ttk.Combobox(self.tv, textvariable=var, values=status_options, font=FL, state="readonly")
             e.place(x=x, y=y, width=w, height=h)
             e.focus_set()
@@ -857,6 +866,15 @@ class TableTabMixin:
                 continue
             if view_filter == "Don't Wants (Filtered)" and is_want:
                 continue
+
+            # Apply Status View filter
+            status_filter = getattr(self, "status_view_var", None)
+            if status_filter:
+                sv = status_filter.get()
+                if sv != "All":
+                    rec_status = rec.get("filing_status", "")
+                    if rec_status != sv:
+                        continue
                 
             if search_text and not is_semantic:
                 combined_text = " ".join(str(v) for v in rec.values()).lower()

@@ -58,6 +58,51 @@ def map_category(raw_val):
                 
     return raw_val.strip().title()
 
+
+def _is_mapped_category(category_name):
+    """
+    Returns True if category_name is a known entry in the category_mappings
+    settings (i.e. it was resolved by the mapper, not just raw-title-cased).
+    """
+    if not category_name or not str(category_name).strip():
+        return False
+    try:
+        import db
+        settings = db.load_settings()
+        mappings = settings.get("category_mappings")
+        if not mappings:
+            from config import CATEGORY_MAPPING
+            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+        known_names = {m["name"].lower() for m in mappings if m.get("name")}
+        return category_name.strip().lower() in known_names
+    except Exception:
+        return False
+
+
+def assign_tender_status(record):
+    """
+    Auto-assign filing_status based on whether the category matched a known
+    mapping rule.  Never overwrites an existing 'Filed' status — that guard
+    lives in db.py during upsert.
+
+    Returns the (possibly modified) record.
+    """
+    category = record.get("category", "")
+    if _is_mapped_category(category):
+        record.setdefault("filing_status", "To Be Filed")
+        if record.get("filing_status") not in ("Filed", "To Be Filed", "Evaluating"):
+            record["filing_status"] = "To Be Filed"
+        elif record.get("filing_status") == "":
+            record["filing_status"] = "To Be Filed"
+    else:
+        record.setdefault("filing_status", "Evaluating")
+        if record.get("filing_status") not in ("Filed", "To Be Filed", "Evaluating"):
+            record["filing_status"] = "Evaluating"
+        elif record.get("filing_status") == "":
+            record["filing_status"] = "Evaluating"
+    return record
+
+
 def split_blocks(text):
     parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
@@ -88,6 +133,8 @@ def parse_one(text):
                     parsed = db.apply_value_mappings(parsed)
                 except Exception:
                     pass
+                # Auto-assign tender status based on mapped category
+                parsed = assign_tender_status(parsed)
                 return parsed
             else:
                 import logger
@@ -201,6 +248,9 @@ def parse_one(text):
         r = db.apply_value_mappings(r)
     except Exception:
         pass
+
+    # Auto-assign tender status based on whether category was mapped
+    r = assign_tender_status(r)
 
     # Warn if the regex parser failed to extract a valid bid number
     has_bid = r.get("bid_no") and re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", r["bid_no"], re.I)
