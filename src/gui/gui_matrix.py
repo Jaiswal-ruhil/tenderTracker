@@ -215,14 +215,12 @@ class MatrixTabMixin:
                     date_lbl = tk.Label(cell_fr, text=f"End: {end_date_str}", font=("Segoe UI", 8), bg=CARD, fg=MUTED)
                     date_lbl.pack(anchor="w", padx=6)
 
-                    curr_status = rec.get("filing_status", "Not Filed")
-                    if not curr_status:
-                        curr_status = "Not Filed"
+                    curr_status = rec.get("filing_status", "Evaluating")
+                    if not curr_status or curr_status not in ("To Be Filed", "Evaluating", "Filed"):
+                        curr_status = "Evaluating"
 
                     status_var = tk.StringVar(value=curr_status)
-                    status_opts = ["Not Filed", "Draft", "Submitted", "Exempt"]
-                    if curr_status not in status_opts:
-                        status_opts.append(curr_status)
+                    status_opts = ["To Be Filed", "Evaluating", "Filed"]
 
                     cb = ttk.Combobox(cell_fr, textvariable=status_var, values=status_opts, state="readonly", width=14, font=("Segoe UI", 8))
                     cb.pack(anchor="w", padx=6, pady=(8, 4))

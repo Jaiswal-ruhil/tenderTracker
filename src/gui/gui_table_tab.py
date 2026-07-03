@@ -582,13 +582,10 @@ class TableTabMixin:
                         if col_id == "category":
                             import parser
                             parser.learn_category_mapping(r.get("items"), nv)
+                            parser.assign_tender_status(r)
+                            self.tv.set(iid, "filing_status", r["filing_status"])
                         break
                 if col_id == "category":
-                    import parser
-                    for r in self._records:
-                        if r.get("bid_no") != bid_no:
-                            raw_text = r.get("items") or r.get("category") or ""
-                            r["category"] = parser.map_category(raw_text)
                     self._refresh_table_view()
                 # Direct targeted DB update for the changed record
                 if changed_rec is not None:
