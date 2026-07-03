@@ -636,6 +636,17 @@ def get_embedding(text, provider, api_key, base_url, model):
             "input": text
         }
         last_error = None
+        # Try several common local embedding endpoint paths and body shapes
+        body_variants = [
+            {"model": model_name, "input": text},
+            {"model": model_name, "inputs": [text]},
+            {"model": model_name, "input": [text]},
+            {"model": model_name, "content": {"parts": [{"text": text}]}},
+            {"input": text},
+            {"inputs": [text]},
+            {"text": text},
+        ]
+
         for resource in [
             "api/v1/embeddings",
             "v1/embeddings",
@@ -646,33 +657,35 @@ def get_embedding(text, provider, api_key, base_url, model):
             "embed",
             "api/embed"
         ]:
-            try:
-                response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=body, timeout=10)
-                error_msg = parse_response_error(response_text)
-                if error_msg:
-                    last_error = ValueError(f"Local embedding endpoint {used_url} error: {error_msg}")
-                    logger.log("info", f"Local embedding endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
+            for bvar in body_variants:
+                try:
+                    response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=bvar, timeout=10)
+                    error_msg = parse_response_error(response_text)
+                    if error_msg:
+                        last_error = ValueError(f"Local embedding endpoint {used_url} error: {error_msg}")
+                        logger.log("info", f"Local embedding endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
+                        continue
+                    res_json = json.loads(response_text)
+                    if "data" in res_json:
+                        data = res_json["data"]
+                        if isinstance(data, list) and data:
+                            first = data[0]
+                            if isinstance(first, dict) and "embedding" in first:
+                                return first["embedding"]
+                            if all(isinstance(x, (int, float)) for x in data):
+                                return data
+                    if "embedding" in res_json:
+                        embedding = res_json["embedding"]
+                        if isinstance(embedding, dict):
+                            return embedding.get("values") or embedding.get("vector")
+                        return embedding
+                    last_error = ValueError(f"Unexpected local embedding response from {used_url}: {res_json}")
+                    logger.log("info", f"Local embedding endpoint {used_url} returned unexpected response: {str(res_json)[:200]}. Trying next candidate...")
+                    # try next body variant / resource
                     continue
-                res_json = json.loads(response_text)
-                if "data" in res_json:
-                    data = res_json["data"]
-                    if isinstance(data, list) and data:
-                        first = data[0]
-                        if isinstance(first, dict) and "embedding" in first:
-                            return first["embedding"]
-                        if all(isinstance(x, (int, float)) for x in data):
-                            return data
-                if "embedding" in res_json:
-                    embedding = res_json["embedding"]
-                    if isinstance(embedding, dict):
-                        return embedding.get("values") or embedding.get("vector")
-                    return embedding
-                last_error = ValueError(f"Unexpected local embedding response from {used_url}: {res_json}")
-                logger.log("info", f"Local embedding endpoint {used_url} returned unexpected response. Trying next candidate...")
-                continue
-            except Exception as e:
-                last_error = e
-                continue
+                except Exception as e:
+                    last_error = e
+                    continue
         if last_error:
             raise last_error
         raise ValueError("No local embedding endpoint candidates available.")

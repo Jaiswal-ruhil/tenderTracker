@@ -146,6 +146,14 @@ def scrape_bid_page(url, log_fn=None, headless=False):
         )
         time.sleep(3)   # let JS render
 
+        # Diagnostic: log the actual URL navigated to and page length to help
+        # investigate cases where Chrome shows a blank data:, page in the UI.
+        try:
+            current = driver.current_url
+            if log_fn: log_fn("info", f"Selenium navigated to: {current} (page_source length: {len(driver.page_source)})")
+        except Exception:
+            pass
+
         page = driver.page_source
 
         def regex_page(pattern, flags=re.I|re.S):
