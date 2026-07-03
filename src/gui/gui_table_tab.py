@@ -871,9 +871,8 @@ class TableTabMixin:
                 continue
 
             # Apply Status View filter
-            status_filter = getattr(self, "status_view_var", None)
-            if status_filter:
-                sv = status_filter.get()
+            if "status_view_var" in self.__dict__:
+                sv = self.status_view_var.get()
                 if sv != "All":
                     rec_status = rec.get("filing_status", "")
                     if rec_status != sv:

@@ -64,6 +64,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         # Start UI freeze watchdog after the app is fully up
         import logger as _logger_mod
         _logger_mod.start_watchdog()
+        # Stop watchdog cleanly when the window is closed
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── styles ────────────────────────────────────────────────────────────────
     def _style(self):
@@ -340,14 +342,31 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
     def _poll_log_queue(self):
         import logger
-        logger.update_heartbeat()  # keep watchdog informed the main thread is alive
-        while not logger.log_queue.empty():
-            try:
-                level, msg = logger.log_queue.get_nowait()
-                self._write_to_log_widget(level, msg)
-            except Exception:
-                break
-        self.after(50, self._poll_log_queue)
+        try:
+            logger.update_heartbeat()  # keep watchdog informed the main thread is alive
+            while not logger.log_queue.empty():
+                try:
+                    level, msg = logger.log_queue.get_nowait()
+                    self._write_to_log_widget(level, msg)
+                except Exception:
+                    break
+            self.after(50, self._poll_log_queue)
+        except Exception:
+            # Widget has been destroyed — stop rescheduling silently
+            pass
+
+    def _on_close(self):
+        """Graceful shutdown: stop watchdog then destroy the window."""
+        try:
+            self.destroy()
+        except Exception:
+            pass
+
+    def destroy(self):
+        """Stop watchdog thread and destroy the window."""
+        import logger as _logger_mod
+        _logger_mod.stop_watchdog()
+        super().destroy()
 
     def _show_toast(self, title, message, level="info"):
         if threading.current_thread() is not threading.main_thread():

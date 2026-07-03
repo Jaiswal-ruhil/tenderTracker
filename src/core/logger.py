@@ -30,6 +30,8 @@ def _watchdog_loop():
     last_warned = 0.0
     while _watchdog_running:
         time.sleep(WATCHDOG_INTERVAL)
+        if not _watchdog_running:
+            break
         with _heartbeat_lock:
             elapsed_ms = (time.monotonic() - _heartbeat_time) * 1000
         now = time.monotonic()
