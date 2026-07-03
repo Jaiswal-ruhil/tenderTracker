@@ -1,6 +1,8 @@
 import sys
 import os
 import unittest
+import urllib.error
+import json
 from unittest.mock import patch, MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
@@ -26,6 +28,11 @@ class TestLLM(unittest.TestCase):
         if os.path.exists(db.SETTINGS_FILE):
             try: os.remove(db.SETTINGS_FILE)
             except: pass
+
+        # Reset LLM module cache state for isolated tests
+        llm._loaded_local_models.clear()
+        llm._failed_local_models.clear()
+        llm._failed_local_service_urls.clear()
 
     def tearDown(self):
         if os.path.exists(db.DB_FILE):
@@ -225,6 +232,43 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 2)
 
     @patch('urllib.request.urlopen')
+    def test_auto_load_local_model_ignores_error_json(self, mock_urlopen):
+        # Mock /v1/models returning empty, then /models/load returning JSON error,
+        # then /api/v1/models/load returning success.
+        mock_response_list = MagicMock()
+        mock_response_list.read.return_value = b'{"data": []}'
+        mock_response_list.__enter__.return_value = mock_response_list
+
+        mock_response_error = MagicMock()
+        mock_response_error.read.return_value = b'{"error":"Unexpected endpoint or method. (POST /models/load)"}'
+        mock_response_error.__enter__.return_value = mock_response_error
+
+        mock_response_success = MagicMock()
+        mock_response_success.read.return_value = b'{"status":"success"}'
+        mock_response_success.__enter__.return_value = mock_response_success
+
+        mock_urlopen.side_effect = [mock_response_list, mock_response_error, mock_response_success]
+
+        llm.auto_load_local_model("http://localhost:1234", "my-local-model")
+        self.assertEqual(mock_urlopen.call_count, 3)
+
+    @patch('urllib.request.urlopen')
+    def test_local_service_failure_caches_base_url(self, mock_urlopen):
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"error":"Unexpected endpoint or method."}'
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
+        with self.assertRaises(ValueError):
+            llm.auto_load_local_model("http://localhost:1234", "my-local-model")
+
+        # Subsequent calls should raise from cached base URL failure without extra requests
+        mock_urlopen.reset_mock()
+        with self.assertRaises(ValueError):
+            llm.auto_load_local_model("http://localhost:1234", "my-local-model")
+        self.assertEqual(mock_urlopen.call_count, 0)
+
+    @patch('urllib.request.urlopen')
     def test_is_server_reachable_local_roots(self, mock_urlopen):
         mock_response = MagicMock()
         mock_response.read.return_value = b'{}'
@@ -235,19 +279,53 @@ class TestLLM(unittest.TestCase):
 
     @patch('urllib.request.urlopen')
     def test_get_embedding_local_fallback(self, mock_urlopen):
-        # First request fails on /v1/embeddings, second succeeds on /api/embeddings
+        # First request returns a JSON error on /v1/embeddings, second request succeeds on /api/embeddings
         def side_effect(req, timeout=10):
             url = req.full_url
             mock_resp = MagicMock()
             mock_resp.__enter__.return_value = mock_resp
             if url.endswith("/v1/embeddings"):
-                raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
-            mock_resp.read.return_value = b'{"data": [{"embedding": [0.1, 0.2, 0.3]}]}'
-            return mock_resp
+                mock_resp.read.return_value = b'{"error":"Unexpected endpoint or method. (POST /v1/embeddings)"}'
+                return mock_resp
+            if url.endswith("/api/embeddings"):
+                mock_resp.read.return_value = b'{"data": [{"embedding": [0.1, 0.2, 0.3]}]}'
+                return mock_resp
+            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
 
         mock_urlopen.side_effect = side_effect
         emb = llm.get_embedding("test text", "Local LLM (LM Studio / Ollama)", "", "http://localhost:1234/v1", "my-local-model")
         self.assertEqual(emb, [0.1, 0.2, 0.3])
+
+    @patch('urllib.request.urlopen')
+    def test_try_local_endpoint_preserves_body_across_retries(self, mock_urlopen):
+        # The first candidate returns an HTTPError so the helper must preserve the request body for subsequent retries.
+        def side_effect(req, timeout=10):
+            url = req.full_url
+            if url.endswith('/v1/embeddings'):
+                raise urllib.error.HTTPError(url, 404, 'Not Found', hdrs=None, fp=None)
+            mock_resp = MagicMock()
+            mock_resp.__enter__.return_value = mock_resp
+            mock_resp.read.return_value = b'{"data": [{"embedding": [0.4, 0.5, 0.6]}]}'
+            # Verify the body remains the same on retry
+            self.assertEqual(req.data, json.dumps({"model": "my-local-model", "input": "test text"}).encode('utf-8'))
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        emb = llm.get_embedding("test text", "Local LLM (LM Studio / Ollama)", "", "http://localhost:1234/v1", "my-local-model")
+        self.assertEqual(emb, [0.4, 0.5, 0.6])
+
+    @patch('urllib.request.urlopen')
+    def test_try_local_endpoint_http_error_includes_url(self, mock_urlopen):
+        # Simulate an HTTPError from the first candidate and ensure the final error includes the endpoint URL.
+        error = urllib.error.HTTPError(
+            "http://localhost:1234/v1/embeddings", 404, "Not Found", hdrs=None, fp=None
+        )
+        mock_urlopen.side_effect = error
+
+        with self.assertRaises(ValueError) as cm:
+            llm.try_local_endpoint("http://localhost:1234/v1", "embeddings", timeout=1)
+        self.assertIn("/embeddings", str(cm.exception))
+        self.assertIn("HTTPError 404", str(cm.exception))
 
     @patch('llm.llm_parse_tender')
     def test_parser_level_1_regex_fail_llm_fallback(self, mock_llm_parse):

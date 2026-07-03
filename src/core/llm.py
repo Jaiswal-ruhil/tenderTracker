@@ -4,6 +4,34 @@ import urllib.error
 import re
 import logger
 
+_loaded_local_models = set()
+_failed_local_models = {}
+_failed_local_service_urls = {}
+
+def normalize_local_service_key(base_url):
+    return (base_url or "http://localhost:1234").strip().rstrip("/")
+
+
+def parse_response_error(response_text):
+    """
+    Detect structured error payloads returned by local LLM endpoints.
+    """
+    if not response_text or not isinstance(response_text, str):
+        return None
+    try:
+        parsed = json.loads(clean_json_response(response_text))
+        if isinstance(parsed, dict):
+            if parsed.get("error"):
+                return parsed["error"]
+            if parsed.get("detail"):
+                return parsed["detail"]
+            if parsed.get("message"):
+                return parsed["message"]
+        return None
+    except Exception:
+        return None
+
+
 def clean_json_response(text):
     """
     Extract the JSON object from the response string, stripping away
@@ -56,6 +84,11 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     last_error = None
+    try:
+        import json as _json
+    except Exception:
+        _json = None
+    # local JSON helper ensures we don't rely on module-level name being present
 
     def join_local_url(root, resource):
         root = root.rstrip("/")
@@ -64,24 +97,42 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
         lower_resource = resource.lower()
         for prefix in ["api/v1", "v1", "api"]:
             if lower_root.endswith(f"/{prefix}") and lower_resource.startswith(f"{prefix}/"):
-                root = root[:-(len(prefix) + 1)]
+                resource = resource[len(prefix) + 1:]
                 break
         return f"{root}/{resource}"
 
     for root in normalize_local_service_roots(base_url):
         for resource in resources:
             url = join_local_url(root, resource)
+            if _json is not None:
+                try:
+                    request_body = _json.dumps(body).encode("utf-8") if body is not None else None
+                except Exception:
+                    request_body = None
+            else:
+                try:
+                    import json as _json_local
+                    request_body = _json_local.dumps(body).encode("utf-8") if body is not None else None
+                except Exception:
+                    request_body = None
             try:
                 req = urllib.request.Request(
                     url,
-                    data=json.dumps(body).encode("utf-8") if body is not None else None,
+                    data=request_body,
                     headers=headers,
                     method=method
                 )
                 with urllib.request.urlopen(req, timeout=timeout) as response:
                     return response.read().decode("utf-8"), url
+            except urllib.error.HTTPError as e:
+                try:
+                    error_body = e.read().decode("utf-8")
+                except Exception:
+                    error_body = e.reason if hasattr(e, 'reason') else str(e)
+                last_error = ValueError(f"Local endpoint {url} HTTPError {e.code}: {error_body}")
+                continue
             except Exception as e:
-                last_error = e
+                last_error = ValueError(f"Local endpoint {url} failed: {type(e).__name__}: {e}")
                 continue
     if last_error:
         raise last_error
@@ -94,6 +145,15 @@ def auto_load_local_model(base_url, model, api_key=None):
     """
     if not model:
         return
+
+    base_url_key = normalize_local_service_key(base_url)
+    cache_key = (base_url_key, model.strip())
+    if cache_key in _loaded_local_models:
+        return
+    if cache_key in _failed_local_models:
+        raise _failed_local_models[cache_key]
+    if base_url_key in _failed_local_service_urls:
+        raise _failed_local_service_urls[base_url_key]
 
     # Check if the model is already available via any local API root
     def list_models(url):
@@ -117,55 +177,56 @@ def auto_load_local_model(base_url, model, api_key=None):
                 return
             break
 
-    # Try loading in LM Studio across candidate roots
-    for root in normalize_local_service_roots(base_url):
-        lm_studio_load_url = f"{root.rstrip('/')}/models/load"
+    # Try loading in LM Studio across candidate resources
+    load_resources = [
+        "models/load",
+        "api/models/load",
+        "v1/models/load",
+        "api/v1/models/load"
+    ]
+    for resource in load_resources:
         try:
-            body = {"model": model}
-            req = urllib.request.Request(
-                lm_studio_load_url,
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
+            response_text, used_url = try_local_endpoint(
+                base_url,
+                resource,
+                api_key,
+                method="POST",
+                body={"model": model},
+                timeout=30
             )
-            if api_key:
-                req.add_header("Authorization", f"Bearer {api_key}")
-            logger.log("info", f"Attempting to load model '{model}' in LM Studio via {lm_studio_load_url}...")
-            with urllib.request.urlopen(req, timeout=30) as response:
-                res_data = response.read().decode("utf-8")
-                logger.log("ok", f"LM Studio model load response: {res_data[:200]}")
-                return
-        except urllib.error.HTTPError as e:
-            logger.log("info", f"LM Studio load endpoint returned HTTP status {e.code} for {lm_studio_load_url}. Trying other local server methods...")
+            error_msg = parse_response_error(response_text)
+            if error_msg:
+                logger.log("info", f"LM Studio model load returned error response for {used_url}: {error_msg}. Trying other local server methods...")
+                continue
+            logger.log("ok", f"LM Studio model load response: {response_text[:200]}")
+            _loaded_local_models.add(cache_key)
+            return
         except Exception as e:
-            logger.log("info", f"LM Studio load failed for {lm_studio_load_url}: {e}. Trying other local server methods...")
+            logger.log("info", f"LM Studio load failed for resource {resource}: {e}. Trying other local server methods...")
 
     # 3. Try pulling in Ollama if available
     try:
-        for root in normalize_local_service_roots(base_url):
-            if "/api" not in root or root.endswith("/api/v1"):
-                continue
-            ollama_pull_url = f"{root.rstrip('/')}/pull"
-            body = {"name": model, "stream": False}
-            req = urllib.request.Request(
-                ollama_pull_url,
-                data=json.dumps(body).encode("utf-8"),
-                headers={"Content-Type": "application/json"},
-                method="POST"
-            )
-            logger.log("info", f"Attempting to pull/load model '{model}' in Ollama via {ollama_pull_url}...")
-            with urllib.request.urlopen(req, timeout=120) as response:
-                res_data = response.read().decode("utf-8")
-                logger.log("ok", f"Ollama model pull/load response: {res_data[:200]}")
-                return
-    except urllib.error.HTTPError as e:
-        try:
-            body = e.read().decode('utf-8')
-        except Exception:
-            body = ''
-        logger.log("warn", f"Ollama model pull/load returned HTTP status {e.code}: {body}")
+        response_text, used_url = try_local_endpoint(
+            base_url,
+            "pull",
+            api_key,
+            method="POST",
+            body={"name": model, "stream": False},
+            timeout=120
+        )
+        error_msg = parse_response_error(response_text)
+        if error_msg:
+            logger.log("warn", f"Ollama model pull/load returned error response: {error_msg}")
+        else:
+            logger.log("ok", f"Ollama model pull/load response: {response_text[:200]}")
+            return
     except Exception as e:
         logger.log("warn", f"Ollama model pull/load failed: {e}")
+
+    error = ValueError(f"Failed to load local model '{model}' from {base_url}")
+    _failed_local_models[cache_key] = error
+    _failed_local_service_urls[base_url_key] = error
+    raise error
 
 def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
     """
@@ -202,6 +263,10 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         )
     
     elif provider == "Local LLM (LM Studio / Ollama)":
+        base_url_key = normalize_local_service_key(base_url)
+        if base_url_key in _failed_local_service_urls:
+            raise _failed_local_service_urls[base_url_key]
+
         # Automatically load model on demand
         try:
             auto_load_local_model(base_url, model, api_key)
@@ -223,6 +288,11 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         for resource in ["chat/completions", "v1/chat/completions", "api/v1/chat/completions"]:
             try:
                 response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=body, timeout=15)
+                error_msg = parse_response_error(response_text)
+                if error_msg:
+                    last_error = ValueError(f"Local chat endpoint {used_url} error: {error_msg}")
+                    logger.log("info", f"Local chat endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
+                    continue
                 res_json = json.loads(response_text)
                 try:
                     return res_json["choices"][0]["message"]["content"]
@@ -550,6 +620,10 @@ def get_embedding(text, provider, api_key, base_url, model):
             method="POST"
         )
     elif provider == "Local LLM (LM Studio / Ollama)":
+        base_url_key = normalize_local_service_key(base_url)
+        if base_url_key in _failed_local_service_urls:
+            raise _failed_local_service_urls[base_url_key]
+
         # Automatically load model on demand
         try:
             auto_load_local_model(base_url, model, api_key)
@@ -563,10 +637,10 @@ def get_embedding(text, provider, api_key, base_url, model):
         }
         last_error = None
         for resource in [
-            "v1/embeddings",
             "api/v1/embeddings",
-            "v1/embed",
+            "v1/embeddings",
             "api/v1/embed",
+            "v1/embed",
             "embeddings",
             "api/embeddings",
             "embed",
@@ -574,6 +648,11 @@ def get_embedding(text, provider, api_key, base_url, model):
         ]:
             try:
                 response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=body, timeout=10)
+                error_msg = parse_response_error(response_text)
+                if error_msg:
+                    last_error = ValueError(f"Local embedding endpoint {used_url} error: {error_msg}")
+                    logger.log("info", f"Local embedding endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
+                    continue
                 res_json = json.loads(response_text)
                 if "data" in res_json:
                     data = res_json["data"]
@@ -589,6 +668,7 @@ def get_embedding(text, provider, api_key, base_url, model):
                         return embedding.get("values") or embedding.get("vector")
                     return embedding
                 last_error = ValueError(f"Unexpected local embedding response from {used_url}: {res_json}")
+                logger.log("info", f"Local embedding endpoint {used_url} returned unexpected response. Trying next candidate...")
                 continue
             except Exception as e:
                 last_error = e
