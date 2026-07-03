@@ -90,6 +90,24 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
               background=[("selected", PANEL)],
               foreground=[("selected", TEXT)])
 
+        # Style all TCombobox widgets (Filter dropdowns, etc.) to match the dark theme
+        s.configure("TCombobox", 
+                    fieldbackground=CARD, 
+                    background=PANEL, 
+                    foreground=TEXT, 
+                    bordercolor="#30363D", 
+                    arrowcolor=MUTED)
+        s.map("TCombobox", 
+              fieldbackground=[("readonly", CARD)], 
+              foreground=[("readonly", TEXT)],
+              selectbackground=[("readonly", SEL_BG)])
+              
+        # Centralize drop-down listboxes configuration for dark theme
+        self.option_add("*TCombobox*Listbox.background", CARD)
+        self.option_add("*TCombobox*Listbox.foreground", TEXT)
+        self.option_add("*TCombobox*Listbox.selectBackground", SEL_BG)
+        self.option_add("*TCombobox*Listbox.selectForeground", TEXT)
+
     # ── layout ────────────────────────────────────────────────────────────────
     def _build(self):
         # top bar

@@ -356,10 +356,7 @@ class TableTabMixin:
         self.btn_to_cal.pack(side="left", padx=(2, 6))
         self.btn_to_cal.configure(command=lambda: self._show_datepicker(self.btn_to_cal, self.date_to_var))
         
-        # Style Combobox listbox dropdown
-        self.option_add("*TCombobox*Listbox.background", CARD)
-        self.option_add("*TCombobox*Listbox.foreground", TEXT)
-        self.option_add("*TCombobox*Listbox.selectBackground", SEL_BG)
+
 
         # Refine rules and copy table buttons
         self._btn(filter_fr, "⚙ Refine Rules...", self._show_filter_rules_dialog, bg=CARD).pack(side="right")
