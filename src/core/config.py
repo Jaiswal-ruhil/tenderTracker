@@ -57,4 +57,5 @@ CATEGORY_MAPPING = [
     (["vfd"], "VFD"),
     (["packing", "jointing"], "Packing Jointing"),
     (["electrode"], "Electrodes"),
+    (["switch gear", "acb", "mccb"], "ACB/MCCB"),
 ]
