@@ -247,7 +247,8 @@ def load_all_tenders():
         try:
             conn = get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tenders")
+            cols_str = ", ".join(COLUMNS)
+            cursor.execute(f"SELECT {cols_str} FROM tenders")
             rows = cursor.fetchall()
             return [row_to_dict(r) for r in rows]
         except sqlite3.DatabaseError as e:
@@ -269,7 +270,8 @@ def save_all_tenders(records):
                 cursor = conn.cursor()
                 cursor.execute("DELETE FROM tenders")
                 placeholders = ",".join(["?"] * len(COLUMNS))
-                sql = f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})"
+                cols_str = ", ".join(COLUMNS)
+                sql = f"INSERT OR REPLACE INTO tenders ({cols_str}) VALUES ({placeholders})"
                 rows = [dict_to_row(r) for r in records]
                 cursor.executemany(sql, rows)
                 conn.commit()
@@ -435,7 +437,8 @@ def upsert_tender(record):
             conn = get_conn()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                cols_str = ", ".join(COLUMNS)
+                cursor.execute(f"SELECT {cols_str} FROM tenders WHERE bid_no=?", (bid_no,))
                 row = cursor.fetchone()
                 
                 if row:
@@ -452,7 +455,7 @@ def upsert_tender(record):
                     row_data = dict_to_row(record)
                     
                 placeholders = ",".join(["?"] * len(COLUMNS))
-                cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                cursor.execute(f"INSERT OR REPLACE INTO tenders ({cols_str}) VALUES ({placeholders})", row_data)
                 conn.commit()
             finally:
                 conn.close()
@@ -476,6 +479,7 @@ def upsert_tenders(new_records):
             conn = get_conn()
             try:
                 cursor = conn.cursor()
+                cols_str = ", ".join(COLUMNS)
                 for record in new_records:
                     bid_no = record.get("bid_no")
                     if not bid_no:
@@ -485,7 +489,7 @@ def upsert_tenders(new_records):
                     # Unify organization names using existing cursor
                     record = unify_organization_names(record, cursor)
                     
-                    cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                    cursor.execute(f"SELECT {cols_str} FROM tenders WHERE bid_no=?", (bid_no,))
                     row = cursor.fetchone()
                     
                     if row:
@@ -502,7 +506,7 @@ def upsert_tenders(new_records):
                         row_data = dict_to_row(record)
                         
                     placeholders = ",".join(["?"] * len(COLUMNS))
-                    cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                    cursor.execute(f"INSERT OR REPLACE INTO tenders ({cols_str}) VALUES ({placeholders})", row_data)
                 conn.commit()
             finally:
                 conn.close()
