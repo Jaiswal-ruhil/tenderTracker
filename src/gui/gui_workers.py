@@ -299,6 +299,14 @@ class WorkersMixin:
                                     if bid_url and "bid_url" not in pdf_rec:
                                         pdf_rec["bid_url"] = bid_url
                                     pdf_rec["pdf_path"] = os.path.abspath(dest_path)
+                                    msg = (
+                                        f"Parsed details from PDF for {pdf_rec.get('bid_no', 'N/A')}:\n"
+                                        f"  - Items: {pdf_rec.get('items', 'N/A')}\n"
+                                        f"  - Qty: {pdf_rec.get('quantity', 'N/A')}\n"
+                                        f"  - Dept: {pdf_rec.get('dept', 'N/A')}\n"
+                                        f"  - End Date: {pdf_rec.get('end_date', 'N/A')}"
+                                    )
+                                    self.after(0, lambda m=msg: self._log("ok", m))
                                     return pdf_rec
                                 else:
                                     self.after(0, lambda: self._log("err", f"Failed to download PDF for {bid_no or bid_url}"))
@@ -311,7 +319,14 @@ class WorkersMixin:
                                 self.after(0, lambda: self._log("err", f"Error downloading PDF for {bid_no}: {dl_err}"))
                                 return rec
                     else:
-                        self.after(0, lambda: self._log("ok", f"Parsed details directly from text for {bid_no}"))
+                        msg = (
+                            f"Parsed details directly from text for {bid_no}:\n"
+                            f"  - Items: {rec.get('items', 'N/A')}\n"
+                            f"  - Qty: {rec.get('quantity', 'N/A')}\n"
+                            f"  - Dept: {rec.get('dept', 'N/A')}\n"
+                            f"  - End Date: {rec.get('end_date', 'N/A')}"
+                        )
+                        self.after(0, lambda m=msg: self._log("ok", m))
                         return rec
                 stats = {"added": 0, "updated": 0}
                 with ThreadPoolExecutor(max_workers=max_workers) as executor:
