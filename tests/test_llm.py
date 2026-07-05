@@ -557,7 +557,7 @@ class TestLLM(unittest.TestCase):
         # Setup settings
         db.save_setting("llm_provider", "Google AI Studio (Gemini)")
         db.save_setting("llm_api_key", "test_key")
-        db.save_setting("llm_use_parsing", False)
+        db.save_setting("llm_use_parsing", True)
         
         # Setup mock app
         from gui_workers import WorkersMixin
