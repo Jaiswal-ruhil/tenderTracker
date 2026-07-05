@@ -9,7 +9,7 @@ try:
 except ImportError:
     CATEGORY_MAPPING = []
 
-def map_category(raw_val):
+def map_category(raw_val, allow_llm=True):
     if not raw_val or not str(raw_val).strip():
         return ""
     val_lower = str(raw_val).lower()
@@ -43,7 +43,7 @@ def map_category(raw_val):
     try:
         use_llm = settings.get("llm_use_mapping", False)
         provider = settings.get("llm_provider", "Disabled")
-        if use_llm and provider != "Disabled":
+        if allow_llm and use_llm and provider != "Disabled":
             existing_categories = [m["name"] for m in mappings if m.get("name")]
             import llm
             api_key = settings.get("llm_api_key", "")
@@ -138,7 +138,7 @@ def clean_raw_text(text: str) -> str:
             lines.append(line_clean)
     return "\n".join(lines)
 
-def parse_one(text):
+def parse_one(text, allow_llm=True):
     text = clean_raw_text(text)
     settings = {}
     provider = "Disabled"
@@ -254,16 +254,16 @@ def parse_one(text):
             cat_part = raw_cat
             item_part = raw_cat
             
-        mapped_cat = map_category(raw_cat)
+        mapped_cat = map_category(raw_cat, allow_llm=allow_llm)
         if mapped_cat != raw_cat.strip().title():
             r["category"] = mapped_cat
         else:
-            r["category"] = map_category(cat_part)
+            r["category"] = map_category(cat_part, allow_llm=allow_llm)
             
         if "items" not in r:
             r["items"] = item_part
     elif "items" in r:
-        r["category"] = map_category(r["items"])
+        r["category"] = map_category(r["items"], allow_llm=allow_llm)
 
     # Apply custom field value mappings
     try:

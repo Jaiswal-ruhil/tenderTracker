@@ -176,9 +176,9 @@ class WorkersMixin:
                                         rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
                                     except Exception as ex:
                                         self.after(0, lambda: self._log("err", f"LLM parsing failed for PDF, falling back to regex: {ex}"))
-                                        rec = parse_one(md_text)
+                                        rec = parse_one(md_text, allow_llm=False)
                                 else:
-                                    rec = parse_one(md_text)
+                                    rec = parse_one(md_text, allow_llm=False)
                                 if rec.get("bid_no"):
                                     rec["pdf_path"] = os.path.abspath(blk)
                                     self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
@@ -200,9 +200,9 @@ class WorkersMixin:
                             rec = _llm_module.llm_parse_tender(blk, provider, api_key, base_url, model)
                         except Exception as ex:
                             self.after(0, lambda err=ex: self._log("err", f"LLM parsing failed: {err}. Falling back to Regex."))
-                            rec = parse_one(blk)
+                            rec = parse_one(blk, allow_llm=False)
                     else:
-                        rec = parse_one(blk)
+                        rec = parse_one(blk, allow_llm=False)
 
                     bid_no = rec.get("bid_no")
                     bid_url = rec.get("bid_url")
@@ -281,9 +281,9 @@ class WorkersMixin:
                                             pdf_rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
                                         except Exception as ex:
                                             self.after(0, lambda: self._log("err", f"LLM parsing failed for downloaded PDF, falling back to regex: {ex}"))
-                                            pdf_rec = parse_one(md_text)
+                                            pdf_rec = parse_one(md_text, allow_llm=False)
                                     else:
-                                        pdf_rec = parse_one(md_text)
+                                        pdf_rec = parse_one(md_text, allow_llm=False)
                                     if bid_url and "bid_url" not in pdf_rec:
                                         pdf_rec["bid_url"] = bid_url
                                     pdf_rec["pdf_path"] = os.path.abspath(dest_path)
