@@ -179,7 +179,7 @@ def start_background_embedding_worker(callback_fn=None):
             settings = db.load_settings()
             provider = settings.get("llm_provider", "Disabled")
             embed_model = settings.get("llm_embedding_model", "nomic-embed-text")
-            if provider == "Disabled" or embed_model == "Disabled" or not settings.get("llm_use_parsing", False):
+            if provider == "Disabled" or embed_model == "Disabled" or not settings.get("llm_use_embeddings", False):
                 return
                 
             api_key = settings.get("llm_api_key", "")
