@@ -66,6 +66,16 @@ def compile_app():
         sys.exit(1)
 
 if __name__ == "__main__":
-    run_tests()
+    # If a local virtual environment exists and we're not running from it, re-execute with it
+    venv_python = os.path.join(os.path.dirname(__file__), ".venv", "Scripts", "python.exe")
+    if os.path.exists(venv_python):
+        norm_venv = os.path.normpath(os.path.abspath(venv_python))
+        norm_sys = os.path.normpath(os.path.abspath(sys.executable))
+        if norm_sys != norm_venv:
+            print(f"Relaunching build script inside virtual environment: {venv_python}")
+            result = subprocess.run([venv_python] + sys.argv)
+            sys.exit(result.returncode)
+
     check_imports()
+    run_tests()
     compile_app()

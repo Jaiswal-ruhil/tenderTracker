@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
 import re
@@ -322,43 +323,49 @@ class TableTabMixin:
         # Date Filter in Table View
         tk.Label(filter_fr, text="Date Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
         self.date_filter_type_var = tk.StringVar(value="End Date")
-        date_filter_cb = ttk.Combobox(filter_fr, textvariable=self.date_filter_type_var,
-                                      values=["None", "End Date"],
-                                      state="readonly", font=FL, width=12)
-        date_filter_cb.pack(side="left", padx=4)
-        date_filter_cb.bind("<<ComboboxSelected>>", lambda e: self._refresh_table_view())
+        self.date_filter_preset_var = tk.StringVar(value="End Date: Today")
+        
+        self.date_filter_combo = ttk.Combobox(
+            filter_fr, textvariable=self.date_filter_preset_var,
+            values=[
+                "All Dates",
+                "End Date: Today",
+                "End Date: Tomorrow",
+                "End Date: Next 3 Days",
+                "End Date: This Week",
+                "End Date: Custom..."
+            ],
+            state="readonly", font=FL, width=20
+        )
+        self.date_filter_combo.pack(side="left", padx=4)
+        self.date_filter_combo.bind("<<ComboboxSelected>>", lambda e: self._on_date_combo_changed())
 
-        tk.Label(filter_fr, text="Preset:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 0))
-        self.date_filter_preset_var = tk.StringVar(value="Today")
-        preset_cb = ttk.Combobox(filter_fr, textvariable=self.date_filter_preset_var,
-                                 values=["Today", "Tomorrow", "Next 3 Days", "This Week", "Clear"],
-                                 state="readonly", font=FL, width=12)
-        preset_cb.pack(side="left", padx=4)
-        preset_cb.bind("<<ComboboxSelected>>", lambda e: self._apply_date_filter_preset())
-
-        tk.Label(filter_fr, text="From:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
+        # Custom date range entry frame (hidden by default)
+        self.custom_date_frame = tk.Frame(filter_fr, bg=PANEL)
+        
+        tk.Label(self.custom_date_frame, text="From:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
         self.date_from_var = tk.StringVar()
         self.date_from_var.trace_add("write", lambda *args: self._refresh_table_view())
-        self.date_from_ent = tk.Entry(filter_fr, textvariable=self.date_from_var, bg=CARD, fg=TEXT,
+        self.date_from_ent = tk.Entry(self.custom_date_frame, textvariable=self.date_from_var, bg=CARD, fg=TEXT,
                                       insertbackground=TEXT, relief="flat", font=FL, width=10,
                                       highlightthickness=1, highlightbackground="#30363D")
         self.date_from_ent.pack(side="left")
         
-        self.btn_from_cal = tk.Button(filter_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
+        self.btn_from_cal = tk.Button(self.custom_date_frame, text="📅", bg=CARD, fg=TEXT, relief="flat",
                                       font=("Segoe UI", 9), padx=4, pady=0, cursor="hand2",
                                       activebackground=ACCENT)
         self.btn_from_cal.pack(side="left", padx=(2, 6))
         self.btn_from_cal.configure(command=lambda: self._show_datepicker(self.btn_from_cal, self.date_from_var))
 
-        tk.Label(filter_fr, text="To:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
+        tk.Label(self.custom_date_frame, text="To:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(4, 2))
         self.date_to_var = tk.StringVar()
         self.date_to_var.trace_add("write", lambda *args: self._refresh_table_view())
-        self.date_to_ent = tk.Entry(filter_fr, textvariable=self.date_to_var, bg=CARD, fg=TEXT,
+        self.date_to_ent = tk.Entry(self.custom_date_frame, textvariable=self.date_to_var, bg=CARD, fg=TEXT,
                                     insertbackground=TEXT, relief="flat", font=FL, width=10,
                                     highlightthickness=1, highlightbackground="#30363D")
         self.date_to_ent.pack(side="left")
 
-        self.btn_to_cal = tk.Button(filter_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
+        self.btn_to_cal = tk.Button(self.custom_date_frame, text="📅", bg=CARD, fg=TEXT, relief="flat",
                                     font=("Segoe UI", 9), padx=4, pady=0, cursor="hand2",
                                     activebackground=ACCENT)
         self.btn_to_cal.pack(side="left", padx=(2, 6))
@@ -672,9 +679,9 @@ class TableTabMixin:
                     self._update_calendar()
                     self._update_details()
                 elif selected_tab == 2:
-                    self._update_matrix()
-                elif selected_tab == 3:
                     self._update_analytics()
+                elif selected_tab == 3:
+                    self._update_kanban()
             except:
                 pass
         def on_focus_out(ev):
@@ -786,9 +793,9 @@ class TableTabMixin:
                 self._update_calendar()
                 self._update_details()
             elif selected_tab == 2:
-                self._update_matrix()
-            elif selected_tab == 3:
                 self._update_analytics()
+            elif selected_tab == 3:
+                self._update_kanban()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -895,10 +902,12 @@ class TableTabMixin:
             if match:
                 is_want = self._get_tender_status(r, inc_kws, exc_kws)
                 if not is_want:
-                    return True
-        return False
+                    return r
+        return None
 
     def _refresh_table_view(self):
+        if not hasattr(self, "tv") or self.tv is None:
+            return
         for child in self.tv.get_children():
             self.tv.delete(child)
             
@@ -1077,29 +1086,51 @@ class TableTabMixin:
         scope = "selected" if selected else "all visible"
         self._log("ok", f"Copied {count} {scope} row(s) to clipboard.")
 
+    def _on_date_combo_changed(self):
+        val = self.date_filter_preset_var.get()
+        if val == "End Date: Custom...":
+            self.custom_date_frame.pack(side="left", padx=4)
+        else:
+            self.custom_date_frame.pack_forget()
+        self._apply_date_filter_preset()
+
     def _apply_date_filter_preset(self, initial=False):
         preset = self.date_filter_preset_var.get()
         today = date.today()
-        if preset == "Today":
-            from_date = today
-            to_date = today
-        elif preset == "Tomorrow":
-            from_date = today + timedelta(days=1)
-            to_date = today + timedelta(days=1)
-        elif preset == "Next 3 Days":
-            from_date = today
-            to_date = today + timedelta(days=3)
-        elif preset == "This Week":
-            # Use ISO weekday: Monday=1, Sunday=7, and include the rest of this week.
-            weekday = today.isoweekday()
-            from_date = today
-            to_date = today + timedelta(days=(7 - weekday))
-        elif preset == "Clear":
+        
+        if preset == "All Dates":
+            self.date_filter_type_var.set("None")
             from_date = None
             to_date = None
+        elif preset.startswith("End Date:"):
+            self.date_filter_type_var.set("End Date")
+            sub_preset = preset[len("End Date:"):].strip()
+            if sub_preset == "Today":
+                from_date = today
+                to_date = today
+            elif sub_preset == "Tomorrow":
+                from_date = today + timedelta(days=1)
+                to_date = today + timedelta(days=1)
+            elif sub_preset == "Next 3 Days":
+                from_date = today
+                to_date = today + timedelta(days=3)
+            elif sub_preset == "This Week":
+                weekday = today.isoweekday()
+                from_date = today
+                to_date = today + timedelta(days=(7 - weekday))
+            elif sub_preset == "Custom...":
+                if initial:
+                    self.custom_date_frame.pack(side="left", padx=4)
+                if not initial:
+                    self._refresh_table_view()
+                return
+            else:
+                from_date = today
+                to_date = today
         else:
-            from_date = today
-            to_date = today
+            self.date_filter_type_var.set("None")
+            from_date = None
+            to_date = None
 
         self.date_from_var.set(from_date.strftime("%d-%m-%Y") if from_date else "")
         self.date_to_var.set(to_date.strftime("%d-%m-%Y") if to_date else "")

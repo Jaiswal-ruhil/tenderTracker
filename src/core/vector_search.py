@@ -23,6 +23,7 @@ import llm
 import logger
 
 _lock = threading.Lock()
+_embedder_paused = threading.Event()
 _faiss_index = None
 _bid_nos = []
 _dimension = None
@@ -37,6 +38,16 @@ def get_tender_embedding_text(rec):
     dept = rec.get("dept") or ""
     loc = rec.get("location") or ""
     return f"{items} {cat} {org} {dept} {loc}".strip()
+
+def pause_background_embedder():
+    """Pause background embedding while parse/fetch workers need the local LLM."""
+    _embedder_paused.set()
+
+
+def resume_background_embedder():
+    """Resume background embedding after parse/fetch workers finish."""
+    _embedder_paused.clear()
+
 
 def rebuild_vector_index():
     """
@@ -182,7 +193,14 @@ def start_background_embedding_worker(callback_fn=None):
             logger.log("info", f"Background Embedder: Found {len(missing)} tenders missing embeddings. Processing...")
             
             updated_count = 0
-            for t in missing:
+            consecutive_failures = 0
+            for i, t in enumerate(missing, 1):
+                if consecutive_failures >= 3:
+                    logger.log("warn", "Background Embedder: Too many consecutive failures. Suspending embedder for this session to prevent log/server spam.")
+                    break
+                while _embedder_paused.is_set():
+                    import time
+                    time.sleep(0.5)
                 bid_no = t.get("bid_no")
                 text = get_tender_embedding_text(t)
                 if not text:
@@ -193,7 +211,11 @@ def start_background_embedding_worker(callback_fn=None):
                     if emb:
                         db.upsert_tender_field(bid_no, "embedding", json.dumps(emb))
                         updated_count += 1
+                        consecutive_failures = 0
+                        if i % 25 == 0 or i == len(missing):
+                            logger.log("info", f"Background Embedder: {i}/{len(missing)} processed ({updated_count} cached).")
                 except Exception as ex:
+                    consecutive_failures += 1
                     logger.log("warn", f"Background Embedder: Failed to embed tender {bid_no}: {ex}")
                     # Sleep briefly to avoid hammering the API if it's failing
                     import time

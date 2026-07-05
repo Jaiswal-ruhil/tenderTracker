@@ -33,6 +33,8 @@ class TestLLM(unittest.TestCase):
         llm._loaded_local_models.clear()
         llm._failed_local_models.clear()
         llm._failed_local_service_urls.clear()
+        if hasattr(llm, "_failed_local_embedding_services"):
+            llm._failed_local_embedding_services.clear()
 
     def tearDown(self):
         if os.path.exists(db.DB_FILE):
@@ -54,6 +56,9 @@ class TestLLM(unittest.TestCase):
         
         # Test cleaning JSON with leading/trailing text
         self.assertEqual(llm.clean_json_response('Here is the data:\n{"test": 4}\nHope this helps!'), '{"test": 4}')
+
+        # Test cleaning JSON with <think>...</think> reasoning block
+        self.assertEqual(llm.clean_json_response('<think>\nI should extract field x.\n{\n "nested": true\n}\n</think>\n{"test": 5}'), '{"test": 5}')
 
     @patch('urllib.request.urlopen')
     def test_test_llm_connection_gemini_success(self, mock_urlopen):
@@ -138,17 +143,10 @@ class TestLLM(unittest.TestCase):
         db.save_setting("llm_api_key", "test_key")
         db.save_setting("llm_use_parsing", True)
 
-        mock_llm_parse.return_value = {
-            "bid_no": "GEM/2026/B/12345",
-            "bid_url": "https://bidplus.gem.gov.in/showbidDocument/12345",
-            "items": "Electric Cable",
-            "category": "cable"
-        }
-
         r = parser.parse_one("Raw block text")
-        self.assertEqual(r["bid_no"], "GEM/2026/B/12345")
-        # Ensure category got mapped to standard name ("Cable") via map_category fallback
-        self.assertEqual(r["category"], "Cable")
+        # Under 100% deterministic parsing, LLM is never called for extraction
+        self.assertNotIn("bid_no", r)
+        self.assertFalse(mock_llm_parse.called)
 
     @patch('llm.llm_parse_tender')
     def test_parser_parse_one_llm_fallback(self, mock_llm_parse):
@@ -181,7 +179,7 @@ class TestLLM(unittest.TestCase):
 
         mock_llm_map.return_value = "Welding Electrodes"
 
-        res = parser.map_category("E6013 weld electrode rod")
+        res = parser.map_category("E6013 weld rod")
         self.assertEqual(res, "Welding Electrodes")
 
     @patch('llm.llm_map_category')
@@ -269,6 +267,56 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(mock_urlopen.call_count, 0)
 
     @patch('urllib.request.urlopen')
+    def test_try_local_endpoint_skips_http200_error_body(self, mock_urlopen):
+        def side_effect(req, timeout=10):
+            url = req.full_url
+            mock_resp = MagicMock()
+            mock_resp.__enter__.return_value = mock_resp
+            if url.endswith("/chat/completions"):
+                mock_resp.read.return_value = b'Unexpected endpoint or method. (POST /chat/completions)'
+                return mock_resp
+            if url.endswith("/api/v1/chat"):
+                mock_resp.read.return_value = b'{"output":[{"type":"message","content":"OK"}]}'
+                return mock_resp
+            raise urllib.error.HTTPError(url, 404, "Not Found", hdrs=None, fp=None)
+
+        mock_urlopen.side_effect = side_effect
+        text, used = llm.try_local_endpoint(
+            "http://localhost:1234",
+            ["chat/completions", "api/v1/chat"],
+            method="POST",
+            body={"model": "local-model", "input": "test"},
+            timeout=1,
+        )
+        self.assertTrue(used.endswith("/api/v1/chat"))
+        self.assertIn("OK", text)
+
+    @patch('urllib.request.urlopen')
+    def test_call_llm_native_lm_studio_chat(self, mock_urlopen):
+        def side_effect(req, timeout=15):
+            url = req.full_url
+            mock_resp = MagicMock()
+            mock_resp.__enter__.return_value = mock_resp
+            if url.endswith("/models"):
+                mock_resp.read.return_value = b'{"data": [{"id": "google/gemma-4-12b-qat"}]}'
+                return mock_resp
+            if url.endswith("/api/v1/chat"):
+                mock_resp.read.return_value = b'{"output":[{"type":"message","content":"OK"}]}'
+                return mock_resp
+            mock_resp.read.return_value = b'Unexpected endpoint or method.'
+            return mock_resp
+
+        mock_urlopen.side_effect = side_effect
+        result = llm.call_llm(
+            "Respond with exactly the word OK.",
+            "Local LLM (LM Studio / Ollama)",
+            "",
+            "http://localhost:1234",
+            "google/gemma-4-12b-qat",
+        )
+        self.assertEqual(result, "OK")
+
+    @patch('urllib.request.urlopen')
     def test_is_server_reachable_local_roots(self, mock_urlopen):
         mock_response = MagicMock()
         mock_response.read.return_value = b'{}'
@@ -334,17 +382,11 @@ class TestLLM(unittest.TestCase):
         db.save_setting("llm_api_key", "test_key")
         db.save_setting("llm_use_parsing", False)
 
-        mock_llm_parse.return_value = {
-            "bid_no": "GEM/2026/B/99999",
-            "category": "Cable",
-            "items": "Armoured Cable"
-        }
-
         # Raw text without valid bid no format
         text = "This is a random text block without any bid number."
         r = parser.parse_one(text)
-        self.assertEqual(r["bid_no"], "GEM/2026/B/99999")
-        self.assertTrue(mock_llm_parse.called)
+        self.assertNotIn("bid_no", r)
+        self.assertFalse(mock_llm_parse.called)
 
     @patch('scraper._try_import_selenium')
     @patch('llm.llm_parse_tender')

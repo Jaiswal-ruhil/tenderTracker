@@ -117,6 +117,17 @@ class TestParser(unittest.TestCase):
         self.assertEqual(r["exp_years"], "2 Year")
         self.assertEqual(r["contract_dur"], "1 Year")
 
+    def test_parse_one_wildcard_bid_no(self):
+        text = """
+        BID NO: GEM/2026/B/7XXXXX6
+        Items: Mat Procurements
+        Quantity: 10
+        """
+        r = parser.parse_one(text)
+        self.assertEqual(r["bid_no"], "GEM/2026/B/7XXXXX6")
+        self.assertEqual(r["items"], "Mat Procurements")
+        self.assertEqual(r["quantity"], "10")
+
     def test_convert_pdf_text_to_markdown(self):
         pdf_text = """
         Bid Number: GEM/2026/B/7711387

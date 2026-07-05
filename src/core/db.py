@@ -31,6 +31,34 @@ def save_setting(key, value):
     except Exception:
         return False
 
+DEFAULT_COMPANY_PROFILE = {
+    "categories": [],
+    "max_est_value": 0,
+    "min_exp_years": 0,
+    "min_turnover": 0,
+    "location_keywords": [],
+    "is_mse": False,
+    "is_startup": False,
+    "max_emd": -1
+}
+
+def get_company_profile():
+    """Retrieve the company profile dict from settings. Returns default template if not set."""
+    settings = load_settings()
+    profile = settings.get("company_profile")
+    if not isinstance(profile, dict):
+        return DEFAULT_COMPANY_PROFILE.copy()
+    merged = DEFAULT_COMPANY_PROFILE.copy()
+    merged.update(profile)
+    return merged
+
+def save_company_profile(profile_dict):
+    """Save the company profile dict to settings."""
+    if not isinstance(profile_dict, dict):
+        return False
+    return save_setting("company_profile", profile_dict)
+
+
 def get_configured_db_path():
     """Load configured DB path from settings file."""
     return load_settings().get("db_path")
@@ -106,10 +134,22 @@ def get_conn():
     conn = sqlite3.connect(db_path, timeout=30.0)
     try:
         cursor = conn.cursor()
+        
+        # 1. Automatic migration: Rename legacy tenders to bids if tenders exists but bids does not
         cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='tenders'")
-        if not cursor.fetchone():
+        has_legacy = cursor.fetchone()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='bids'")
+        has_new = cursor.fetchone()
+        
+        if has_legacy and not has_new:
+            cursor.execute("ALTER TABLE tenders RENAME TO bids")
+            conn.commit()
+            has_new = True
+            
+        # 2. Initialize bids table
+        if not has_new:
             cursor.execute("""
-                CREATE TABLE tenders (
+                CREATE TABLE bids (
                     bid_no TEXT PRIMARY KEY,
                     bid_url TEXT,
                     ministry TEXT,
@@ -149,14 +189,69 @@ def get_conn():
             """)
             conn.commit()
         else:
-            # Check for and dynamically add missing columns
-            cursor.execute("PRAGMA table_info(tenders)")
+            # Check for and dynamically add missing columns to bids
+            cursor.execute("PRAGMA table_info(bids)")
             existing_cols = {row[1] for row in cursor.fetchall()}
             for col in COLUMNS:
                 if col not in existing_cols:
                     col_type = "INTEGER" if col in ("is_want", "is_want_derived", "is_saved", "is_fetched") else "TEXT"
-                    cursor.execute(f"ALTER TABLE tenders ADD COLUMN {col} {col_type}")
+                    cursor.execute(f"ALTER TABLE bids ADD COLUMN {col} {col_type}")
             conn.commit()
+            
+        # 3. Create indices on bids table
+        cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_bids_bid_no ON bids(bid_no)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_dept ON bids(dept)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_category ON bids(category)")
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_bids_end_date ON bids(end_date)")
+        conn.commit()
+        
+        # 4. Create classifications table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS classifications (
+                bid_no TEXT PRIMARY KEY,
+                category TEXT,
+                subcategory TEXT,
+                keywords TEXT,
+                products TEXT,
+                confidence REAL,
+                summary TEXT,
+                recommended INTEGER,
+                FOREIGN KEY(bid_no) REFERENCES bids(bid_no) ON DELETE CASCADE
+            )
+        """)
+        conn.commit()
+        
+        # 5. Create products table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS products (
+                product_id TEXT PRIMARY KEY,
+                name TEXT,
+                description TEXT,
+                category TEXT
+            )
+        """)
+        conn.commit()
+        
+        # 6. Create companies table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS companies (
+                company_id TEXT PRIMARY KEY,
+                name TEXT,
+                profile TEXT
+            )
+        """)
+        conn.commit()
+        
+        # 7. Create cache table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS cache (
+                key TEXT PRIMARY KEY,
+                value TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        
     except Exception as e:
         try: conn.close()
         except Exception: pass
@@ -247,7 +342,7 @@ def load_all_tenders():
         try:
             conn = get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM tenders")
+            cursor.execute("SELECT * FROM bids")
             rows = cursor.fetchall()
             return [row_to_dict(r) for r in rows]
         except sqlite3.DatabaseError as e:
@@ -267,9 +362,9 @@ def save_all_tenders(records):
             conn = get_conn()
             try:
                 cursor = conn.cursor()
-                cursor.execute("DELETE FROM tenders")
+                cursor.execute("DELETE FROM bids")
                 placeholders = ",".join(["?"] * len(COLUMNS))
-                sql = f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})"
+                sql = f"INSERT OR REPLACE INTO bids VALUES ({placeholders})"
                 rows = [dict_to_row(r) for r in records]
                 cursor.executemany(sql, rows)
                 conn.commit()
@@ -357,28 +452,28 @@ def unify_organization_names(record, cursor=None):
         # Unify Ministry
         val_min = record.get("ministry")
         if val_min and str(val_min).strip():
-            cursor.execute("SELECT DISTINCT ministry FROM tenders WHERE ministry IS NOT NULL AND ministry != ''")
+            cursor.execute("SELECT DISTINCT ministry FROM bids WHERE ministry IS NOT NULL AND ministry != ''")
             existing_mins = [r[0] for r in cursor.fetchall() if r[0] != val_min]
             record["ministry"] = unify_value(val_min, existing_mins)
                 
         # Unify Dept
         val_dept = record.get("dept")
         if val_dept and str(val_dept).strip():
-            cursor.execute("SELECT DISTINCT dept FROM tenders WHERE dept IS NOT NULL AND dept != ''")
+            cursor.execute("SELECT DISTINCT dept FROM bids WHERE dept IS NOT NULL AND dept != ''")
             existing_depts = [r[0] for r in cursor.fetchall() if r[0] != val_dept]
             record["dept"] = unify_value(val_dept, existing_depts)
 
         # Unify Organisation
         val_org = record.get("organisation")
         if val_org and str(val_org).strip():
-            cursor.execute("SELECT DISTINCT organisation FROM tenders WHERE organisation IS NOT NULL AND organisation != ''")
+            cursor.execute("SELECT DISTINCT organisation FROM bids WHERE organisation IS NOT NULL AND organisation != ''")
             existing_orgs = [r[0] for r in cursor.fetchall() if r[0] != val_org]
             record["organisation"] = unify_value(val_org, existing_orgs)
 
         # Unify Location
         val_loc = record.get("location")
         if val_loc and str(val_loc).strip():
-            cursor.execute("SELECT DISTINCT location FROM tenders WHERE location IS NOT NULL AND location != ''")
+            cursor.execute("SELECT DISTINCT location FROM bids WHERE location IS NOT NULL AND location != ''")
             existing_locs = [r[0] for r in cursor.fetchall() if r[0] != val_loc]
             record["location"] = unify_value(val_loc, existing_locs)
     except Exception:
@@ -435,7 +530,7 @@ def upsert_tender(record):
             conn = get_conn()
             try:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                cursor.execute("SELECT * FROM bids WHERE bid_no=?", (bid_no,))
                 row = cursor.fetchone()
                 
                 if row:
@@ -452,7 +547,7 @@ def upsert_tender(record):
                     row_data = dict_to_row(record)
                     
                 placeholders = ",".join(["?"] * len(COLUMNS))
-                cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                cursor.execute(f"INSERT OR REPLACE INTO bids VALUES ({placeholders})", row_data)
                 conn.commit()
             finally:
                 conn.close()
@@ -485,7 +580,7 @@ def upsert_tenders(new_records):
                     # Unify organization names using existing cursor
                     record = unify_organization_names(record, cursor)
                     
-                    cursor.execute("SELECT * FROM tenders WHERE bid_no=?", (bid_no,))
+                    cursor.execute("SELECT * FROM bids WHERE bid_no=?", (bid_no,))
                     row = cursor.fetchone()
                     
                     if row:
@@ -502,7 +597,7 @@ def upsert_tenders(new_records):
                         row_data = dict_to_row(record)
                         
                     placeholders = ",".join(["?"] * len(COLUMNS))
-                    cursor.execute(f"INSERT OR REPLACE INTO tenders VALUES ({placeholders})", row_data)
+                    cursor.execute(f"INSERT OR REPLACE INTO bids VALUES ({placeholders})", row_data)
                 conn.commit()
             finally:
                 conn.close()
@@ -527,7 +622,7 @@ def delete_tenders(bid_numbers):
             conn = get_conn()
             cursor = conn.cursor()
             for bid in bid_numbers:
-                cursor.execute("DELETE FROM tenders WHERE bid_no=?", (bid,))
+                cursor.execute("DELETE FROM bids WHERE bid_no=?", (bid,))
             conn.commit()
         except Exception:
             pass
@@ -559,7 +654,7 @@ def upsert_tender_field(bid_no, field, value):
             else:
                 db_val = str(value) if value is not None else ""
             cursor.execute(
-                f"UPDATE tenders SET {field}=? WHERE bid_no=?",
+                f"UPDATE bids SET {field}=? WHERE bid_no=?",
                 (db_val, bid_no)
             )
             conn.commit()
@@ -571,3 +666,147 @@ def upsert_tender_field(bid_no, field, value):
             if conn:
                 try: conn.close()
                 except Exception: pass
+
+# --- Refactored Helper Functions for cache, classifications, products, and companies ---
+
+def get_cached_classification(cache_key: str) -> dict or None:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM cache WHERE key=?", (cache_key,))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+        return None
+
+def set_cached_classification(cache_key: str, value: dict):
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("INSERT OR REPLACE INTO cache (key, value) VALUES (?, ?)", (cache_key, json.dumps(value)))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+
+def get_classification(bid_no: str) -> dict or None:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM classifications WHERE bid_no=?", (bid_no,))
+            row = cursor.fetchone()
+            if row:
+                return {
+                    "bid_no": row[0],
+                    "category": row[1],
+                    "subcategory": row[2],
+                    "keywords": json.loads(row[3]) if row[3] else [],
+                    "products": json.loads(row[4]) if row[4] else [],
+                    "confidence": row[5],
+                    "summary": row[6],
+                    "recommended": bool(row[7])
+                }
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+        return None
+
+def save_classification(cls_data: dict):
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO classifications 
+                (bid_no, category, subcategory, keywords, products, confidence, summary, recommended)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                cls_data.get("bid_no"),
+                cls_data.get("category"),
+                cls_data.get("subcategory"),
+                json.dumps(cls_data.get("keywords", [])),
+                json.dumps(cls_data.get("products", [])),
+                cls_data.get("confidence", 0.0),
+                cls_data.get("summary", ""),
+                1 if cls_data.get("recommended") else 0
+            ))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+
+def load_all_products() -> list:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM products")
+            rows = cursor.fetchall()
+            return [{"product_id": r[0], "name": r[1], "description": r[2], "category": r[3]} for r in rows]
+        except Exception:
+            return []
+        finally:
+            if conn: conn.close()
+
+def save_product(prod: dict):
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO products (product_id, name, description, category)
+                VALUES (?, ?, ?, ?)
+            """, (prod.get("product_id"), prod.get("name"), prod.get("description"), prod.get("category")))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+
+def load_company_profile(company_id: str) -> dict or None:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT profile FROM companies WHERE company_id=?", (company_id,))
+            row = cursor.fetchone()
+            if row:
+                return json.loads(row[0])
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+        return None
+
+def save_company_profile_data(company_id: str, name: str, profile: dict):
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO companies (company_id, name, profile)
+                VALUES (?, ?, ?)
+            """, (company_id, name, json.dumps(profile)))
+            conn.commit()
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()

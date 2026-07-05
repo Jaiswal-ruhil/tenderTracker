@@ -2,11 +2,16 @@ import json
 import urllib.request
 import urllib.error
 import re
+import threading
 import logger
 
 _loaded_local_models = set()
 _failed_local_models = {}
 _failed_local_service_urls = {}
+_failed_local_embedding_services = set()
+_local_llm_lock = threading.RLock()
+_chat_route_cache = {}
+_embed_route_cache = {}
 
 def normalize_local_service_key(base_url):
     return (base_url or "http://localhost:1234").strip().rstrip("/")
@@ -29,15 +34,31 @@ def parse_response_error(response_text):
                 return parsed["message"]
         return None
     except Exception:
+        # Some local servers (LM Studio earlier versions) return plain-text
+        # error messages with HTTP 200 responses, e.g.:
+        # "Unexpected endpoint or method. (POST /embed). Returning 200 anyway"
+        if not response_text or not isinstance(response_text, str):
+            return None
+        low = response_text.lower()
+        if "unexpected endpoint" in low or "unexpected endpoint or method" in low or "unexpected method" in low:
+            # Return the short error line
+            first_line = response_text.splitlines()[0].strip()
+            return first_line
+        # Also catch simple 'error:' or 'failed' markers
+        m = re.search(r"error[:\s]+(.+)", response_text, re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
         return None
 
 
 def clean_json_response(text):
     """
     Extract the JSON object from the response string, stripping away
-    markdown formatting or conversational filler if present.
+    markdown formatting, reasoning (thinking) process blocks, or conversational filler.
     """
     text = text.strip()
+    # Remove reasoning/thinking blocks if present
+    text = re.sub(r"<think>[\s\S]*?</think>", "", text).strip()
     # Remove markdown code blocks if present
     if text.startswith("```"):
         # Remove opening ```json or ```
@@ -76,6 +97,29 @@ def normalize_local_service_roots(base_url):
     return [c for c in dict.fromkeys(candidates) if c]
 
 
+def extract_local_chat_content(res_json):
+    """Extract assistant text from OpenAI-compatible or LM Studio native v1 chat responses."""
+    if not isinstance(res_json, dict):
+        return None
+    try:
+        return res_json["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError):
+        pass
+    output = res_json.get("output")
+    if isinstance(output, list):
+        parts = []
+        for item in output:
+            if isinstance(item, dict) and item.get("type") == "message":
+                content = item.get("content")
+                if content:
+                    parts.append(str(content))
+        if parts:
+            return "\n".join(parts)
+    if res_json.get("message"):
+        return str(res_json["message"])
+    return None
+
+
 def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=None, timeout=10):
     """Attempt each candidate local endpoint path until one succeeds."""
     if isinstance(resources, str):
@@ -99,7 +143,23 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
             if lower_root.endswith(f"/{prefix}") and lower_resource.startswith(f"{prefix}/"):
                 resource = resource[len(prefix) + 1:]
                 break
-        return f"{root}/{resource}"
+        combined = f"{root}/{resource}"
+        # Collapse common accidental duplicate segments introduced by
+        # combining roots and resources (e.g. /v1/api/v1, /v1/v1, /api/api)
+        replacements = [
+            ("/v1/api/v1", "/api/v1"),
+            ("/api/v1/v1", "/api/v1"),
+            ("/v1/v1", "/v1"),
+            ("/api/api", "/api"),
+            # If root ended with /v1 and resource starts with /api/... we
+            # want to drop the intermediate /v1 so /v1/api/embeddings -> /api/embeddings
+            ("/v1/api/", "/api/"),
+            ("/v1/api", "/api"),
+        ]
+        for a, b in replacements:
+            if a in combined:
+                combined = combined.replace(a, b)
+        return combined
 
     for root in normalize_local_service_roots(base_url):
         for resource in resources:
@@ -123,13 +183,20 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
                     method=method
                 )
                 with urllib.request.urlopen(req, timeout=timeout) as response:
-                    return response.read().decode("utf-8"), url
+                    response_text = response.read().decode("utf-8")
+                    error_msg = parse_response_error(response_text)
+                    if error_msg:
+                        last_error = ValueError(f"Local endpoint {url} error: {error_msg}")
+                        continue
+                    return response_text, url
             except urllib.error.HTTPError as e:
                 try:
                     error_body = e.read().decode("utf-8")
                 except Exception:
                     error_body = e.reason if hasattr(e, 'reason') else str(e)
                 last_error = ValueError(f"Local endpoint {url} HTTPError {e.code}: {error_body}")
+                if e.code == 500 and "model_load_failed" in error_body:
+                    raise last_error
                 continue
             except Exception as e:
                 last_error = ValueError(f"Local endpoint {url} failed: {type(e).__name__}: {e}")
@@ -139,7 +206,78 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
     raise ValueError("No local endpoint candidates available.")
 
 
+def unload_local_models(base_url, api_key=None):
+    """
+    Attempts to unload all loaded models from LM Studio / Ollama to free up memory.
+    """
+    base_url_key = normalize_local_service_key(base_url)
+    
+    with _local_llm_lock:
+        # Clear caches
+        _loaded_local_models.clear()
+        _failed_local_models.clear()
+        
+        # 1. LM Studio native unload
+        for root in normalize_local_service_roots(base_url):
+            try:
+                models_url = f"{root.rstrip('/')}/models"
+                req = urllib.request.Request(models_url, headers={"Content-Type": "application/json"}, method="GET")
+                if api_key:
+                    req.add_header("Authorization", f"Bearer {api_key}")
+                with urllib.request.urlopen(req, timeout=5) as response:
+                    res_data = response.read().decode("utf-8")
+                    models_json = json.loads(res_data)
+                    model_list = models_json.get("data", [])
+                    for m in model_list:
+                        instance_id = m.get("id")
+                        if instance_id:
+                            for unload_path in ["api/v1/models/unload", "v1/models/unload", "models/unload"]:
+                                try:
+                                    unload_url = f"{root.rstrip('/')}/{unload_path}"
+                                    unload_req = urllib.request.Request(
+                                        unload_url,
+                                        headers={"Content-Type": "application/json"},
+                                        data=json.dumps({"instance_id": instance_id}).encode("utf-8"),
+                                        method="POST"
+                                    )
+                                    if api_key:
+                                        unload_req.add_header("Authorization", f"Bearer {api_key}")
+                                    with urllib.request.urlopen(unload_req, timeout=5) as res:
+                                        res.read()
+                                except Exception:
+                                    pass
+            except Exception:
+                pass
+    
+        # 2. Ollama unload (sending model request with keep_alive=0)
+        try:
+            for root in normalize_local_service_roots(base_url):
+                try:
+                    generate_url = f"{root.rstrip('/')}/generate"
+                    unload_req = urllib.request.Request(
+                        generate_url,
+                        headers={"Content-Type": "application/json"},
+                        data=json.dumps({"model": "local-model", "keep_alive": 0}).encode("utf-8"),
+                        method="POST"
+                    )
+                    if api_key:
+                        unload_req.add_header("Authorization", f"Bearer {api_key}")
+                    with urllib.request.urlopen(unload_req, timeout=3) as res:
+                        res.read()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        
+        logger.log("info", "Unloaded local LLM models.")
+
+
 def auto_load_local_model(base_url, model, api_key=None):
+    with _local_llm_lock:
+        return _auto_load_local_model_impl(base_url, model, api_key)
+
+
+def _auto_load_local_model_impl(base_url, model, api_key=None):
     """
     Automatically loads (for LM Studio) or pulls (for Ollama) the model on demand.
     """
@@ -156,6 +294,22 @@ def auto_load_local_model(base_url, model, api_key=None):
         raise _failed_local_service_urls[base_url_key]
 
     # Check if the model is already available via any local API root
+    def clean_model_name(name):
+        if not name:
+            return ""
+        # Convert to lowercase and normalize slashes for Windows/Linux compatibility
+        name = name.lower().strip().replace("\\", "/")
+        # Strip common file extensions
+        for ext in (".gguf", ".bin", ".zip", ".tar.gz"):
+            if name.endswith(ext):
+                name = name[:-len(ext)]
+        # Strip trailing tag (e.g. :latest or :2 or :qat)
+        name = re.sub(r':[^:]+$', '', name)
+        # Get the basename (the filename after the last slash)
+        if "/" in name:
+            name = name.split("/")[-1]
+        return name.strip()
+
     def list_models(url):
         try:
             req = urllib.request.Request(url, headers={"Content-Type": "application/json"}, method="GET")
@@ -164,7 +318,15 @@ def auto_load_local_model(base_url, model, api_key=None):
             with urllib.request.urlopen(req, timeout=5) as response:
                 res_data = response.read().decode("utf-8")
                 models_json = json.loads(res_data)
-                return [m.get("id") for m in models_json.get("data", []) if m.get("id")]
+                if not isinstance(models_json, dict):
+                    return None
+                # Handle OpenAI /v1/models format
+                if "data" in models_json and isinstance(models_json["data"], list):
+                    return [m.get("id") for m in models_json["data"] if m.get("id")]
+                # Handle LM Studio native /api/v1/models format
+                elif "models" in models_json and isinstance(models_json["models"], list):
+                    return [m.get("key") or m.get("id") for m in models_json["models"] if m.get("key") or m.get("id")]
+                return None
         except Exception:
             return None
 
@@ -172,19 +334,96 @@ def auto_load_local_model(base_url, model, api_key=None):
         models_url = f"{root.rstrip('/')}/models"
         loaded_models = list_models(models_url)
         if loaded_models is not None:
-            if model in loaded_models or any(model in lm or lm in model for lm in loaded_models):
+            clean_tgt = clean_model_name(model)
+            cleaned_loaded = [clean_model_name(lm) for lm in loaded_models]
+            if clean_tgt in cleaned_loaded or any(clean_tgt in cl or cl in clean_tgt for cl in cleaned_loaded):
                 logger.log("info", f"Model '{model}' is already available/loaded.")
+                _loaded_local_models.add(cache_key)
                 return
             break
 
-    # Try loading in LM Studio across candidate resources
+    # Get maximum parallel slots configuration
+    import db
+    settings = db.load_settings()
+    parallel_val = settings.get("llm_max_parallel", 8)
+
+    # Try loading in LM Studio across candidate resources (prefer native v1 API)
     load_resources = [
+        "api/v1/models/load",
+        "v1/models/load",
         "models/load",
         "api/models/load",
-        "v1/models/load",
-        "api/v1/models/load"
+        # LM Studio also exposes model download endpoints; include them
+        "models/download",
+        "api/models/download",
+        "api/v1/models/download",
     ]
     for resource in load_resources:
+        try:
+            bodies = [
+                # Preference 1: Flat properties (Modern API / lms compatible)
+                {
+                    "model": model,
+                    "gpu": "max",
+                    "parallel": parallel_val,
+                    "n_parallel": parallel_val,
+                    "flash_attention": True,
+                    "offload_kv_cache_to_gpu": True
+                },
+                # Preference 2: Nested config properties (Classic SDK compatible)
+                {
+                    "model": model,
+                    "config": {
+                        "parallel": parallel_val,
+                        "n_parallel": parallel_val,
+                        "gpu": "max"
+                    }
+                },
+                # Preference 3: Safe fallback (Minimal request)
+                {
+                    "model": model
+                }
+            ]
+            
+            loaded_ok = False
+            for body_candidate in bodies:
+                try:
+                    response_text, used_url = try_local_endpoint(
+                        base_url,
+                        resource,
+                        api_key,
+                        method="POST",
+                        body=body_candidate,
+                        timeout=30
+                    )
+                    error_msg = parse_response_error(response_text)
+                    if error_msg:
+                        logger.log("info", f"LM Studio load attempt with body {list(body_candidate.keys())} returned error response: {error_msg}. Trying next candidate...")
+                        continue
+                    
+                    logger.log("ok", f"LM Studio model load response: {response_text[:200]}")
+                    _loaded_local_models.add(cache_key)
+                    loaded_ok = True
+                    break
+                except Exception as ex:
+                    if body_candidate == bodies[-1]:
+                        raise ex
+                    logger.log("info", f"LM Studio load attempt with body {list(body_candidate.keys())} failed: {ex}. Trying next candidate...")
+                    continue
+                    
+            if loaded_ok:
+                return
+        except Exception as e:
+            if "model_load_failed" in str(e):
+                raise e
+            logger.log("info", f"LM Studio load failed for resource {resource}: {e}. Trying other local server methods...")
+    # 3. Try model download endpoints (LM Studio v1 supports /api/v1/models/download)
+    download_resources = [
+        "models/download",
+        "api/models/download",
+        "api/v1/models/download",
+    ]
+    for resource in download_resources:
         try:
             response_text, used_url = try_local_endpoint(
                 base_url,
@@ -196,15 +435,50 @@ def auto_load_local_model(base_url, model, api_key=None):
             )
             error_msg = parse_response_error(response_text)
             if error_msg:
-                logger.log("info", f"LM Studio model load returned error response for {used_url}: {error_msg}. Trying other local server methods...")
+                logger.log("info", f"LM Studio model download returned error response for {used_url}: {error_msg}. Trying other local server methods...")
                 continue
-            logger.log("ok", f"LM Studio model load response: {response_text[:200]}")
-            _loaded_local_models.add(cache_key)
-            return
+            # If the download API returns an immediate success, treat as loaded
+            try:
+                dt = json.loads(response_text)
+            except Exception:
+                dt = None
+            # If a job id is provided, poll the download status endpoint
+            job_id = None
+            if isinstance(dt, dict):
+                job_id = dt.get("job_id") or dt.get("id") or dt.get("task_id")
+                if dt.get("status") in ("success", "completed", "ok"):
+                    logger.log("ok", f"LM Studio model download succeeded: {used_url}")
+                    _loaded_local_models.add(cache_key)
+                    return
+            if job_id:
+                # Poll status
+                import time
+                status_resource_template = "models/download/status/{job_id}"
+                for _ in range(20):
+                    try:
+                        stat_text, stat_url = try_local_endpoint(base_url, status_resource_template.format(job_id=job_id), api_key, method="GET", timeout=10)
+                        stat_err = parse_response_error(stat_text)
+                        if stat_err:
+                            logger.log("info", f"Model download status {stat_url} returned error: {stat_err}")
+                            break
+                        try:
+                            st = json.loads(stat_text)
+                        except Exception:
+                            st = None
+                        if isinstance(st, dict) and st.get("status") in ("success", "completed", "ok"):
+                            logger.log("ok", f"LM Studio model download completed: {stat_url}")
+                            _loaded_local_models.add(cache_key)
+                            return
+                    except Exception:
+                        pass
+                    time.sleep(1)
+            # If we reached here and no job id or not completed, continue to next candidate
+            continue
         except Exception as e:
-            logger.log("info", f"LM Studio load failed for resource {resource}: {e}. Trying other local server methods...")
+            logger.log("info", f"LM Studio download failed for resource {resource}: {e}. Trying other local server methods...")
+            continue
 
-    # 3. Try pulling in Ollama if available
+    # 4. Try pulling in Ollama if available
     try:
         response_text, used_url = try_local_endpoint(
             base_url,
@@ -227,6 +501,197 @@ def auto_load_local_model(base_url, model, api_key=None):
     _failed_local_models[cache_key] = error
     _failed_local_service_urls[base_url_key] = error
     raise error
+
+
+def _build_local_chat_body(style, model_name, prompt, response_json=False):
+    if style == "native":
+        body = {
+            "model": model_name,
+            "input": prompt,
+            "temperature": 0.1,
+            "store": False,
+        }
+    else:
+        body = {
+            "model": model_name,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.1,
+        }
+        if response_json:
+            body["response_format"] = {"type": "json_object"}
+    return body
+
+
+def _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=600):
+    """Internal local chat call with endpoint route caching."""
+    base_url_key = normalize_local_service_key(base_url)
+    if base_url_key in _failed_local_service_urls:
+        raise _failed_local_service_urls[base_url_key]
+
+    try:
+        auto_load_local_model(base_url, model, api_key)
+    except Exception as e:
+        logger.log("warn", f"Auto-loading model failed: {e}")
+
+    model_name = model.strip() if model else "local-model"
+    cached = _chat_route_cache.get(base_url_key)
+    if cached:
+        body = _build_local_chat_body(cached["style"], model_name, prompt, response_json)
+        try:
+            response_text, used_url = try_local_endpoint(
+                base_url, cached["resources"], api_key, method="POST", body=body, timeout=timeout
+            )
+            content = extract_local_chat_content(json.loads(response_text))
+            if content is not None:
+                return content
+        except Exception as e:
+            err_str = str(e)
+            if "HTTPError 404" in err_str or "HTTPError 405" in err_str or "Unexpected endpoint" in err_str:
+                _chat_route_cache.pop(base_url_key, None)
+            else:
+                raise
+
+    chat_attempts = [
+        (["api/v1/chat"], "native"),
+        (["v1/chat/completions", "chat/completions", "api/v1/chat/completions"], "openai"),
+        (["chat", "v1/chat", "api/chat"], "openai"),
+    ]
+    last_error = None
+    for resources, style in chat_attempts:
+        body = _build_local_chat_body(style, model_name, prompt, response_json)
+        try:
+            response_text, used_url = try_local_endpoint(
+                base_url, resources, api_key, method="POST", body=body, timeout=timeout
+            )
+            res_json = json.loads(response_text)
+            content = extract_local_chat_content(res_json)
+            if content is not None:
+                _chat_route_cache[base_url_key] = {"resources": resources, "style": style}
+                logger.log("ok", f"Local chat route cached: {used_url}")
+                return content
+            last_error = ValueError(f"Unexpected local chat response from {used_url}: {res_json}")
+        except Exception as e:
+            last_error = e
+            continue
+    if last_error:
+        raise last_error
+    raise ValueError("No local chat endpoint candidates available.")
+
+
+def _local_embed_request(text, base_url, model, api_key, timeout=60):
+    """Internal local embedding call with endpoint route caching."""
+    base_url_key = normalize_local_service_key(base_url)
+    if base_url_key in _failed_local_service_urls:
+        raise _failed_local_service_urls[base_url_key]
+    if base_url_key in _failed_local_embedding_services:
+        raise ValueError(f"Local embedding service is known to be unavailable for {base_url}")
+
+    try:
+        auto_load_local_model(base_url, model, api_key)
+    except Exception as e:
+        logger.log("warn", f"Auto-loading model failed: {e}")
+
+    model_name = model.strip() if model else "local-model"
+    body_variants = [
+        {"model": model_name, "input": text},
+        {"model": model_name, "inputs": [text]},
+        {"model": model_name, "input": [text]},
+        {"input": text},
+        {"inputs": [text]},
+    ]
+
+    def parse_embedding_response(res_json, used_url):
+        if "data" in res_json:
+            data = res_json["data"]
+            if isinstance(data, list) and data:
+                first = data[0]
+                if isinstance(first, dict) and "embedding" in first:
+                    return first["embedding"]
+                if all(isinstance(x, (int, float)) for x in data):
+                    return data
+        if "embedding" in res_json:
+            embedding = res_json["embedding"]
+            if isinstance(embedding, dict):
+                return embedding.get("values") or embedding.get("vector")
+            return embedding
+        raise ValueError(f"Unexpected local embedding response from {used_url}: {res_json}")
+
+    cached = _embed_route_cache.get(base_url_key)
+    if cached:
+        resource = cached["resource"]
+        for bvar in body_variants[: cached.get("variant_count", 1)]:
+            try:
+                response_text, used_url = try_local_endpoint(
+                    base_url, resource, api_key, method="POST", body=bvar, timeout=timeout
+                )
+                return parse_embedding_response(json.loads(response_text), used_url)
+            except Exception as e:
+                err_str = str(e)
+                if "HTTPError 404" in err_str or "HTTPError 405" in err_str or "Unexpected endpoint" in err_str:
+                    _embed_route_cache.pop(base_url_key, None)
+                    break
+                else:
+                    raise
+
+    embed_resources = [
+        "v1/embeddings",
+        "api/v1/embeddings",
+        "api/embeddings",
+        "embeddings",
+        "v1/embed",
+        "api/v1/embed",
+    ]
+    last_error = None
+    for resource in embed_resources:
+        for idx, bvar in enumerate(body_variants):
+            try:
+                response_text, used_url = try_local_endpoint(
+                    base_url, resource, api_key, method="POST", body=bvar, timeout=timeout
+                )
+                embedding = parse_embedding_response(json.loads(response_text), used_url)
+                _embed_route_cache[base_url_key] = {"resource": resource, "variant_count": idx + 1}
+                logger.log("ok", f"Local embedding route cached: {used_url}")
+                return embedding
+            except Exception as e:
+                last_error = e
+                continue
+    if last_error:
+        _failed_local_embedding_services.add(base_url_key)
+        raise last_error
+    _failed_local_embedding_services.add(base_url_key)
+    raise ValueError("No local embedding endpoint candidates available.")
+
+
+def prepare_local_llm(base_url, model, api_key=None):
+    """
+    Pre-load the local model and verify chat connectivity before batch work.
+    Returns (success: bool, message: str).
+    """
+    if not model or not str(model).strip():
+        return False, "No local model configured."
+    with _local_llm_lock:
+        _loaded_local_models.clear()
+        _failed_local_models.clear()
+        _failed_local_service_urls.clear()
+        _failed_local_embedding_services.clear()
+        _chat_route_cache.clear()
+        _embed_route_cache.clear()
+    try:
+        auto_load_local_model(base_url, model, api_key)
+        response = _local_chat_request(
+            "Respond with exactly the word OK. Do not add punctuation or details.",
+            base_url,
+            model,
+            api_key,
+            response_json=False,
+            timeout=120,
+        )
+        if "ok" in response.strip().lower():
+            return True, "Local LLM ready."
+        return True, f"Local LLM connected (unexpected probe response: '{response[:80]}')."
+    except Exception as e:
+        return False, str(e)
+
 
 def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
     """
@@ -263,47 +728,7 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         )
     
     elif provider == "Local LLM (LM Studio / Ollama)":
-        base_url_key = normalize_local_service_key(base_url)
-        if base_url_key in _failed_local_service_urls:
-            raise _failed_local_service_urls[base_url_key]
-
-        # Automatically load model on demand
-        try:
-            auto_load_local_model(base_url, model, api_key)
-        except Exception as e:
-            logger.log("warn", f"Auto-loading model failed: {e}")
-
-        model_name = model.strip() if model else "local-model"
-        body = {
-            "model": model_name,
-            "messages": [
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.1
-        }
-        if response_json:
-            body["response_format"] = {"type": "json_object"}
-
-        last_error = None
-        for resource in ["chat/completions", "v1/chat/completions", "api/v1/chat/completions"]:
-            try:
-                response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=body, timeout=15)
-                error_msg = parse_response_error(response_text)
-                if error_msg:
-                    last_error = ValueError(f"Local chat endpoint {used_url} error: {error_msg}")
-                    logger.log("info", f"Local chat endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
-                    continue
-                res_json = json.loads(response_text)
-                try:
-                    return res_json["choices"][0]["message"]["content"]
-                except Exception:
-                    return response_text
-            except Exception as e:
-                last_error = e
-                continue
-        if last_error:
-            raise last_error
-        raise ValueError("No local chat endpoint candidates available.")
+        return _local_chat_request(prompt, base_url, model, api_key, response_json, timeout=600)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
 
@@ -339,6 +764,14 @@ def test_llm_connection(provider, api_key, base_url, model):
     """
     Sends a test request to verify API settings.
     """
+    if provider == "Local LLM (LM Studio / Ollama)":
+        with _local_llm_lock:
+            _loaded_local_models.clear()
+            _failed_local_models.clear()
+            _failed_local_service_urls.clear()
+            _failed_local_embedding_services.clear()
+            _chat_route_cache.clear()
+            _embed_route_cache.clear()
     prompt = "Respond with exactly the word OK. Do not add punctuation or details."
     try:
         res = call_llm(prompt, provider, api_key, base_url, model, response_json=False)
@@ -453,9 +886,15 @@ def llm_parse_tender(text, provider, api_key, base_url, model):
     prompt = f"""You are an expert Government of India GeM tender document parsing assistant.
 Extract fields from the following raw tender document text.
 
+Anatomy of GeM Bid Number Pattern:
+- GEM: The universal prefix for every official bid on the marketplace.
+- YYYY: Represents the calendar year (e.g., 2026).
+- B: Denotes standard public bidding.
+- Unique ID sequence: An incremental sequence of digits (e.g. 7711387, or matching 7XXXXX6 ending with 6 for specific mat procurements).
+
 You MUST return a JSON object with the following keys. Do NOT omit any keys; if a field is not found in the text, set it to "" or "N/A".
 Required keys:
-- "bid_no": The Bid Number (e.g. "GEM/2026/B/7711387" or similar format)
+- "bid_no": The Bid Number (e.g. "GEM/2026/B/7711387" or wildcard formats like "GEM/2026/B/7XXXXX6")
 - "bid_url": The detail link (if present, or construct it using the trailing digits of bid_no as: "https://bidplus.gem.gov.in/showbidDocument/<digits>")
 - "ministry": Ministry/State name (e.g. "Uttar Pradesh", "Ministry of Mines")
 - "dept": Department name (e.g. "Uttar Pradesh Cooperative Sugar Factories Federation")
@@ -620,75 +1059,10 @@ def get_embedding(text, provider, api_key, base_url, model):
             method="POST"
         )
     elif provider == "Local LLM (LM Studio / Ollama)":
-        base_url_key = normalize_local_service_key(base_url)
-        if base_url_key in _failed_local_service_urls:
-            raise _failed_local_service_urls[base_url_key]
-
-        # Automatically load model on demand
-        try:
-            auto_load_local_model(base_url, model, api_key)
-        except Exception as e:
-            logger.log("warn", f"Auto-loading model failed: {e}")
-
-        model_name = model.strip() if model else "local-model"
-        body = {
-            "model": model_name,
-            "input": text
-        }
-        last_error = None
-        # Try several common local embedding endpoint paths and body shapes
-        body_variants = [
-            {"model": model_name, "input": text},
-            {"model": model_name, "inputs": [text]},
-            {"model": model_name, "input": [text]},
-            {"model": model_name, "content": {"parts": [{"text": text}]}},
-            {"input": text},
-            {"inputs": [text]},
-            {"text": text},
-        ]
-
-        for resource in [
-            "api/v1/embeddings",
-            "v1/embeddings",
-            "api/v1/embed",
-            "v1/embed",
-            "embeddings",
-            "api/embeddings",
-            "embed",
-            "api/embed"
-        ]:
-            for bvar in body_variants:
-                try:
-                    response_text, used_url = try_local_endpoint(base_url, resource, api_key, method="POST", body=bvar, timeout=10)
-                    error_msg = parse_response_error(response_text)
-                    if error_msg:
-                        last_error = ValueError(f"Local embedding endpoint {used_url} error: {error_msg}")
-                        logger.log("info", f"Local embedding endpoint {used_url} returned error: {error_msg}. Trying next candidate...")
-                        continue
-                    res_json = json.loads(response_text)
-                    if "data" in res_json:
-                        data = res_json["data"]
-                        if isinstance(data, list) and data:
-                            first = data[0]
-                            if isinstance(first, dict) and "embedding" in first:
-                                return first["embedding"]
-                            if all(isinstance(x, (int, float)) for x in data):
-                                return data
-                    if "embedding" in res_json:
-                        embedding = res_json["embedding"]
-                        if isinstance(embedding, dict):
-                            return embedding.get("values") or embedding.get("vector")
-                        return embedding
-                    last_error = ValueError(f"Unexpected local embedding response from {used_url}: {res_json}")
-                    logger.log("info", f"Local embedding endpoint {used_url} returned unexpected response: {str(res_json)[:200]}. Trying next candidate...")
-                    # try next body variant / resource
-                    continue
-                except Exception as e:
-                    last_error = e
-                    continue
-        if last_error:
-            raise last_error
-        raise ValueError("No local embedding endpoint candidates available.")
+        import db
+        settings = db.load_settings()
+        embedding_model = settings.get("llm_embedding_model") or model
+        return _local_embed_request(text, base_url, embedding_model, api_key, timeout=60)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
     try:

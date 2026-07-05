@@ -28,13 +28,27 @@ def update_heartbeat():
 
 def _watchdog_loop():
     last_warned = 0.0
+    last_check_time = time.monotonic()
     while _watchdog_running:
         time.sleep(WATCHDOG_INTERVAL)
         if not _watchdog_running:
             break
-        with _heartbeat_lock:
-            elapsed_ms = (time.monotonic() - _heartbeat_time) * 1000
+        
         now = time.monotonic()
+        sleep_elapsed = now - last_check_time
+        last_check_time = now
+        
+        # If the sleep call took significantly longer than normal (e.g., >3s),
+        # the computer went to sleep/suspended. Reset heartbeat and skip logging.
+        if sleep_elapsed > WATCHDOG_INTERVAL + 2.5:
+            with _heartbeat_lock:
+                global _heartbeat_time
+                _heartbeat_time = now
+            continue
+
+        with _heartbeat_lock:
+            elapsed_ms = (now - _heartbeat_time) * 1000
+
         if elapsed_ms >= FREEZE_CRIT_MS:
             if now - last_warned > 2.0:
                 log("err", f"UI FREEZE: Main thread unresponsive for {elapsed_ms:.0f}ms")

@@ -27,14 +27,13 @@ import db
 
 # Mixins for tab structures and dialogs
 from gui_calendar import CalendarTabMixin
-from gui_matrix import MatrixTabMixin
 from gui_analytics import AnalyticsTabMixin
 from gui_dialogs import DialogsMixin
 from gui_table_tab import TableTabMixin, DatePickerPopup
 from gui_workers import WorkersMixin
 from gui_kanban import KanbanTabMixin
 
-class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin, KanbanTabMixin):
+class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin, KanbanTabMixin):
     def __init__(self):
         super().__init__()
         self.title("GEM Tender Logger  v4")
@@ -157,93 +156,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
         self._btn(btn_row, "Clear", lambda: self.paste_txt.delete("1.0","end"),
                   bg=CARD).pack(side="left")
 
-        # ── Portal Scraper Frame ─────────────────────────────────────────────
-        scrape_fr = tk.Frame(left, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
-        scrape_fr.pack(fill="x", pady=(4, 8))
-        
-        tk.Label(scrape_fr, text="Automated Portal Scraper", font=("Segoe UI",9,"bold"),
-                 bg=PANEL, fg=MUTED).pack(anchor="w")
-        
-        # Search query entry
-        query_fr = tk.Frame(scrape_fr, bg=PANEL)
-        query_fr.pack(fill="x", pady=(4, 4))
-        tk.Label(query_fr, text="Query:", font=FL, bg=PANEL, fg=TEXTSUB).pack(side="left")
-        self.scrape_query_var = tk.StringVar()
-        self.scrape_query_ent = tk.Entry(query_fr, textvariable=self.scrape_query_var, bg=CARD, fg=TEXT,
-                                         insertbackground=TEXT, relief="flat", font=FL,
-                                         highlightthickness=1, highlightbackground="#30363D",
-                                         highlightcolor=ACCENT2)
-        self.scrape_query_ent.pack(side="right", fill="x", expand=True, padx=(6, 0))
-        
-        # Date Filter Row
-        date_fr = tk.Frame(scrape_fr, bg=PANEL)
-        date_fr.pack(fill="x", pady=(4, 4))
-        
-        tk.Label(date_fr, text="Date Filter:", font=FL, bg=PANEL, fg=TEXTSUB).pack(side="left")
-        self.scrape_date_type_var = tk.StringVar(value="None")
-        self.scrape_date_type_cb = ttk.Combobox(date_fr, textvariable=self.scrape_date_type_var,
-                                                values=["None", "Start Date", "End Date"],
-                                                state="readonly", font=("Segoe UI", 8), width=10)
-        self.scrape_date_type_cb.pack(side="left", padx=4)
-        
-        tk.Label(date_fr, text="From:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(4, 2))
-        self.scrape_date_from_var = tk.StringVar()
-        self.scrape_date_from_ent = tk.Entry(date_fr, textvariable=self.scrape_date_from_var, bg=CARD, fg=TEXT,
-                                             insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
-                                             highlightthickness=1, highlightbackground="#30363D")
-        self.scrape_date_from_ent.pack(side="left")
-        self.btn_scrape_from_cal = tk.Button(date_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
-                                             font=("Segoe UI", 8), padx=3, pady=0, cursor="hand2",
-                                             activebackground=ACCENT)
-        self.btn_scrape_from_cal.pack(side="left", padx=(2, 4))
-        self.btn_scrape_from_cal.configure(
-            command=lambda: self._show_datepicker(self.btn_scrape_from_cal, self.scrape_date_from_var))
 
-        # To Label
-        tk.Label(date_fr, text="To:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(4, 2))
-        self.scrape_date_to_var = tk.StringVar()
-        self.scrape_date_to_ent = tk.Entry(date_fr, textvariable=self.scrape_date_to_var, bg=CARD, fg=TEXT,
-                                           insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=8,
-                                           highlightthickness=1, highlightbackground="#30363D")
-        self.scrape_date_to_ent.pack(side="left")
-        self.btn_scrape_to_cal = tk.Button(date_fr, text="📅", bg=CARD, fg=TEXT, relief="flat",
-                                           font=("Segoe UI", 8), padx=3, pady=0, cursor="hand2",
-                                           activebackground=ACCENT)
-        self.btn_scrape_to_cal.pack(side="left", padx=(2, 4))
-        self.btn_scrape_to_cal.configure(
-            command=lambda: self._show_datepicker(self.btn_scrape_to_cal, self.scrape_date_to_var))
-
-        # Options row (e.g. limit pages or only keep matching filter)
-        opt_row = tk.Frame(scrape_fr, bg=PANEL)
-        opt_row.pack(fill="x", pady=(2, 4))
-        
-        self.scrape_filter_only_var = tk.BooleanVar(value=True)
-        self.scrape_filter_only_chk = tk.Checkbutton(opt_row, text="Only matches",
-                                                     variable=self.scrape_filter_only_var, bg=PANEL, fg=TEXT,
-                                                     selectcolor=BG, activebackground=PANEL, activeforeground=TEXT,
-                                                     font=("Segoe UI", 8), relief="flat", highlightthickness=0)
-        self.scrape_filter_only_chk.pack(side="left")
-        
-        # Limit pages
-        tk.Label(opt_row, text="Max Pgs:", font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(side="left", padx=(8, 2))
-        self.scrape_max_pages_var = tk.StringVar(value="0")
-        self.scrape_max_pages_ent = tk.Entry(opt_row, textvariable=self.scrape_max_pages_var, bg=CARD, fg=TEXT,
-                                             insertbackground=TEXT, relief="flat", font=("Segoe UI", 8), width=4,
-                                             highlightthickness=1, highlightbackground="#30363D")
-        self.scrape_max_pages_ent.pack(side="left")
-
-        tk.Label(opt_row, text="(DD-MM-YYYY)", font=("Segoe UI", 7, "italic"), bg=PANEL, fg=MUTED).pack(side="right", padx=(4, 0))
-        
-        # Action Buttons
-        act_row = tk.Frame(scrape_fr, bg=PANEL)
-        act_row.pack(fill="x", pady=(4, 0))
-        
-        self.btn_start_scrape = self._btn(act_row, "  Start Portal Scrape  ", self._do_portal_scrape_start, bg=ACCENT2)
-        self.btn_start_scrape.pack(side="left")
-        
-        self.btn_stop_scrape = self._btn(act_row, "  Stop  ", self._do_portal_scrape_stop, bg=CARD, fg=ERR)
-        self.btn_stop_scrape.pack(side="right")
-        self.btn_stop_scrape.configure(state="disabled")
 
         # log
         log_hdr = tk.Frame(left, bg=BG)
@@ -288,12 +201,10 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
         self.tab_table = tk.Frame(self.notebook, bg=BG)
         self.tab_calendar = tk.Frame(self.notebook, bg=BG)
-        self.tab_matrix = tk.Frame(self.notebook, bg=BG)
         self.tab_analytics = tk.Frame(self.notebook, bg=BG)
         
         self.notebook.add(self.tab_table, text="  Table View  ")
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
-        self.notebook.add(self.tab_matrix, text="  Matrix View  ")
         self.notebook.add(self.tab_analytics, text="  Analytics View  ")
         # Board / Kanban View
         self._build_kanban_tab()
@@ -303,9 +214,6 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
         # Build Calendar tab layouts
         self._build_calendar_tab()
-
-        # Build Matrix tab layouts
-        self._build_matrix_tab()
 
         # Build Analytics tab layouts
         self._build_analytics_tab()
@@ -445,7 +353,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
 
     def _on_tab_changed(self, event):
         import logger as _logger_mod
-        TAB_NAMES = ["Table View", "Calendar View", "Matrix View", "Analytics View"]
+        TAB_NAMES = ["Table View", "Calendar View", "Analytics View", "Board View"]
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
@@ -453,10 +361,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, MatrixTabMixin, AnalyticsTabMixin, Dial
                 self._update_calendar()
                 self._update_details()
             elif selected_tab == 2:
-                self._update_matrix()
-            elif selected_tab == 3:
                 self._update_analytics()
-            elif selected_tab == 4:
+            elif selected_tab == 3:
                 try:
                     self._update_kanban()
                 except Exception:

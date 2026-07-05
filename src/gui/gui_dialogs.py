@@ -1,12 +1,83 @@
 import os
+from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, simpledialog
-from datetime import datetime
-import keyring
+try:
+    import keyring
+except ImportError:
+    keyring = None
 
 # Local imports
-from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, FT, FL, TV_COLS
+from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, WARN, FT, FL, TV_COLS
 import db
+
+class LoadingDialog(tk.Toplevel):
+    def __init__(self, parent, title="Please Wait", message="Processing...", task_fn=None):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("380x150")
+        self.resizable(False, False)
+        self.configure(bg=BG)
+        self.transient(parent)
+        self.grab_set()
+        
+        # Center the window relative to parent
+        self.update_idletasks()
+        x = parent.winfo_rootx() + (parent.winfo_width() - self.winfo_width()) // 2
+        y = parent.winfo_rooty() + (parent.winfo_height() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+        
+        # Disable close button
+        self.protocol("WM_DELETE_WINDOW", lambda: None)
+        
+        # Frame
+        frame = tk.Frame(self, bg=PANEL, padx=15, pady=15, highlightthickness=1, highlightbackground="#30363D")
+        frame.pack(fill="both", expand=True, padx=8, pady=8)
+        
+        # Messages
+        lbl_msg = tk.Label(frame, text=message, font=FL, bg=PANEL, fg=TEXT, wraplength=340, justify="center")
+        lbl_msg.pack(pady=(15, 10))
+        
+        # Loading indicator dots
+        self.dots_var = tk.StringVar(value="...")
+        self.lbl_dots = tk.Label(frame, text="...", font=("Segoe UI", 18, "bold"), bg=PANEL, fg=ACCENT2)
+        self.lbl_dots.pack()
+        
+        self.task_fn = task_fn
+        self.exception = None
+        self.result = None
+        
+        self._animate_dots()
+        
+        if self.task_fn:
+            import threading
+            threading.Thread(target=self._run_task, daemon=True).start()
+            
+    def _animate_dots(self):
+        if not self.winfo_exists():
+            return
+        curr = self.dots_var.get()
+        if curr == "...":
+            nxt = "."
+        elif curr == ".":
+            nxt = ".."
+        elif curr == "..":
+            nxt = "..."
+        else:
+            nxt = "."
+        self.dots_var.set(nxt)
+        self.lbl_dots.configure(text=nxt)
+        self.after(400, self._animate_dots)
+        
+    def _run_task(self):
+        try:
+            self.result = self.task_fn()
+        except Exception as e:
+            self.exception = e
+        finally:
+            if self.winfo_exists():
+                self.after(0, self.destroy)
+
 
 class DialogsMixin:
     def _show_settings(self):
@@ -111,10 +182,13 @@ class DialogsMixin:
         # API Key (stored securely in OS keyring)
         tk.Label(llm_frame, text="API Key:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=3)
         saved_key = None
-        try:
-            saved_key = keyring.get_password('tendertracker', 'llm_api_key')
-        except Exception:
-            saved_key = None
+        if keyring:
+            try:
+                saved_key = keyring.get_password('tendertracker', 'llm_api_key')
+            except Exception:
+                saved_key = None
+        if not saved_key:
+            saved_key = db.load_settings().get("llm_api_key", "")
         key_var = tk.StringVar(value=saved_key or db.load_settings().get("llm_api_key", ""))
         key_ent = tk.Entry(llm_frame, textvariable=key_var, show="*", bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
                            highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
@@ -135,19 +209,44 @@ class DialogsMixin:
         model_ent = tk.Entry(llm_frame, textvariable=model_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
                             highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
         model_ent.grid(row=4, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # Classification Model (llm_classification_model)
+        class_model_lbl = tk.Label(llm_frame, text="Classification Model:", font=FL, bg=PANEL, fg=TEXTSUB)
+        class_model_lbl.grid(row=5, column=0, sticky="w", pady=3)
+        class_model_var = tk.StringVar(value=db.load_settings().get("llm_classification_model", ""))
+        class_model_ent = tk.Entry(llm_frame, textvariable=class_model_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                                   highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        class_model_ent.grid(row=5, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # Embedding Model (llm_embedding_model)
+        embed_lbl = tk.Label(llm_frame, text="Embedding Model:", font=FL, bg=PANEL, fg=TEXTSUB)
+        embed_lbl.grid(row=6, column=0, sticky="w", pady=3)
+        embed_var = tk.StringVar(value=db.load_settings().get("llm_embedding_model", "nomic-embed-text"))
+        embed_ent = tk.Entry(llm_frame, textvariable=embed_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                            highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        embed_ent.grid(row=6, column=1, sticky="ew", padx=(10, 0), pady=3)
+
         # Optional start command (used if server not reachable)
         start_lbl = tk.Label(llm_frame, text="Start Command:", font=FL, bg=PANEL, fg=TEXTSUB)
-        start_lbl.grid(row=5, column=0, sticky="w", pady=3)
+        start_lbl.grid(row=7, column=0, sticky="w", pady=3)
         start_var = tk.StringVar(value=db.load_settings().get("llm_start_cmd", ""))
         start_ent = tk.Entry(llm_frame, textvariable=start_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
                     highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
-        start_ent.grid(row=5, column=1, sticky="ew", padx=(10, 0), pady=3)
+        start_ent.grid(row=7, column=1, sticky="ew", padx=(10, 0), pady=3)
+        
+        # Parallel Workers (llm_max_parallel)
+        parallel_lbl = tk.Label(llm_frame, text="Parallel Workers:", font=FL, bg=PANEL, fg=TEXTSUB)
+        parallel_lbl.grid(row=8, column=0, sticky="w", pady=3)
+        parallel_var = tk.StringVar(value=str(db.load_settings().get("llm_max_parallel", 8)))
+        parallel_ent = tk.Entry(llm_frame, textvariable=parallel_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                               highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2)
+        parallel_ent.grid(row=8, column=1, sticky="ew", padx=(10, 0), pady=3)
         
         llm_frame.columnconfigure(1, weight=1)
         
         # Checkboxes for actions
         chk_frame = tk.Frame(llm_frame, bg=PANEL)
-        chk_frame.grid(row=6, column=0, columnspan=2, sticky="w", pady=(6, 4))
+        chk_frame.grid(row=9, column=0, columnspan=2, sticky="w", pady=(6, 4))
         
         use_parsing_var = tk.BooleanVar(value=db.load_settings().get("llm_use_parsing", False))
         chk_parse = tk.Checkbutton(chk_frame, text="Use LLM for parsing tender text & PDFs",
@@ -162,10 +261,10 @@ class DialogsMixin:
                                  activebackground=PANEL, activeforeground=TEXT,
                                  font=FL, relief="flat", highlightthickness=0)
         chk_map.pack(anchor="w")
-
+ 
         # Test Connection button and Status label
         test_frame = tk.Frame(llm_frame, bg=PANEL)
-        test_frame.grid(row=7, column=0, columnspan=2, sticky="ew", pady=(6, 0))
+        test_frame.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(6, 0))
         
         test_status_var = tk.StringVar(value="Status: Ready")
         test_status_lbl = tk.Label(test_frame, textvariable=test_status_var, font=("Segoe UI", 8, "italic"), bg=PANEL, fg=TEXTSUB, anchor="w")
@@ -188,37 +287,77 @@ class DialogsMixin:
             test_status_lbl.configure(fg=MUTED)
             test_status_var.set("Status: Connecting...")
             
-            def thread_fn():
-                # Attempt to ensure server running using configured start command
+            def perform_connect():
                 start_cmd_val = start_var.get().strip()
                 try:
                     llm.ensure_server_running(url, start_cmd_val)
                 except Exception:
                     pass
-                success, msg = llm.test_llm_connection(prov, key, url, mdl)
-                if success:
-                    win.after(0, lambda: test_status_lbl.configure(fg=SUCCESS))
-                    win.after(0, lambda: test_status_var.set("Status: Success!"))
-                else:
-                    win.after(0, lambda: test_status_lbl.configure(fg=ERR))
-                    win.after(0, lambda: test_status_var.set(f"Status: Fail ({msg[:30]}...)"))
+                return llm.test_llm_connection(prov, key, url, mdl)
+                
+            dlg = LoadingDialog(win, "Testing Connection", "Testing LLM connection and pre-warming model...", perform_connect)
+            win.wait_window(dlg)
             
-            threading.Thread(target=thread_fn, daemon=True).start()
+            if dlg.exception:
+                test_status_lbl.configure(fg=ERR)
+                test_status_var.set(f"Status: Fail ({str(dlg.exception)[:30]}...)")
+            elif dlg.result:
+                success, msg = dlg.result
+                if success:
+                    test_status_lbl.configure(fg=SUCCESS)
+                    test_status_var.set("Status: Success!")
+                else:
+                    test_status_lbl.configure(fg=ERR)
+                    test_status_var.set(f"Status: Fail ({msg[:30]}...)")
+            
+        def run_eject():
+            prov = provider_var.get()
+            url = url_var.get().strip()
+            key = key_var.get().strip()
+            
+            if prov != "Local LLM (LM Studio / Ollama)":
+                test_status_lbl.configure(fg=WARN)
+                test_status_var.set("Status: Eject is for Local LLM.")
+                return
+                
+            test_status_lbl.configure(fg=MUTED)
+            test_status_var.set("Status: Ejecting...")
+            
+            def perform_eject():
+                llm.unload_local_models(url, key)
+                return True
+                
+            dlg = LoadingDialog(win, "Ejecting Models", "Ejecting loaded models from local server...", perform_eject)
+            win.wait_window(dlg)
+            
+            if dlg.exception:
+                test_status_lbl.configure(fg=ERR)
+                test_status_var.set(f"Status: Fail ({str(dlg.exception)[:30]}...)")
+            else:
+                test_status_lbl.configure(fg=SUCCESS)
+                test_status_var.set("Status: Ejected successfully.")
             
         self._btn(test_frame, "Test Connection", run_test, bg=CARD).pack(side="left")
-
+        self._btn(test_frame, "Eject LLM", run_eject, bg=CARD).pack(side="left", padx=(6, 0))
+ 
         def update_llm_fields_state(*args):
             prov = provider_var.get()
             if prov == "Disabled":
                 key_ent.configure(state="disabled")
                 url_ent.configure(state="disabled")
                 model_ent.configure(state="disabled")
+                class_model_ent.configure(state="disabled")
+                embed_ent.configure(state="disabled")
+                parallel_ent.configure(state="disabled")
                 chk_parse.configure(state="disabled")
                 chk_map.configure(state="disabled")
             elif prov == "Google AI Studio (Gemini)":
                 key_ent.configure(state="normal")
                 url_ent.configure(state="disabled")
                 model_ent.configure(state="normal")
+                class_model_ent.configure(state="normal")
+                embed_ent.configure(state="disabled")
+                parallel_ent.configure(state="normal")
                 chk_parse.configure(state="normal")
                 chk_map.configure(state="normal")
                 # Pre-fill default model name if empty
@@ -228,6 +367,9 @@ class DialogsMixin:
                 key_ent.configure(state="normal")
                 url_ent.configure(state="normal")
                 model_ent.configure(state="normal")
+                class_model_ent.configure(state="normal")
+                embed_ent.configure(state="normal")
+                parallel_ent.configure(state="normal")
                 chk_parse.configure(state="normal")
                 chk_map.configure(state="normal")
                 # Pre-fill default url/model if empty
@@ -238,7 +380,7 @@ class DialogsMixin:
                     
         provider_var.trace_add("write", update_llm_fields_state)
         update_llm_fields_state()
-
+ 
         # Bottom Close Button
         def save_and_close():
             db.save_setting("excel_filename_pattern", pattern_var.get().strip())
@@ -246,16 +388,26 @@ class DialogsMixin:
             # Save LLM Settings
             db.save_setting("llm_provider", provider_var.get())
             # Store API key securely in keyring when available
-            try:
-                key_to_store = key_var.get().strip()
-                if key_to_store:
-                    keyring.set_password('tendertracker', 'llm_api_key', key_to_store)
-            except Exception:
-                # Fallback to settings file if keyring unavailable
+            if keyring:
+                try:
+                    key_to_store = key_var.get().strip()
+                    if key_to_store:
+                        keyring.set_password('tendertracker', 'llm_api_key', key_to_store)
+                except Exception:
+                    # Fallback to settings file if keyring unavailable
+                    db.save_setting("llm_api_key", key_var.get().strip())
+            else:
                 db.save_setting("llm_api_key", key_var.get().strip())
             db.save_setting("llm_base_url", url_var.get().strip())
             db.save_setting("llm_model", model_var.get().strip())
+            db.save_setting("llm_classification_model", class_model_var.get().strip())
+            db.save_setting("llm_embedding_model", embed_var.get().strip())
             db.save_setting("llm_start_cmd", start_var.get().strip())
+            try:
+                parallel_val = int(parallel_var.get().strip())
+                db.save_setting("llm_max_parallel", parallel_val)
+            except ValueError:
+                db.save_setting("llm_max_parallel", 8)
             db.save_setting("llm_use_parsing", use_parsing_var.get())
             db.save_setting("llm_use_mapping", use_mapping_var.get())
             
@@ -326,9 +478,9 @@ class DialogsMixin:
                 if selected_tab == 1:
                     self._update_calendar()
                 elif selected_tab == 2:
-                    self._update_matrix()
-                elif selected_tab == 3:
                     self._update_analytics()
+                elif selected_tab == 3:
+                    self._update_kanban()
             except Exception:
                 pass
             self._log("ok", f"Database restored successfully from: {src_path}")
@@ -1083,9 +1235,9 @@ class DialogsMixin:
                 if selected_tab == 1:
                     self._update_calendar()
                 elif selected_tab == 2:
-                    self._update_matrix()
-                elif selected_tab == 3:
                     self._update_analytics()
+                elif selected_tab == 3:
+                    self._update_kanban()
             except Exception:
                 pass
                 

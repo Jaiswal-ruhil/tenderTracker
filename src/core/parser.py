@@ -30,8 +30,16 @@ def map_category(raw_val):
             mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
         except ImportError:
             mappings = []
+
+    # Fast keyword matching first — avoids an LLM round-trip when rules already match
+    for item in mappings:
+        keywords = item.get("keywords", [])
+        standard_name = item.get("name", "")
+        if keywords and standard_name:
+            if all(kw.lower() in val_lower for kw in keywords):
+                return standard_name
             
-    # LLM category mapping if enabled
+    # LLM category mapping if enabled and keyword rules did not match
     try:
         use_llm = settings.get("llm_use_mapping", False)
         provider = settings.get("llm_provider", "Disabled")
@@ -40,7 +48,7 @@ def map_category(raw_val):
             import llm
             api_key = settings.get("llm_api_key", "")
             base_url = settings.get("llm_base_url", "")
-            model = settings.get("llm_model", "")
+            model = settings.get("llm_classification_model") or settings.get("llm_model", "")
             mapped_val = llm.llm_map_category(raw_val, existing_categories, provider, api_key, base_url, model)
             if mapped_val:
                 return mapped_val
@@ -48,14 +56,6 @@ def map_category(raw_val):
         import logger
         logger.log("warn", f"LLM category mapping failed: {e}. Falling back to keyword mapping.")
 
-    # Fallback to keyword matching
-    for item in mappings:
-        keywords = item.get("keywords", [])
-        standard_name = item.get("name", "")
-        if keywords and standard_name:
-            if all(kw.lower() in val_lower for kw in keywords):
-                return standard_name
-                
     return raw_val.strip().title()
 
 
@@ -107,41 +107,47 @@ def split_blocks(text):
     parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
 
+def clean_raw_text(text: str) -> str:
+    """
+    Strips navigation, footers, headers, and repetitive GeM UI boilerplate
+    from the raw text before running regex parsing.
+    """
+    if not text:
+        return ""
+    lines = []
+    # Boilerplate patterns to ignore
+    BOILERPLATE_PATTERNS = [
+        r"^page\s+\d+\s+of\s+\d+$", # page footers
+        r"^\d+\s*/\s*\d+$", # page index
+        r"^gem\s*\|\s*government\s*marketplace",
+        r"^portal\s*search\s*results",
+        r"^home\s*>\s*dashboard",
+        r"^contact\s*us\s*\|\s*help",
+    ]
+    for line in text.splitlines():
+        line_clean = line.strip()
+        if not line_clean:
+            continue
+        # Skip if matches boilerplate
+        skip = False
+        for pattern in BOILERPLATE_PATTERNS:
+            if re.match(pattern, line_clean, re.I):
+                skip = True
+                break
+        if not skip:
+            lines.append(line_clean)
+    return "\n".join(lines)
+
 def parse_one(text):
-    # LLM Parsing as primary (if provider is configured)
+    text = clean_raw_text(text)
+    settings = {}
+    provider = "Disabled"
     try:
         import db
         settings = db.load_settings()
         provider = settings.get("llm_provider", "Disabled")
-        if provider != "Disabled":
-            import llm
-            api_key = settings.get("llm_api_key", "")
-            base_url = settings.get("llm_base_url", "")
-            model = settings.get("llm_model", "")
-            parsed = llm.llm_parse_tender(text, provider, api_key, base_url, model)
-            if parsed and isinstance(parsed, dict) and parsed.get("bid_no"):
-                # Enrich location if it exists
-                if parsed.get("location"):
-                    parsed["location"] = _enrich_location(parsed["location"])
-                
-                # Apply standard category mapping to parsed category field
-                if parsed.get("category"):
-                    parsed["category"] = map_category(parsed["category"])
-                
-                # Apply custom value mappings
-                try:
-                    parsed = db.apply_value_mappings(parsed)
-                except Exception:
-                    pass
-                # Auto-assign tender status based on mapped category
-                parsed = assign_tender_status(parsed)
-                return parsed
-            else:
-                import logger
-                logger.log("warn", "LLM parser returned empty or invalid data. Falling back to regex parser.")
-    except Exception as e:
-        import logger
-        logger.log("warn", f"LLM parsing failed: {e}. Falling back to regex parser.")
+    except Exception:
+        pass
 
     r = {}
     m = re.search(r"BID\s*(?:NO|Number)(?:\.|\b)\s*:\s*\[([^\]]+)\]\((https?://[^)]+)\)", text, re.I)
@@ -153,7 +159,7 @@ def parse_one(text):
 
     # Clean up bid_no if it contains extra text (e.g., "View Corrigendum")
     if "bid_no" in r:
-        bid_no_match = re.search(r"(GEM/\d{4}/[A-Z0-9]+/\d+)", r["bid_no"], re.I)
+        bid_no_match = re.search(r"(GEM/\d{4}/[A-Z0-9]+/[\dXx]+)", r["bid_no"], re.I)
         if bid_no_match:
             r["bid_no"] = bid_no_match.group(1).strip()
 
@@ -164,7 +170,7 @@ def parse_one(text):
         if url_match:
             r["bid_url"] = url_match.group(1).strip()
         else:
-            id_match = re.search(r"(\d+)$", r["bid_no"])
+            id_match = re.search(r"([\dXx]+)$", r["bid_no"])
             if id_match:
                 r["bid_url"] = f"https://bidplus.gem.gov.in/showbidDocument/{id_match.group(1)}"
     m=re.search(r"Items?\s*:\s*(.+)", text, re.I)
@@ -253,7 +259,7 @@ def parse_one(text):
     r = assign_tender_status(r)
 
     # Warn if the regex parser failed to extract a valid bid number
-    has_bid = r.get("bid_no") and re.match(r"^GEM/\d{4}/[A-Z0-9]+/\d+$", r["bid_no"], re.I)
+    has_bid = r.get("bid_no") and re.match(r"^GEM/\d{4}/[A-Z0-9]+/[\dXx]+$", r["bid_no"], re.I)
     if not has_bid:
         import logger
         logger.log("warn", "Regex parsing failed to find a valid bid number.")
@@ -587,11 +593,21 @@ def learn_category_mapping(items, new_category):
     if not new_cat_clean:
         return
 
+    import db
+    settings = db.load_settings()
+
+    # Load mappings early (needed for LLM category mapping below)
+    mappings = settings.get("category_mappings")
+    if not mappings:
+        try:
+            from config import CATEGORY_MAPPING
+            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+        except Exception:
+            mappings = []
+
     # If LLM mapping is enabled, ask the LLM to normalize/suggest a canonical
     # category name for these items. This helps keep category names consistent.
     try:
-        import db
-        settings = db.load_settings()
         use_llm = settings.get("llm_use_mapping", False)
         provider = settings.get("llm_provider", "Disabled")
         if use_llm and provider != "Disabled":
@@ -599,7 +615,7 @@ def learn_category_mapping(items, new_category):
                 import llm as _llm
                 api_key = settings.get("llm_api_key", "")
                 base_url = settings.get("llm_base_url", "")
-                model = settings.get("llm_model", "")
+                model = settings.get("llm_classification_model") or settings.get("llm_model", "")
                 # Ensure server is running (attempt auto-start if a start command is configured)
                 start_cmd = settings.get("llm_start_cmd")
                 try:
@@ -631,18 +647,7 @@ def learn_category_mapping(items, new_category):
                 logger.log("warn", f"LLM category mapping failed: {e}. Falling back to keyword mapping.")
     except Exception:
         pass
-        
-    # Load mappings
-    import db
-    settings = db.load_settings()
-    mappings = settings.get("category_mappings")
-    if not mappings:
-        try:
-            from config import CATEGORY_MAPPING
-            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-        except Exception:
-            mappings = []
-            
+
     # Find or create category entry
     cat_entry = None
     for m in mappings:
