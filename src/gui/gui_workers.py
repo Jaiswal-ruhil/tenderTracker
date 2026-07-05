@@ -203,18 +203,6 @@ class WorkersMixin:
                             rec = parse_one(blk)
                     else:
                         rec = parse_one(blk)
-                        # Fallback to LLM if regex fails to find a valid bid number
-                        bid_no = rec.get("bid_no")
-                        has_bid = bid_no and re.match(r"^GEM/\d{4}/[A-Z0-9]+/[\dXx]+$", bid_no, re.I)
-                        if not has_bid and provider != "Disabled" and settings.get("llm_use_parsing", False):
-                            self.after(0, lambda: self._log("info", f"[{i}/{total}] Regex failed to find a valid Bid Number. Invoking LLM fallback parser..."))
-                            try:
-                                llm_rec = _llm_module.llm_parse_tender(blk, provider, api_key, base_url, model)
-                                if llm_rec and llm_rec.get("bid_no"):
-                                    rec = llm_rec
-                                    self.after(0, lambda b=rec['bid_no']: self._log("ok", f"LLM fallback successfully parsed {b}"))
-                            except Exception as ex:
-                                self.after(0, lambda err=ex: self._log("err", f"LLM fallback parser failed: {err}"))
 
                     bid_no = rec.get("bid_no")
                     bid_url = rec.get("bid_url")
