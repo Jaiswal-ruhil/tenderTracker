@@ -346,10 +346,13 @@ class WorkersMixin:
                     try:
                         from llm_client import LMStudioClient
                         client = LMStudioClient()
+                        import warnings
                         old_loop = None
                         try:
-                            old_loop = asyncio.get_running_loop()
-                        except RuntimeError:
+                            with warnings.catch_warnings():
+                                warnings.simplefilter("ignore", DeprecationWarning)
+                                old_loop = asyncio.get_event_loop()
+                        except Exception:
                             pass
                         loop = asyncio.new_event_loop()
                         asyncio.set_event_loop(loop)
@@ -366,8 +369,7 @@ class WorkersMixin:
                         finally:
                             loop.run_until_complete(client.close())
                             loop.close()
-                            if old_loop:
-                                asyncio.set_event_loop(old_loop)
+                            asyncio.set_event_loop(old_loop)
                     except Exception as llm_err:
                         self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
 
@@ -624,10 +626,13 @@ class WorkersMixin:
                 try:
                     from llm_client import LMStudioClient
                     client = LMStudioClient()
+                    import warnings
                     old_loop = None
                     try:
-                        old_loop = asyncio.get_running_loop()
-                    except RuntimeError:
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore", DeprecationWarning)
+                            old_loop = asyncio.get_event_loop()
+                    except Exception:
                         pass
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
@@ -656,8 +661,7 @@ class WorkersMixin:
                     finally:
                         loop.run_until_complete(client.close())
                         loop.close()
-                        if old_loop:
-                            asyncio.set_event_loop(old_loop)
+                        asyncio.set_event_loop(old_loop)
                 except Exception as llm_err:
                     self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
 
