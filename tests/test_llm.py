@@ -422,5 +422,179 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(res.get("location"), "New Delhi")
         self.assertTrue(mock_llm_parse.called)
 
+    @patch('llm_client.LMStudioClient.classify_bids_batch')
+    @patch('gui_workers._llm_module.llm_parse_tender')
+    @patch('gui_workers.parse_one')
+    def test_do_parse_force_llm_true(self, mock_parse_one, mock_llm_parse, mock_classify):
+        mock_classify.return_value = []
+        # Setup sync thread execution for target='worker' only
+        import threading
+        original_thread = threading.Thread
+        def mock_thread_init(*args, **kwargs):
+            target = kwargs.get('target')
+            if target and target.__name__ == 'worker':
+                class SyncThread:
+                    def start(self):
+                        target()
+                return SyncThread()
+            return original_thread(*args, **kwargs)
+        
+        # Setup settings
+        db.save_setting("llm_provider", "Google AI Studio (Gemini)")
+        db.save_setting("llm_api_key", "test_key")
+        db.save_setting("llm_use_parsing", False) # disable setting to test force override
+        
+        # Setup mock app
+        from gui_workers import WorkersMixin
+        class MockApp(WorkersMixin):
+            def __init__(self):
+                self.paste_txt = MagicMock()
+                self.paste_txt.get.return_value = "BID NO: GEM/2026/B/12345"
+                self._records = []
+                self.logs = []
+                
+            def _log(self, level, msg):
+                self.logs.append((level, msg))
+            def _set_prog(self, val, msg):
+                pass
+            def after(self, ms, callback):
+                callback()
+            def _is_bid_in_dont_wants(self, bid):
+                return None
+            def _add_single_row_immediate(self, rec, stats):
+                self._records.append(rec)
+                stats["added"] += 1
+            def _finalize_parse(self, recs, stats, total, start_time):
+                pass
+            def _set_status(self, msg, color=None):
+                pass
+                
+        app = MockApp()
+        mock_llm_parse.return_value = {"bid_no": "GEM/2026/B/12345", "items": "Test Item"}
+        
+        with patch('threading.Thread', side_effect=mock_thread_init):
+            app._do_parse(force_llm=True)
+        
+        # Verify LLM parser was called because force_llm=True overrides setting
+        mock_llm_parse.assert_called_once()
+        self.assertEqual(len(app._records), 1)
+        self.assertEqual(app._records[0]["bid_no"], "GEM/2026/B/12345")
+
+    @patch('llm_client.LMStudioClient.classify_bids_batch')
+    @patch('gui_workers._llm_module.llm_parse_tender')
+    @patch('gui_workers.parse_one')
+    def test_do_parse_force_llm_false(self, mock_parse_one, mock_llm_parse, mock_classify):
+        mock_classify.return_value = []
+        # Setup sync thread execution for target='worker' only
+        import threading
+        original_thread = threading.Thread
+        def mock_thread_init(*args, **kwargs):
+            target = kwargs.get('target')
+            if target and target.__name__ == 'worker':
+                class SyncThread:
+                    def start(self):
+                        target()
+                return SyncThread()
+            return original_thread(*args, **kwargs)
+        
+        # Setup settings
+        db.save_setting("llm_provider", "Google AI Studio (Gemini)")
+        db.save_setting("llm_api_key", "test_key")
+        db.save_setting("llm_use_parsing", True) # enable setting to test force override
+        
+        # Setup mock app
+        from gui_workers import WorkersMixin
+        class MockApp(WorkersMixin):
+            def __init__(self):
+                self.paste_txt = MagicMock()
+                self.paste_txt.get.return_value = "BID NO: GEM/2026/B/12345"
+                self._records = []
+                self.logs = []
+                
+            def _log(self, level, msg):
+                self.logs.append((level, msg))
+            def _set_prog(self, val, msg):
+                pass
+            def after(self, ms, callback):
+                callback()
+            def _is_bid_in_dont_wants(self, bid):
+                return None
+            def _add_single_row_immediate(self, rec, stats):
+                self._records.append(rec)
+                stats["added"] += 1
+            def _finalize_parse(self, recs, stats, total, start_time):
+                pass
+            def _set_status(self, msg, color=None):
+                pass
+                
+        app = MockApp()
+        mock_parse_one.return_value = {"bid_no": "GEM/2026/B/12345", "items": "Test Item"}
+        
+        with patch('threading.Thread', side_effect=mock_thread_init):
+            app._do_parse(force_llm=False)
+        
+        # Verify regex parser was called and LLM was NOT called because force_llm=False overrides setting
+        mock_parse_one.assert_called()
+        self.assertFalse(mock_llm_parse.called)
+
+    @patch('llm_client.LMStudioClient.classify_bids_batch')
+    @patch('gui_workers._llm_module.llm_parse_tender')
+    @patch('gui_workers.parse_one')
+    def test_do_parse_regex_fail_llm_fallback(self, mock_parse_one, mock_llm_parse, mock_classify):
+        mock_classify.return_value = []
+        # Setup sync thread execution for target='worker' only
+        import threading
+        original_thread = threading.Thread
+        def mock_thread_init(*args, **kwargs):
+            target = kwargs.get('target')
+            if target and target.__name__ == 'worker':
+                class SyncThread:
+                    def start(self):
+                        target()
+                return SyncThread()
+            return original_thread(*args, **kwargs)
+        
+        # Setup settings
+        db.save_setting("llm_provider", "Google AI Studio (Gemini)")
+        db.save_setting("llm_api_key", "test_key")
+        db.save_setting("llm_use_parsing", False)
+        
+        # Setup mock app
+        from gui_workers import WorkersMixin
+        class MockApp(WorkersMixin):
+            def __init__(self):
+                self.paste_txt = MagicMock()
+                self.paste_txt.get.return_value = "Random text"
+                self._records = []
+                self.logs = []
+                
+            def _log(self, level, msg):
+                self.logs.append((level, msg))
+            def _set_prog(self, val, msg):
+                pass
+            def after(self, ms, callback):
+                callback()
+            def _is_bid_in_dont_wants(self, bid):
+                return None
+            def _add_single_row_immediate(self, rec, stats):
+                self._records.append(rec)
+                stats["added"] += 1
+            def _finalize_parse(self, recs, stats, total, start_time):
+                pass
+            def _set_status(self, msg, color=None):
+                pass
+                
+        app = MockApp()
+        # Mock parse_one failing (returning dictionary without valid bid_no format)
+        mock_parse_one.return_value = {"items": "Test Item"}
+        mock_llm_parse.return_value = {"bid_no": "GEM/2026/B/54321", "items": "Test Item"}
+        
+        with patch('threading.Thread', side_effect=mock_thread_init):
+            app._do_parse(force_llm=False)
+        
+        # Verify LLM was called as fallback
+        mock_llm_parse.assert_called_once()
+        self.assertEqual(app._records[0]["bid_no"], "GEM/2026/B/54321")
+
 if __name__ == '__main__':
     unittest.main()

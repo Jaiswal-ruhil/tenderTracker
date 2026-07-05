@@ -378,6 +378,7 @@ class TableTabMixin:
 
         # Refine rules and copy table buttons
         self._btn(filter_fr, "⚙ Refine Rules...", self._show_filter_rules_dialog, bg=CARD).pack(side="right")
+        self._btn(filter_fr, "👁 Select Columns...", self._show_column_selector, bg=CARD).pack(side="right", padx=(0, 6))
         self._btn(filter_fr, "📋 Copy Table", self._copy_table_output, bg=CARD).pack(side="right", padx=(0, 6))
 
         # Create a PanedWindow inside self.tab_table for resizable Treeview and Detail Side-Panel
@@ -492,6 +493,7 @@ class TableTabMixin:
         
         self.tv.bind("<Button-3>", self._show_context_menu)
         self.tv.bind("<Button-2>", self._show_context_menu) # For macOS
+        self._apply_column_visibility()
 
     def _tv_insert(self, rec):
         raw_vals = []
@@ -551,7 +553,6 @@ class TableTabMixin:
         x,y,w,h = bbox
         var = tk.StringVar(value=self.tv.set(iid, col_id))
         if col_id == "category":
-            import db
             settings = db.load_settings()
             mappings = settings.get("category_mappings")
             if not mappings:
@@ -990,7 +991,7 @@ class TableTabMixin:
                         if from_date_parsed or to_date_parsed:
                             continue
                     
-                self._tv_insert(rec)
+            self._tv_insert(rec)
             visible_count += 1
             
         self._refresh_alt()
@@ -1404,3 +1405,83 @@ class TableTabMixin:
             except Exception as ex:
                 self._log("err", f"Failed to open PDF: {e}")
                 messagebox.showerror("Open Error", f"Could not open PDF file:\n{e}")
+
+    def _apply_column_visibility(self):
+        settings = db.load_settings()
+        visible = settings.get("visible_columns")
+        if not visible or not isinstance(visible, list):
+            visible = [c[0] for c in TV_COLS]
+        
+        valid_cols = [c[0] for c in TV_COLS]
+        visible = [col for col in visible if col in valid_cols]
+        if not visible:
+            visible = valid_cols
+            
+        self.tv.configure(displaycolumns=visible)
+
+    def _show_column_selector(self):
+        win = tk.Toplevel(self)
+        win.title("Select Columns")
+        win.geometry("380x500")
+        win.resizable(False, False)
+        win.configure(bg=BG)
+        win.transient(self)
+        win.grab_set()
+        
+        win.geometry(f"+{self.winfo_x() + 100}+{self.winfo_y() + 100}")
+
+        tk.Label(win, text="Select Columns to Display", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+        
+        list_frame = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
+        list_frame.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        canvas = tk.Canvas(list_frame, bg=PANEL, highlightthickness=0)
+        vsb = ttk.Scrollbar(list_frame, orient="vertical", command=canvas.yview)
+        scroll_content = tk.Frame(canvas, bg=PANEL)
+        
+        scroll_content.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        canvas.create_window((0, 0), window=scroll_content, anchor="nw")
+        canvas.configure(yscrollcommand=vsb.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        
+        settings = db.load_settings()
+        visible = settings.get("visible_columns")
+        if not visible or not isinstance(visible, list):
+            visible = [c[0] for c in TV_COLS]
+        
+        checkbox_vars = {}
+        for col_id, col_name, _ in TV_COLS:
+            var = tk.BooleanVar(value=(col_id in visible))
+            checkbox_vars[col_id] = var
+            
+            cb = tk.Checkbutton(
+                scroll_content, text=col_name, variable=var,
+                bg=PANEL, fg=TEXT, selectcolor=BG,
+                activebackground=PANEL, activeforeground=TEXT,
+                font=FL, relief="flat", anchor="w"
+            )
+            cb.pack(fill="x", padx=10, pady=3, anchor="w")
+
+        def save_columns():
+            new_visible = [col_id for col_id, var in checkbox_vars.items() if var.get()]
+            if not new_visible:
+                new_visible = ["bid_no"]
+                checkbox_vars["bid_no"].set(True)
+                messagebox.showwarning("Selection Warning", "At least one column must be visible.", parent=win)
+                return
+                
+            db.save_setting("visible_columns", new_visible)
+            
+            self._apply_column_visibility()
+            win.destroy()
+            
+        btn_frame = tk.Frame(win, bg=BG)
+        btn_frame.pack(fill="x", pady=15)
+        
+        self._btn(btn_frame, "  Apply  ", save_columns, bg=ACCENT2).pack(side="left", padx=(40, 10), expand=True, fill="x")
+        self._btn(btn_frame, "  Cancel  ", win.destroy, bg=CARD).pack(side="right", padx=(10, 40), expand=True, fill="x")

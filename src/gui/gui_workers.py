@@ -2,6 +2,7 @@ import os
 import re
 import threading
 import time
+import asyncio
 from datetime import datetime
 import tkinter as tk
 from tkinter import ttk, messagebox, filedialog
@@ -59,14 +60,26 @@ def _format_eta(seconds):
 
 
 class WorkersMixin:
-    def _do_parse(self):
+    def _do_parse(self, force_llm=None):
         raw = self.paste_txt.get("1.0","end").strip()
         if not raw: self._log("warn","Paste area is empty."); return
         
         # Pre-warm local LLM if enabled before starting the background parse worker
         settings = db.load_settings()
         provider = settings.get("llm_provider", "Disabled")
-        use_llm_parsing = settings.get("llm_use_parsing", False)
+        if force_llm is not None:
+            use_llm_parsing = force_llm
+        else:
+            use_llm_parsing = settings.get("llm_use_parsing", False)
+
+        if force_llm and provider == "Disabled":
+            messagebox.showwarning(
+                "LLM Provider Disabled",
+                "LLM provider is currently disabled. Please enable and configure an LLM provider in Settings first.",
+                parent=self
+            )
+            return
+
         if provider == "Local LLM (LM Studio / Ollama)" and use_llm_parsing:
             api_key = settings.get("llm_api_key", "")
             base_url = settings.get("llm_base_url", "")
@@ -96,7 +109,13 @@ class WorkersMixin:
             try:
                 settings = db.load_settings()
                 provider = settings.get("llm_provider", "Disabled")
-                use_llm_parsing = settings.get("llm_use_parsing", False)
+                if force_llm is not None:
+                    use_llm_parsing = force_llm
+                else:
+                    use_llm_parsing = settings.get("llm_use_parsing", False)
+                api_key = settings.get("llm_api_key", "")
+                base_url = settings.get("llm_base_url", "")
+                model = settings.get("llm_model", "")
 
                 # Step 1: Split raw text into initial blocks.
                 initial_blocks = split_blocks(raw)
@@ -151,7 +170,15 @@ class WorkersMixin:
                                     if t:
                                         pdf_text += t + "\n"
                                 md_text = convert_pdf_text_to_markdown(pdf_text)
-                                rec = parse_one(md_text)
+                                if provider != "Disabled" and use_llm_parsing:
+                                    self.after(0, lambda: self._log("info", f"[{i}/{total}] Parsing PDF using LLM..."))
+                                    try:
+                                        rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                                    except Exception as ex:
+                                        self.after(0, lambda: self._log("err", f"LLM parsing failed for PDF, falling back to regex: {ex}"))
+                                        rec = parse_one(md_text)
+                                else:
+                                    rec = parse_one(md_text)
                                 if rec.get("bid_no"):
                                     rec["pdf_path"] = os.path.abspath(blk)
                                     self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
@@ -165,8 +192,30 @@ class WorkersMixin:
                             self.after(0, lambda: self._log("warn", f"SKIP — PDF file does not exist on disk: {blk}"))
                             return None
                     
-                    # Parse block as text first
-                    rec = parse_one(blk)
+                    # Parse block
+                    rec = None
+                    if provider != "Disabled" and use_llm_parsing:
+                        self.after(0, lambda: self._log("info", f"[{i}/{total}] Parsing text block using LLM..."))
+                        try:
+                            rec = _llm_module.llm_parse_tender(blk, provider, api_key, base_url, model)
+                        except Exception as ex:
+                            self.after(0, lambda err=ex: self._log("err", f"LLM parsing failed: {err}. Falling back to Regex."))
+                            rec = parse_one(blk)
+                    else:
+                        rec = parse_one(blk)
+                        # Fallback to LLM if regex fails to find a valid bid number
+                        bid_no = rec.get("bid_no")
+                        has_bid = bid_no and re.match(r"^GEM/\d{4}/[A-Z0-9]+/[\dXx]+$", bid_no, re.I)
+                        if not has_bid and provider != "Disabled":
+                            self.after(0, lambda: self._log("info", f"[{i}/{total}] Regex failed to find a valid Bid Number. Invoking LLM fallback parser..."))
+                            try:
+                                llm_rec = _llm_module.llm_parse_tender(blk, provider, api_key, base_url, model)
+                                if llm_rec and llm_rec.get("bid_no"):
+                                    rec = llm_rec
+                                    self.after(0, lambda b=rec['bid_no']: self._log("ok", f"LLM fallback successfully parsed {b}"))
+                            except Exception as ex:
+                                self.after(0, lambda err=ex: self._log("err", f"LLM fallback parser failed: {err}"))
+
                     bid_no = rec.get("bid_no")
                     bid_url = rec.get("bid_url")
                     
@@ -238,7 +287,15 @@ class WorkersMixin:
                                         if t:
                                             pdf_text += t + "\n"
                                     md_text = convert_pdf_text_to_markdown(pdf_text)
-                                    pdf_rec = parse_one(md_text)
+                                    if provider != "Disabled" and use_llm_parsing:
+                                        self.after(0, lambda: self._log("info", f"Parsing downloaded PDF using LLM..."))
+                                        try:
+                                            pdf_rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                                        except Exception as ex:
+                                            self.after(0, lambda: self._log("err", f"LLM parsing failed for downloaded PDF, falling back to regex: {ex}"))
+                                            pdf_rec = parse_one(md_text)
+                                    else:
+                                        pdf_rec = parse_one(md_text)
                                     if bid_url and "bid_url" not in pdf_rec:
                                         pdf_rec["bid_url"] = bid_url
                                     pdf_rec["pdf_path"] = os.path.abspath(dest_path)
@@ -266,7 +323,6 @@ class WorkersMixin:
                             res_rec = fut.result(timeout=timeout)
                             if res_rec:
                                 recs.append(res_rec)
-                                self.after(0, lambda r=res_rec: self._add_single_row_immediate(r, stats))
                         except TimeoutError:
                             label = os.path.basename(blk) if blk.lower().endswith(".pdf") else blk[:40]
                             self.after(0, lambda fn=label, t=timeout, i=idx: self._log("err", f"[{i}/{total}] Timed out after {int(t)}s (skipped): {fn}"))
@@ -283,7 +339,43 @@ class WorkersMixin:
                         eta_str = _format_eta(rem_sec)
                         
                         self.after(0, lambda p=prog_val, c=completed_count, eta=eta_str: self._set_prog(p, f"Processed {c}/{total} ({eta})…"))
-                        
+
+                # Step 2: Run AI Reasoning & Classification on the structured + unstructured data
+                if recs and provider != "Disabled":
+                    self.after(0, lambda: self._log("info", f"Running AI Reasoning & Classification on {len(recs)} parsed tender(s) using local LLM..."))
+                    try:
+                        from llm_client import LMStudioClient
+                        client = LMStudioClient()
+                        old_loop = None
+                        try:
+                            old_loop = asyncio.get_running_loop()
+                        except RuntimeError:
+                            pass
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        try:
+                            # Batch process with the async client (caching matches automatically)
+                            classified_results = loop.run_until_complete(client.classify_bids_batch(recs))
+                            classified_by_bid = {res.bid_no: res for res in classified_results if res}
+                            for r in recs:
+                                bid_no = r.get("bid_no")
+                                if bid_no in classified_by_bid:
+                                    res = classified_by_bid[bid_no]
+                                    r["is_want_derived"] = 1 if res.recommended else 0
+                                    r["remarks"] = f"AI Classification: {res.category} / {res.subcategory}\nRelevance Score: {res.confidence}\nSummary: {res.summary}"
+                        finally:
+                            loop.run_until_complete(client.close())
+                            loop.close()
+                            if old_loop:
+                                asyncio.set_event_loop(old_loop)
+                    except Exception as llm_err:
+                        self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
+
+                # Step 3: Add to UI table view
+                for r in recs:
+                    self.after(0, lambda r_item=r: self._add_single_row_immediate(r_item, stats))
+
+                # Step 4: Save final structured data to SQLite database
                 if recs:
                     try:
                         db.upsert_tenders(recs)
@@ -372,11 +464,16 @@ class WorkersMixin:
         updated_count = stats.get("updated", 0)
         skipped = total - (added_count + updated_count)
         
+        elapsed = time.monotonic() - start_time
+        avg_time = elapsed / total if total > 0 else 0
+        avg_str = f"{avg_time:.2f}s" if avg_time >= 1.0 else f"{avg_time * 1000:.0f}ms"
+        
         msg = f"Parsed {total} block(s): {added_count} added"
         if updated_count:
             msg += f", {updated_count} updated"
         if skipped > 0:
             msg += f", {skipped} skipped"
+        msg += f" (Avg: {avg_str}/block)"
             
         self._log("info", msg)
         self._set_status(msg, SUCCESS if (added_count or updated_count) else WARN)
@@ -518,6 +615,52 @@ class WorkersMixin:
                     
                     self.after(0, lambda p=prog_val, c=completed_count, eta=eta_str: self._set_prog(p, f"Fetched {c}/{total} ({eta})…"))
                     
+            # Run AI Reasoning & Classification on the fetched structured + unstructured data
+            fetched_recs = [rec for idx, rec in targets if rec.get("is_fetched")]
+            settings = db.load_settings()
+            provider = settings.get("llm_provider", "Disabled")
+            if fetched_recs and provider != "Disabled":
+                self.after(0, lambda: self._log("info", f"Running AI Reasoning & Classification on {len(fetched_recs)} fetched tender(s) using local LLM..."))
+                try:
+                    from llm_client import LMStudioClient
+                    client = LMStudioClient()
+                    old_loop = None
+                    try:
+                        old_loop = asyncio.get_running_loop()
+                    except RuntimeError:
+                        pass
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        # Batch process with the async client
+                        classified_results = loop.run_until_complete(client.classify_bids_batch(fetched_recs))
+                        classified_by_bid = {res.bid_no: res for res in classified_results if res}
+                        for r in fetched_recs:
+                            bid_no = r.get("bid_no")
+                            if bid_no in classified_by_bid:
+                                res = classified_by_bid[bid_no]
+                                r["is_want_derived"] = 1 if res.recommended else 0
+                                r["remarks"] = f"AI Classification: {res.category} / {res.subcategory}\nRelevance Score: {res.confidence}\nSummary: {res.summary}"
+                                
+                                # Update UI and Database with final LLM result
+                                iid = iid_map.get(bid_no)
+                                def update_llm_fields(i=iid, rec_item=r):
+                                    if i:
+                                        self.tv.set(i, "remarks", rec_item["remarks"])
+                                        # Force a cell tag update in treeview if status changed
+                                        is_want = rec_item.get("is_want_derived", 0)
+                                        # Use standard wants keywords checks to derive tag style or custom AI tag
+                                        # but keep fetched tag as base or alternative
+                                    db.upsert_tender(rec_item)
+                                self.after(0, update_llm_fields)
+                    finally:
+                        loop.run_until_complete(client.close())
+                        loop.close()
+                        if old_loop:
+                            asyncio.set_event_loop(old_loop)
+                except Exception as llm_err:
+                    self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
+
             self._fetch_running = False
             self.after(0, lambda: self._set_prog(100, "Fetch complete."))
             msg = f"Selenium fetch done: {total} URL(s) processed"

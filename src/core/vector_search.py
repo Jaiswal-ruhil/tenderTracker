@@ -123,8 +123,9 @@ def semantic_search(query_text, limit=20):
         # Load active LLM settings to call embedding API
         settings = db.load_settings()
         provider = settings.get("llm_provider", "Disabled")
-        if provider == "Disabled":
-            logger.log("warn", "Semantic Search: LLM provider is disabled. Cannot get query embedding.")
+        embed_model = settings.get("llm_embedding_model", "nomic-embed-text")
+        if provider == "Disabled" or embed_model == "Disabled":
+            logger.log("warn", "Semantic Search: LLM provider or embedding is disabled. Cannot get query embedding.")
             return []
             
         api_key = settings.get("llm_api_key", "")
@@ -177,7 +178,8 @@ def start_background_embedding_worker(callback_fn=None):
             # 2. Check if LLM is enabled
             settings = db.load_settings()
             provider = settings.get("llm_provider", "Disabled")
-            if provider == "Disabled":
+            embed_model = settings.get("llm_embedding_model", "nomic-embed-text")
+            if provider == "Disabled" or embed_model == "Disabled":
                 return
                 
             api_key = settings.get("llm_api_key", "")
@@ -215,8 +217,20 @@ def start_background_embedding_worker(callback_fn=None):
                         if i % 25 == 0 or i == len(missing):
                             logger.log("info", f"Background Embedder: {i}/{len(missing)} processed ({updated_count} cached).")
                 except Exception as ex:
-                    consecutive_failures += 1
+                    err_msg = str(ex)
                     logger.log("warn", f"Background Embedder: Failed to embed tender {bid_no}: {ex}")
+                    
+                    # Suspend immediately on server config/endpoint/missing model errors to prevent log spam
+                    suspend_keywords = [
+                        "unexpected endpoint", "httperror 404", "httperror 405", 
+                        "no models loaded", "model is known to be unavailable",
+                        "known to be unavailable", "disabled"
+                    ]
+                    if any(kw in err_msg.lower() for kw in suspend_keywords):
+                        logger.log("warn", "Background Embedder: Local server configuration/endpoint error. Suspending background embedder immediately to prevent server spam.")
+                        break
+                        
+                    consecutive_failures += 1
                     # Sleep briefly to avoid hammering the API if it's failing
                     import time
                     time.sleep(2)

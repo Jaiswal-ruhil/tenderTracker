@@ -149,12 +149,14 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         # buttons
         btn_row = tk.Frame(left, bg=BG)
         btn_row.pack(fill="x", pady=(4,8))
-        self._btn(btn_row, "  1. Parse Blocks  ", self._do_parse,
-                  bg=ACCENT2, pad=10).pack(side="left")
-        self._btn(btn_row, "  2. Fetch Details (Selenium)  ",
-                  self._do_fetch_all, bg=ACCENT, pad=10).pack(side="left", padx=6)
+        self._btn(btn_row, "  1a. Parse (Python)  ", lambda: self._do_parse(force_llm=False),
+                  bg=ACCENT2, pad=6).pack(side="left")
+        self._btn(btn_row, "  1b. Parse (LLM)  ", lambda: self._do_parse(force_llm=True),
+                  bg=ACCENT, pad=6).pack(side="left", padx=6)
+        self._btn(btn_row, "  2. Fetch (Selenium)  ",
+                  self._do_fetch_all, bg=CARD, pad=6).pack(side="left")
         self._btn(btn_row, "Clear", lambda: self.paste_txt.delete("1.0","end"),
-                  bg=CARD).pack(side="left")
+                  bg=CARD).pack(side="left", padx=6)
 
 
 

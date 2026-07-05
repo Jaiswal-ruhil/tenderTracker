@@ -163,6 +163,12 @@ def parse_one(text):
         if bid_no_match:
             r["bid_no"] = bid_no_match.group(1).strip()
 
+    # Fallback: scan for any GeM bid number pattern anywhere in the block if not found
+    if "bid_no" not in r:
+        bid_no_match = re.search(r"(GEM/\d{4}/[A-Z0-9]+/[\dXx]+)", text, re.I)
+        if bid_no_match:
+            r["bid_no"] = bid_no_match.group(1).strip().upper()
+
     # Try to find a URL in the text if it wasn't matched above,
     # or construct it from the bid number ID.
     if "bid_no" in r and "bid_url" not in r:
@@ -173,15 +179,26 @@ def parse_one(text):
             id_match = re.search(r"([\dXx]+)$", r["bid_no"])
             if id_match:
                 r["bid_url"] = f"https://bidplus.gem.gov.in/showbidDocument/{id_match.group(1)}"
-    m=re.search(r"Items?\s*:\s*(.+)", text, re.I)
+
+    m=re.search(r"Items?\s*(?:Description)?\s*:\s*(.+)", text, re.I)
     if m: r["items"]=m.group(1).strip()
     m=re.search(r"Quantit[yi]\w*\s*:\s*(\S+)", text, re.I)
     if m: r["quantity"]=m.group(1).strip()
-    m=re.search(r"Department\s*(?:Name\s*(?:And\s*Address)?)?\s*:\s*\n(.*?)(?=\n[A-Z]|\Z)", text, re.I|re.DOTALL)
+
+    # Department parsing (handles both single-line and multi-line values)
+    m = re.search(r"Department\s*(?:Name\s*(?:And\s*Address)?)?\s*:\s*(.+)", text, re.I)
     if m:
-        for ln in m.group(1).splitlines():
-            ln=ln.strip()
-            if ln: r["dept"]=ln; break
+        val = m.group(1).strip()
+        if not val:
+            m_multi = re.search(r"Department\s*(?:Name\s*(?:And\s*Address)?)?\s*:\s*\n(.*?)(?=\n[A-Z]|\Z)", text, re.I|re.DOTALL)
+            if m_multi:
+                val = m_multi.group(1).strip()
+        for ln in val.splitlines():
+            ln = ln.strip()
+            if ln:
+                r["dept"] = ln
+                break
+
     m=re.search(r"Start\s*Date\s*:\s*(.+)", text, re.I)
     if m: r["start_date"]=m.group(1).strip()
     m=re.search(r"End\s*Date\s*:\s*(.+)", text, re.I)
@@ -198,7 +215,7 @@ def parse_one(text):
     if m: r["office"] = m.group(1).strip()
     m = re.search(r"Category\s*:\s*(.+)", text, re.I)
     if m: r["category"] = m.group(1).strip()
-    m = re.search(r"Estimated\s*Value\s*(?:\(Rs\))?\s*:\s*(\S+)", text, re.I)
+    m = re.search(r"Estimated\s*(?:Bid)?\s*Value\s*(?:\(Rs\.?\))?\s*:\s*([0-9][0-9,\.]+)", text, re.I)
     if m: r["est_value"] = m.group(1).strip()
     m = re.search(r"Evaluation\s*Method\s*:\s*(.+)", text, re.I)
     if m: r["eval_method"] = m.group(1).strip()
@@ -206,25 +223,25 @@ def parse_one(text):
     if m: r["bid_type"] = m.group(1).strip()
     m = re.search(r"Bid\s*to\s*RA\s*:\s*(\S+)", text, re.I)
     if m: r["bid_to_ra"] = m.group(1).strip()
-    m = re.search(r"EMD\s*Required\s*:\s*(\S+)", text, re.I)
+    m = re.search(r"EMD\s*(?:Required)?\s*:\s*(\S+)", text, re.I)
     if m: r["emd"] = m.group(1).strip()
-    m = re.search(r"ePBG\s*Required\s*:\s*(\S+)", text, re.I)
+    m = re.search(r"ePBG\s*(?:Required)?\s*:\s*(\S+)", text, re.I)
     if m: r["epbg"] = m.group(1).strip()
-    m = re.search(r"MII\s*Compliance\s*:\s*(\S+)", text, re.I)
+    m = re.search(r"MII\s*(?:Compliance)?\s*:\s*(\S+)", text, re.I)
     if m: r["mii"] = m.group(1).strip()
-    m = re.search(r"MSE\s*Purchase\s*Preference\s*:\s*(\S+)", text, re.I)
+    m = re.search(r"MSE\s*(?:Purchase)?\s*(?:Preference)?\s*:\s*(\S+)", text, re.I)
     if m: r["mse_pref"] = m.group(1).strip()
     m = re.search(r"MSE\s*Relaxation\s*:\s*(\S+)", text, re.I)
     if m: r["mse_relax"] = m.group(1).strip()
     m = re.search(r"Startup\s*Relaxation\s*:\s*(\S+)", text, re.I)
     if m: r["startup_relax"] = m.group(1).strip()
-    m = re.search(r"Min\s*Turnover\s*(?:\(Lakhs\))?\s*:\s*(.+)", text, re.I)
+    m = re.search(r"(?:Minimum\s+Average\s+Annual\s+)?Turn\s*?over\s*(?:\(Lakhs\))?\s*:\s*(.+)", text, re.I)
     if m: r["min_turnover"] = m.group(1).strip()
-    m = re.search(r"Experience\s*Required\s*(?:\(Yrs\))?\s*:\s*(.+)", text, re.I)
+    m = re.search(r"(?:Years\s+of\s+)?(?:Past\s+)?Experience\s*(?:Required)?\s*(?:\(Yrs\))?\s*:\s*(.+)", text, re.I)
     if m: r["exp_years"] = m.group(1).strip()
-    m = re.search(r"Contract\s*Duration\s*:\s*(.+)", text, re.I)
+    m = re.search(r"Contract\s*(?:Duration|Period)\s*:\s*(.+)", text, re.I)
     if m: r["contract_dur"] = m.group(1).strip()
-    m = re.search(r"Location\s*:\s*(.+)", text, re.I)
+    m = re.search(r"(?:Consignee\s+Address|Delivery\s+Location|Location)\s*:\s*(.+)", text, re.I)
     if m: r["location"] = m.group(1).strip()
 
     if "category" in r:

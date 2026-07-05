@@ -94,7 +94,15 @@ def normalize_local_service_roots(base_url):
         candidates.append(f"{base_url}/api/v1")
         candidates.append(f"{base_url}/api")
 
-    return [c for c in dict.fromkeys(candidates) if c]
+    res = [c for c in dict.fromkeys(candidates) if c]
+    # Prioritize /api/v1 and /api roots over /v1 and raw base URL
+    res.sort(key=lambda x: (
+        0 if x.endswith("/api/v1") else
+        1 if x.endswith("/api") else
+        2 if x.endswith("/v1") else
+        3
+    ))
+    return res
 
 
 def extract_local_chat_content(res_json):
@@ -195,7 +203,9 @@ def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=Non
                 except Exception:
                     error_body = e.reason if hasattr(e, 'reason') else str(e)
                 last_error = ValueError(f"Local endpoint {url} HTTPError {e.code}: {error_body}")
-                if e.code == 500 and "model_load_failed" in error_body:
+                # Raise immediately for 400 (Bad Request) or 500 (Internal Server Error)
+                # to prevent retrying invalid endpoints and masking the real error.
+                if e.code in (400, 500):
                     raise last_error
                 continue
             except Exception as e:
@@ -325,7 +335,11 @@ def _auto_load_local_model_impl(base_url, model, api_key=None):
                     return [m.get("id") for m in models_json["data"] if m.get("id")]
                 # Handle LM Studio native /api/v1/models format
                 elif "models" in models_json and isinstance(models_json["models"], list):
-                    return [m.get("key") or m.get("id") for m in models_json["models"] if m.get("key") or m.get("id")]
+                    return [
+                        m.get("key") or m.get("id")
+                        for m in models_json["models"]
+                        if (m.get("key") or m.get("id")) and len(m.get("loaded_instances", [])) > 0
+                    ]
                 return None
         except Exception:
             return None
@@ -882,6 +896,8 @@ def llm_parse_tender(text, provider, api_key, base_url, model):
     """
     Asks the LLM to parse a tender document text block into a structured JSON.
     """
+    from parser import clean_raw_text
+    text = clean_raw_text(text)
     examples = get_similar_past_examples(text)
     prompt = f"""You are an expert Government of India GeM tender document parsing assistant.
 Extract fields from the following raw tender document text.
@@ -1061,7 +1077,13 @@ def get_embedding(text, provider, api_key, base_url, model):
     elif provider == "Local LLM (LM Studio / Ollama)":
         import db
         settings = db.load_settings()
-        embedding_model = settings.get("llm_embedding_model") or model
+        embedding_model = settings.get("llm_embedding_model")
+        if not embedding_model:
+            # Avoid falling back to chat/generation models (like google/gemma-4-12b-qat) which are not suitable for embeddings
+            if model and any(x in model.lower() for x in ["gemma", "llama", "qwen", "phi"]):
+                embedding_model = "nomic-embed-text"
+            else:
+                embedding_model = model or "nomic-embed-text"
         return _local_embed_request(text, base_url, embedding_model, api_key, timeout=60)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")

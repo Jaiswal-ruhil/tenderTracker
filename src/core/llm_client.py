@@ -108,18 +108,18 @@ class LMStudioClient:
             "}"
         )
 
-        # 4. Request payload with retry logic (3 attempts with exponential backoff)
+        # 4. Request payload with structured JSON schema
         url = f"{self.base_url}/chat/completions"
-        payload = {
-            "model": self.model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.0,
-            "response_format": {"type": "json_object"}
+        
+        # Prefer structured JSON schema output for speed and grammar-based sampling constraints
+        response_format = {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "ClassificationResult",
+                "schema": ClassificationResult.model_json_schema()
+            }
         }
-
+        
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}"
@@ -130,6 +130,15 @@ class LMStudioClient:
         last_error = None
 
         for attempt in range(retries):
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.0,
+                "response_format": response_format
+            }
             try:
                 response = await self.client.post(url, json=payload, headers=headers)
                 response.raise_for_status()
@@ -159,6 +168,14 @@ class LMStudioClient:
 
             except Exception as e:
                 last_error = e
+                # Fall back to standard json_object if structured outputs type is not supported by older servers
+                err_str = str(e)
+                if response_format.get("type") == "json_schema" and ("400" in err_str or "response_format" in err_str or "json_schema" in err_str):
+                    logger.log("info", "Inference server does not support type 'json_schema'. Falling back to 'json_object'...")
+                    response_format = {"type": "json_object"}
+                    # Re-run immediately without sleeping for this configuration fallback
+                    continue
+                
                 logger.log("warn", f"LLM client classification failed (Attempt {attempt + 1}/{retries}): {e}")
                 if attempt < retries - 1:
                     await asyncio.sleep(backoff)
