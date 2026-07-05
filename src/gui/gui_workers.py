@@ -300,7 +300,11 @@ class WorkersMixin:
                                         pdf_rec["bid_url"] = bid_url
                                     pdf_rec["pdf_path"] = os.path.abspath(dest_path)
                                     msg = (
-                                        f"Parsed details from PDF for {pdf_rec.get('bid_no', 'N/A')}:\n"
+                                        f"--- Parsing Block ---\n"
+                                        f"Input File: {os.path.basename(dest_path)}\n"
+                                        f"----->\n"
+                                        f"Parsed Output:\n"
+                                        f"  - Bid No: {pdf_rec.get('bid_no', 'N/A')}\n"
                                         f"  - Items: {pdf_rec.get('items', 'N/A')}\n"
                                         f"  - Qty: {pdf_rec.get('quantity', 'N/A')}\n"
                                         f"  - Dept: {pdf_rec.get('dept', 'N/A')}\n"
@@ -320,7 +324,11 @@ class WorkersMixin:
                                 return rec
                     else:
                         msg = (
-                            f"Parsed details directly from text for {bid_no}:\n"
+                            f"--- Parsing Block ---\n"
+                            f"Input Block:\n{blk.strip()}\n"
+                            f"----->\n"
+                            f"Parsed Output:\n"
+                            f"  - Bid No: {rec.get('bid_no', 'N/A')}\n"
                             f"  - Items: {rec.get('items', 'N/A')}\n"
                             f"  - Qty: {rec.get('quantity', 'N/A')}\n"
                             f"  - Dept: {rec.get('dept', 'N/A')}\n"
