@@ -385,8 +385,11 @@ class WorkersMixin:
                         self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
 
                 # Step 3: Add to UI table view
-                for r in recs:
-                    self.after(0, lambda r_item=r: self._add_single_row_immediate(r_item, stats))
+                if hasattr(self, "tv") and hasattr(self, "_add_rows_batch"):
+                    self.after(0, lambda: self._add_rows_batch(recs, stats))
+                else:
+                    for r in recs:
+                        self.after(0, lambda r_item=r: self._add_single_row_immediate(r_item, stats))
 
                 # Step 4: Save final structured data to SQLite database
                 if recs:
@@ -398,6 +401,119 @@ class WorkersMixin:
             finally:
                 resume_background_embedder()
         threading.Thread(target=worker, daemon=True).start()
+
+    def _add_rows_batch(self, recs, stats):
+        if not recs:
+            return
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+
+        children = self.tv.get_children()
+        
+        # Build mappings for O(1) row identification in treeview
+        bid_to_iid = {}
+        items_to_iid = {}
+        for iid in children:
+            b_no = self.tv.set(iid, "bid_no")
+            if b_no:
+                bid_to_iid[b_no] = iid
+            else:
+                items_val = self.tv.set(iid, "items")
+                if items_val:
+                    items_to_iid[items_val] = iid
+
+        # Build fast lookup dictionary for existing records in memory
+        bid_to_rec = {}
+        url_to_rec = {}
+        for r in self._records:
+            b_no = r.get("bid_no")
+            b_url = r.get("bid_url")
+            if b_no:
+                bid_to_rec[b_no] = r
+            if b_url:
+                url_to_rec[b_url] = r
+
+        new_wants_count = 0
+        last_want_rec = None
+
+        for rec in recs:
+            bid_no = rec.get("bid_no")
+            bid_url = rec.get("bid_url")
+            if not bid_no and not bid_url:
+                continue
+
+            existing_rec = None
+            existing_iid = None
+
+            # Find existing record in memory first
+            if bid_no and bid_no in bid_to_rec:
+                existing_rec = bid_to_rec[bid_no]
+            elif bid_url and bid_url in url_to_rec:
+                existing_rec = url_to_rec[bid_url]
+
+            # If the record exists, find its corresponding treeview item
+            if existing_rec:
+                target_bid_no = existing_rec.get("bid_no")
+                target_bid_url = existing_rec.get("bid_url")
+
+                if target_bid_no and target_bid_no in bid_to_iid:
+                    existing_iid = bid_to_iid[target_bid_no]
+                elif target_bid_url:
+                    # Fallback lookup: resolve items mapping
+                    for r_cand in self._records:
+                        if not r_cand.get("bid_no") and r_cand.get("bid_url") == target_bid_url:
+                            items_val = r_cand.get("items")
+                            if items_val in items_to_iid:
+                                existing_iid = items_to_iid[items_val]
+                                break
+
+            if existing_rec and existing_iid:
+                merged_fields = []
+                for k, v in rec.items():
+                    if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
+                        existing_rec[k] = v
+                        if k in TV_IDS:
+                            self.tv.set(existing_iid, k, v)
+                        merged_fields.append(k)
+                if merged_fields:
+                    stats["updated"] += 1
+                    self.tv.item(existing_iid, tags=("fetched",))
+                    self._log("ok", f"Updated {bid_no or bid_url} with {len(merged_fields)} new fields")
+            else:
+                is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+                rec["is_want_derived"] = is_want
+                self._records.append(rec)
+                
+                # Update lookup index mapping
+                if bid_no:
+                    bid_to_rec[bid_no] = rec
+                if bid_url:
+                    url_to_rec[bid_url] = rec
+
+                self._tv_insert(rec)
+                stats["added"] += 1
+
+                if is_want:
+                    new_wants_count += 1
+                    last_want_rec = rec
+                    self._log("ok", f"Added {bid_no or bid_url} to database (matches Wants)")
+                else:
+                    self._log("info", f"Added {bid_no or bid_url} to database (Don't Want / Filtered)")
+
+        if new_wants_count > 0:
+            if new_wants_count == 1 and last_want_rec:
+                self._show_toast("New Want Tender Match!", f"{last_want_rec.get('bid_no') or 'GEM Bid'}: {last_want_rec.get('items', '')[:35]}...", "ok")
+            else:
+                self._show_toast("New Want Tenders Match!", f"Found {new_wants_count} new tenders matching your Wants list!", "ok")
+
+        # Refresh Kanban board exactly ONCE at the end
+        try:
+            self._update_kanban()
+        except Exception:
+            pass
 
     def _add_single_row_immediate(self, rec, stats):
         bid_no = rec.get("bid_no")
