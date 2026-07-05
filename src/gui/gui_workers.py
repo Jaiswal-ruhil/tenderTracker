@@ -352,7 +352,7 @@ class WorkersMixin:
                         self.after(0, lambda p=prog_val, c=completed_count, eta=eta_str: self._set_prog(p, f"Processed {c}/{total} ({eta})…"))
 
                 # Step 2: Run AI Reasoning & Classification on the structured + unstructured data
-                if recs and provider != "Disabled":
+                if recs and provider != "Disabled" and use_llm_parsing:
                     self.after(0, lambda: self._log("info", f"Running AI Reasoning & Classification on {len(recs)} parsed tender(s) using local LLM..."))
                     try:
                         from llm_client import LMStudioClient
@@ -632,7 +632,7 @@ class WorkersMixin:
             fetched_recs = [rec for idx, rec in targets if rec.get("is_fetched")]
             settings = db.load_settings()
             provider = settings.get("llm_provider", "Disabled")
-            if fetched_recs and provider != "Disabled":
+            if fetched_recs and provider != "Disabled" and settings.get("llm_use_parsing", False):
                 self.after(0, lambda: self._log("info", f"Running AI Reasoning & Classification on {len(fetched_recs)} fetched tender(s) using local LLM..."))
                 try:
                     from llm_client import LMStudioClient
