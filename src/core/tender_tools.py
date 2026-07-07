@@ -59,24 +59,25 @@ def extract_department_info(pdf_text: str) -> dict:
     Extract ministry, department, organisation, and office names.
     """
     r = {}
-    m = re.search(r"Ministry[/\w\s]*?Name\s*[:\n]\s*(.+)", pdf_text, re.I)
+    m = re.search(r"Ministry[/\w\s]*?(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
     if m: r["ministry"] = m.group(1).strip()
 
-    m = re.search(r"Department\s*Name\s*[:\n]\s*([\s\S]*?)(?=\n(?:Organisation|Office|Bid|संगठन|\Z))", pdf_text, re.I)
+    m = re.search(r"Department\s*(?:Name)?\s*(?:And\s*Address)?\s*[:\n]\s*([\s\S]*?)(?=\n(?:Organisation|Office|Bid|संगठन|\Z))", pdf_text, re.I)
     if m:
         dept_lines = [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
         if dept_lines: r["dept"] = dept_lines[0]
     if not r.get("dept"):
-        m = re.search(r"Department\s*Name\s*[:\n]\s*(.+)", pdf_text, re.I)
+        m = re.search(r"Department\s*(?:Name)?\s*(?:And\s*Address)?\s*[:\n]\s*(.+)", pdf_text, re.I)
         if m: r["dept"] = m.group(1).strip()
 
-    m = re.search(r"Organisation\s*Name\s*[:\n]\s*(.+)", pdf_text, re.I)
+    m = re.search(r"Organisation\s*(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
     if m: r["organisation"] = m.group(1).strip()
 
-    m = re.search(r"Office\s*Name\s*[:\n]\s*(.+)", pdf_text, re.I)
+    m = re.search(r"Office\s*(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
     if m: r["office"] = m.group(1).strip()
 
     return r
+
 
 
 def extract_eligibility_criteria(pdf_text: str) -> dict:
@@ -86,11 +87,12 @@ def extract_eligibility_criteria(pdf_text: str) -> dict:
     """
     r = {}
 
-    m = re.search(r"Minimum\s*Average\s*Annual\s*Turnover(?:[^\n]*\n){0,3}?[^\n]*?(\d[\d\.]*\s*(?:Lakhs?|Crores?|L|Cr)?)", pdf_text, re.I)
+    m = re.search(r"(?:Minimum\s*Average\s*Annual\s*)?Turnover(?:[^\n]*\n){0,3}?[^\n]*?(\d[\d\.]*\s*(?:Lakhs?|Crores?|L|Cr)?)", pdf_text, re.I)
     if m: r["min_turnover"] = m.group(1).strip()
 
-    m = re.search(r"Years\s*of\s*Past\s*Experience(?:[^\n]*\n){0,3}?[^\n]*?(\d[\d\.]*\s*(?:Years?|Yrs?)?)", pdf_text, re.I)
+    m = re.search(r"(?:Years\s*of\s*Past\s*)?Experience\s*(?:Required)?(?:[^\n]*\n){0,3}?[^\n]*?(\d[\d\.]*\s*(?:Years?|Yrs?)?)", pdf_text, re.I)
     if m: r["exp_years"] = m.group(1).strip()
+
 
     for field, pattern in [
         ("mii",         r"MII\s*Compliance(?:[^\n]*\n){0,3}?[^\n]*?(Yes|No)"),
@@ -136,7 +138,9 @@ def extract_financial_security(pdf_text: str) -> dict:
         else:
             r["emd"] = "No"
     else:
-        r["emd"] = "No"
+        # Fallback to direct inline check
+        m = re.search(r"EMD\s*(?:Required)?\s*[:\n]\s*(Yes|No)", pdf_text, re.I)
+        r["emd"] = m.group(1).strip() if m else "No"
 
     # ePBG
     if epbg_block:
@@ -150,7 +154,13 @@ def extract_financial_security(pdf_text: str) -> dict:
     else:
         r["epbg"] = "No"
 
+    if r.get("epbg") == "No" or not r.get("epbg"):
+        # Fallback to direct inline check
+        m = re.search(r"ePBG\s*(?:Required)?\s*[:\n]\s*(Yes|No)", pdf_text, re.I)
+        if m: r["epbg"] = m.group(1).strip()
+
     return r
+
 
 
 def extract_item_details(pdf_text: str) -> dict:
@@ -161,7 +171,7 @@ def extract_item_details(pdf_text: str) -> dict:
     r = {}
 
     # Item category (multi-line aware)
-    pos = re.search(r"Item\s*Category\s*[:\n]\s*", pdf_text, re.I)
+    pos = re.search(r"(?:Item\s*)?Category\s*[:\n]\s*", pdf_text, re.I)
     if pos:
         sub = pdf_text[pos.end(): pos.end() + 500]
         stop_kws = ["ministry", "department", "organisation", "office", "dated",
@@ -182,6 +192,20 @@ def extract_item_details(pdf_text: str) -> dict:
             else:
                 r["category"] = item_cat
                 r["items"] = item_cat
+
+    # Explicit items/item details search fallback
+    m_items = re.search(r"\bItems?\s*[:\n]\s*(.+)", pdf_text, re.I)
+    if m_items:
+        items_val = m_items.group(1).strip()
+        # Drop trailing fields if it grabbed the next header
+        stop_pos = re.search(r"\b(?:Category|Ministry|Department|Organisation|Office|Start Date)\b", items_val, re.I)
+        if stop_pos:
+            items_val = items_val[:stop_pos.start()].strip().rstrip(",")
+        if items_val:
+            r["items"] = items_val
+            if "category" not in r:
+                r["category"] = items_val
+
 
     # Quantity
     m = re.search(r"Total\s*Quantity\s*[:\n]\s*(\d+)", pdf_text, re.I)

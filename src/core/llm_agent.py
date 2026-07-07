@@ -34,6 +34,8 @@ SYSTEM_PROMPT = """You are a Government of India GeM (Government e-Marketplace) 
 
 You have access to specialized Python extraction tools. Use them systematically to extract all fields from the provided tender PDF text.
 
+CRITICAL PERFORMANCE REQUIREMENT: Keep your internal thinking/reasoning blocks (<think>...</think>) extremely concise (less than 1-2 sentences). Do NOT write long explanations or think aloud. Decide which tool to call and output the tool call immediately to minimize latency.
+
 Recommended tool call sequence:
 1. extract_bid_metadata        → bid_no, dates, est_value
 2. extract_department_info     → ministry, dept, organisation, office
@@ -75,6 +77,7 @@ After calling the tools and collecting results, return a FINAL JSON object with 
 }
 
 Return ONLY valid JSON in your final message. Do not add explanations."""
+
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +139,8 @@ def run_tender_agent(
         }
 
         try:
-            response_text = _post_json(chat_url, payload, headers, timeout=120)
+            response_text = _post_json(chat_url, payload, headers, timeout=600)
+
         except Exception as e:
             logger.log("warn", f"[Agent] LM Studio request failed at iteration {iteration}: {e}")
             break

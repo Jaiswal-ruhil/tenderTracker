@@ -562,11 +562,10 @@ def _build_local_chat_body(style, model_name, prompt, response_json=False, max_t
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.1,
         }
-        if response_json:
-            body["response_format"] = {"type": "json_object"}
         if max_tokens:
             body["max_tokens"] = max_tokens
     return body
+
 
 
 def _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=600, max_tokens=None):
