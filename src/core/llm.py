@@ -529,7 +529,7 @@ def _auto_load_local_model_impl(base_url, model, api_key=None):
     raise error
 
 
-def _build_local_chat_body(style, model_name, prompt, response_json=False):
+def _build_local_chat_body(style, model_name, prompt, response_json=False, max_tokens=None):
     if style == "native":
         body = {
             "model": model_name,
@@ -537,6 +537,8 @@ def _build_local_chat_body(style, model_name, prompt, response_json=False):
             "temperature": 0.1,
             "store": False,
         }
+        if max_tokens:
+            body["max_tokens"] = max_tokens
     else:
         body = {
             "model": model_name,
@@ -545,10 +547,12 @@ def _build_local_chat_body(style, model_name, prompt, response_json=False):
         }
         if response_json:
             body["response_format"] = {"type": "json_object"}
+        if max_tokens:
+            body["max_tokens"] = max_tokens
     return body
 
 
-def _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=600):
+def _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=600, max_tokens=None):
     """Internal local chat call with endpoint route caching."""
     base_url_key = normalize_local_service_key(base_url)
     if base_url_key in _failed_local_service_urls:
@@ -562,7 +566,7 @@ def _local_chat_request(prompt, base_url, model, api_key, response_json=False, t
     model_name = model.strip() if model else "local-model"
     cached = _chat_route_cache.get(base_url_key)
     if cached:
-        body = _build_local_chat_body(cached["style"], model_name, prompt, response_json)
+        body = _build_local_chat_body(cached["style"], model_name, prompt, response_json, max_tokens)
         try:
             response_text, used_url = try_local_endpoint(
                 base_url, cached["resources"], api_key, method="POST", body=body, timeout=timeout
@@ -584,7 +588,8 @@ def _local_chat_request(prompt, base_url, model, api_key, response_json=False, t
     ]
     last_error = None
     for resources, style in chat_attempts:
-        body = _build_local_chat_body(style, model_name, prompt, response_json)
+        body = _build_local_chat_body(style, model_name, prompt, response_json, max_tokens)
+
         try:
             response_text, used_url = try_local_endpoint(
                 base_url, resources, api_key, method="POST", body=body, timeout=timeout
@@ -711,6 +716,7 @@ def prepare_local_llm(base_url, model, api_key=None):
             api_key,
             response_json=False,
             timeout=120,
+            max_tokens=5,
         )
         if "ok" in response.strip().lower():
             return True, "Local LLM ready."
@@ -754,7 +760,12 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         )
     
     elif provider == "Local LLM (LM Studio / Ollama)":
-        return _local_chat_request(prompt, base_url, model, api_key, response_json, timeout=600)
+        p_lower = prompt.lower()
+        if "category" in p_lower or "keyword" in p_lower:
+            max_toks = 128
+        else:
+            max_toks = 1024
+        return _local_chat_request(prompt, base_url, model, api_key, response_json, timeout=600, max_tokens=max_toks)
     else:
         raise ValueError(f"Unknown LLM provider: {provider}")
 
