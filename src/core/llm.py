@@ -122,22 +122,39 @@ def extract_local_chat_content(res_json):
     if not isinstance(res_json, dict):
         return None
     try:
-        return res_json["choices"][0]["message"]["content"]
+        msg = res_json["choices"][0]["message"]
+        content = msg.get("content")
+        if content:
+            return content
+        # Fallback to thinking/reasoning content if content is empty
+        thinking = msg.get("reasoning_content") or msg.get("thinking")
+        if thinking:
+            return thinking
     except (KeyError, IndexError, TypeError):
         pass
+    
     output = res_json.get("output")
     if isinstance(output, list):
         parts = []
+        reasoning_parts = []
         for item in output:
-            if isinstance(item, dict) and item.get("type") == "message":
-                content = item.get("content")
-                if content:
-                    parts.append(str(content))
+            if isinstance(item, dict):
+                itype = item.get("type")
+                icontent = item.get("content")
+                if icontent:
+                    if itype == "message":
+                        parts.append(str(icontent))
+                    elif itype == "reasoning":
+                        reasoning_parts.append(str(icontent))
         if parts:
             return "\n".join(parts)
+        if reasoning_parts:
+            return "\n".join(reasoning_parts)
+            
     if res_json.get("message"):
         return str(res_json["message"])
     return None
+
 
 
 def try_local_endpoint(base_url, resources, api_key=None, method="GET", body=None, timeout=10):
