@@ -168,10 +168,16 @@ def run_tender_agent(
                 except Exception:
                     tc_args = {}
 
-                logger.log("info", f"[Agent] Calling tool: {tc_name}({list(tc_args.keys())})")
+                logger.log("info", f"[Agent] 🔧 LLM requested tool: {tc_name}")
+                logger.log("info", f"[Agent]    Arguments: {json.dumps(tc_args, ensure_ascii=False)}")
                 result_str = execute_tool(tc_name, tc_args)
-                logger.log("info", f"[Agent] Tool result preview: {result_str[:200]}")
-
+                
+                # Format a cleaner result preview (truncate if too long)
+                preview = result_str
+                if len(preview) > 300:
+                    preview = preview[:297] + "..."
+                logger.log("ok", f"[Agent]    Tool result: {preview}")
+                
                 messages.append({
                     "role": "tool",
                     "tool_call_id": tc_id,
