@@ -496,6 +496,9 @@ class TableTabMixin:
         self.detail_txt.tag_configure("match_inc", background="#1A4A2A", foreground=SUCCESS, font=("Segoe UI", 9, "bold"))
         self.detail_txt.tag_configure("match_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
         self.detail_txt.tag_configure("match_search", background="#0A4D8C", foreground="#FFFFFF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_inc", background="#0A3C5C", foreground="#84D2FF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_loc", background="#2D1C4C", foreground="#C09EFF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
 
         # Initialize detail text state
         self._clear_detail_panel()
@@ -1519,6 +1522,40 @@ class TableTabMixin:
                 end = f"{pos} + {len(kw)}c"
                 self.detail_txt.tag_add("match_exc", pos, end)
                 start = end
+                
+        # Highlight firm-specific words
+        firms = settings.get("firms", [])
+        for firm in firms:
+            # 1. Categories
+            for kw in [k.strip() for k in firm.get("categories", "").split(",") if k.strip()]:
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_inc", pos, end)
+                    start = end
+            # 2. Locations
+            for kw in [k.strip() for k in firm.get("locations", "").split(",") if k.strip()]:
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_loc", pos, end)
+                    start = end
+            # 3. Excludes
+            for kw in [k.strip() for k in firm.get("exclude_keywords", "").split(",") if k.strip()]:
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_exc", pos, end)
+                    start = end
                 
         # Highlight active search query
         search_query = self.search_var.get().strip()
