@@ -261,7 +261,17 @@ class DialogsMixin:
                                  activebackground=PANEL, activeforeground=TEXT,
                                  font=FL, relief="flat", highlightthickness=0)
         chk_map.pack(anchor="w")
- 
+
+        use_agent_var = tk.BooleanVar(value=db.load_settings().get("llm_use_agent", False))
+        chk_agent = tk.Checkbutton(
+            chk_frame,
+            text="Use Agentic Parser (tool-calling loop, Local LLM only)",
+            variable=use_agent_var, bg=PANEL, fg=TEXT, selectcolor=BG,
+            activebackground=PANEL, activeforeground=TEXT,
+            font=FL, relief="flat", highlightthickness=0
+        )
+        chk_agent.pack(anchor="w")
+
         # Test Connection button and Status label
         test_frame = tk.Frame(llm_frame, bg=PANEL)
         test_frame.grid(row=10, column=0, columnspan=2, sticky="ew", pady=(6, 0))
@@ -351,6 +361,7 @@ class DialogsMixin:
                 parallel_ent.configure(state="disabled")
                 chk_parse.configure(state="disabled")
                 chk_map.configure(state="disabled")
+                chk_agent.configure(state="disabled")
             elif prov == "Google AI Studio (Gemini)":
                 key_ent.configure(state="normal")
                 url_ent.configure(state="disabled")
@@ -360,6 +371,7 @@ class DialogsMixin:
                 parallel_ent.configure(state="normal")
                 chk_parse.configure(state="normal")
                 chk_map.configure(state="normal")
+                chk_agent.configure(state="disabled")  # agent is local-only
                 # Pre-fill default model name if empty
                 if not model_var.get().strip():
                     model_var.set("gemini-1.5-flash")
@@ -372,6 +384,7 @@ class DialogsMixin:
                 parallel_ent.configure(state="normal")
                 chk_parse.configure(state="normal")
                 chk_map.configure(state="normal")
+                chk_agent.configure(state="normal")
                 # Pre-fill default url/model if empty
                 if not url_var.get().strip():
                     url_var.set("http://localhost:1234/v1")
@@ -410,6 +423,7 @@ class DialogsMixin:
                 db.save_setting("llm_max_parallel", 8)
             db.save_setting("llm_use_parsing", use_parsing_var.get())
             db.save_setting("llm_use_mapping", use_mapping_var.get())
+            db.save_setting("llm_use_agent", use_agent_var.get())
             
             self._log("info", "Settings saved successfully.")
             win.destroy()

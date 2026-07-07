@@ -20,6 +20,10 @@ from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf, scrape_portal_search
 from vector_search import start_background_embedding_worker, pause_background_embedder, resume_background_embedder
 import llm as _llm_module
+try:
+    import pdf_extractor as _pdf_extractor
+except ImportError:
+    _pdf_extractor = None
 
 _selenium_semaphore = threading.Semaphore(1)
 
@@ -184,10 +188,14 @@ class WorkersMixin:
                                     if t:
                                         pdf_text += t + "\n"
                                 md_text = convert_pdf_text_to_markdown(pdf_text)
+                                use_agent = settings.get("llm_use_agent", False)
                                 if provider != "Disabled" and use_llm_parsing:
-                                    self.after(0, lambda: self._log("info", f"[{i}/{total}] Parsing PDF using LLM..."))
+                                    self.after(0, lambda: self._log("info", f"[{i}/{total}] Parsing PDF using {'Agentic' if use_agent else 'LLM'}..."))
                                     try:
-                                        rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                                        if use_agent and provider == "Local LLM (LM Studio / Ollama)":
+                                            rec = _llm_module.llm_parse_tender_agentic(md_text, provider, api_key, base_url, model)
+                                        else:
+                                            rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
                                     except Exception as ex:
                                         self.after(0, lambda: self._log("err", f"LLM parsing failed for PDF, falling back to regex: {ex}"))
                                         rec = parse_one(md_text, allow_llm=False)
@@ -973,19 +981,28 @@ class WorkersMixin:
                 self.after(0, lambda f=filename: self._log("info", f"Parsing PDF: {f}..."))
                 
                 try:
-                    reader = pypdf.PdfReader(pdf_path)
-                    pdf_text = ""
-                    for page in reader.pages:
-                        t = page.extract_text()
-                        if t:
-                            pdf_text += t + "\n"
+                    # Use PyMuPDF (fitz) if available for better text extraction
+                    if _pdf_extractor is not None:
+                        pdf_text = _pdf_extractor.extract_text(open(pdf_path, "rb").read())
+                    else:
+                        reader = pypdf.PdfReader(pdf_path)
+                        pdf_text = ""
+                        for page in reader.pages:
+                            t = page.extract_text()
+                            if t:
+                                pdf_text += t + "\n"
                     
                     md_text = convert_pdf_text_to_markdown(pdf_text)
                     
+                    use_agent = settings.get("llm_use_agent", False)
                     pdf_rec = None
                     if provider != "Disabled" and use_llm:
                         try:
-                            pdf_rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                            if use_agent and provider == "Local LLM (LM Studio / Ollama)":
+                                self.after(0, lambda f=filename: self._log("info", f"[Agent] Parsing {f} with agentic tool-calling loop..."))
+                                pdf_rec = _llm_module.llm_parse_tender_agentic(md_text, provider, api_key, base_url, model)
+                            else:
+                                pdf_rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
                         except Exception as ex:
                             self.after(0, lambda f=filename, err=ex: self._log("err", f"LLM parsing failed for {f}, falling back to regex: {err}"))
                     

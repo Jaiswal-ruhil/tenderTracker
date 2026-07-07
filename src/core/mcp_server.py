@@ -217,5 +217,41 @@ def rebuild_search_index() -> dict:
     except Exception as e:
         return {"success": False, "error": str(e)}
 
+@mcp.tool()
+def parse_tender_pdf_agentic(pdf_path: str) -> dict:
+    """
+    Run the full agentic tool-calling loop on a local PDF file.
+    Uses PyMuPDF (fitz) text extraction + LLM tool-calling loop to produce the TenderRecord.
+    """
+    if not os.path.exists(pdf_path):
+        return {"error": f"PDF file not found at: {pdf_path}"}
+    try:
+        import pdf_extractor
+        import llm
+        import db
+
+        # Extract
+        pdf_bytes = open(pdf_path, "rb").read()
+        text = pdf_extractor.extract_text(pdf_bytes)
+        md_text = parser.convert_pdf_text_to_markdown(text)
+
+        # Get settings
+        settings = db.load_settings()
+        provider = settings.get("llm_provider", "Local LLM (LM Studio / Ollama)")
+        api_key = settings.get("llm_api_key", "")
+        base_url = settings.get("llm_base_url", "http://localhost:1234")
+        model = settings.get("llm_model", "")
+
+        # Run agent
+        record = llm.llm_parse_tender_agentic(md_text, provider, api_key, base_url, model)
+        if record:
+            record["pdf_path"] = os.path.abspath(pdf_path)
+            record["is_fetched"] = True
+            db.upsert_tender(record)
+        return record
+    except Exception as e:
+        return {"error": str(e)}
+
 if __name__ == "__main__":
+
     mcp.run()

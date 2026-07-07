@@ -969,7 +969,48 @@ Provide ONLY the valid JSON object in response.
         logger.log("err", f"LLM parsing failed: {e}")
         raise e
 
+def llm_parse_tender_agentic(text, provider, api_key, base_url, model):
+    """
+    Agentic tool-calling parser for GeM tender PDFs.
+
+    Sends the PDF text to LM Studio with all 10 extraction tool schemas.
+    The model decides which tools to call; results are fed back until the
+    model produces a final TenderRecord JSON.
+
+    Falls back to llm_parse_tender() if:
+      - provider is not a local LLM
+      - the agent returns an empty/incomplete record
+      - any unexpected error occurs
+
+    Only works with Local LLM (LM Studio / Ollama) since the agent needs
+    direct tool-calling support. Google AI Studio does not expose the
+    same /v1/chat/completions + tools interface locally.
+    """
+    if provider != "Local LLM (LM Studio / Ollama)":
+        return llm_parse_tender(text, provider, api_key, base_url, model)
+
+    try:
+        import llm_agent
+        result = llm_agent.run_tender_agent(
+            pdf_text=text,
+            base_url=base_url,
+            model=model,
+            api_key=api_key or "lm-studio",
+        )
+        # Validate: must have at minimum a bid_no
+        if result and result.get("bid_no"):
+            logger.log("info", f"[Agent] Agentic parse succeeded: {result.get('bid_no')}")
+            return result
+        else:
+            logger.log("warn", "[Agent] Agentic parse returned incomplete result. Falling back to single-prompt LLM.")
+    except Exception as e:
+        logger.log("warn", f"[Agent] Agentic parse failed: {e}. Falling back to single-prompt LLM.")
+
+    return llm_parse_tender(text, provider, api_key, base_url, model)
+
+
 def llm_map_category(item_name, existing_categories, provider, api_key, base_url, model):
+
     """
     Classifies a raw item name into one of the existing standard categories, or
     suggests a clean category name if no match exists.
