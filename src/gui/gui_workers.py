@@ -470,21 +470,34 @@ class WorkersMixin:
                                 existing_iid = items_to_iid[items_val]
                                 break
 
-            if existing_rec and existing_iid:
+            # Pre-evaluate derived want status and matching firm for the parsed record
+            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+            rec["is_want_derived"] = is_want
+
+            if existing_rec:
+                # Always sync derived values to the existing record
+                existing_rec["is_want_derived"] = is_want
+                existing_rec["matched_firm"] = rec.get("matched_firm", "")
+                if existing_iid:
+                    self.tv.set(existing_iid, "matched_firm", rec.get("matched_firm", ""))
+
                 merged_fields = []
                 for k, v in rec.items():
+                    if k in ("is_want_derived", "matched_firm"):
+                        continue
                     if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
                         existing_rec[k] = v
-                        if k in TV_IDS:
+                        if existing_iid and k in TV_IDS:
                             self.tv.set(existing_iid, k, v)
                         merged_fields.append(k)
                 if merged_fields:
                     stats["updated"] += 1
-                    self.tv.item(existing_iid, tags=("fetched",))
+                    if existing_iid:
+                        self.tv.item(existing_iid, tags=("fetched",))
                     self._log("ok", f"Updated {bid_no or bid_url} with {len(merged_fields)} new fields")
+                else:
+                    self._log("info", f"Tender {bid_no or bid_url} already exists in database (skipped)")
             else:
-                is_want = self._get_tender_status(rec, inc_kws, exc_kws)
-                rec["is_want_derived"] = is_want
                 self._records.append(rec)
                 
                 # Update lookup index mapping
@@ -509,11 +522,7 @@ class WorkersMixin:
             else:
                 self._show_toast("New Want Tenders Match!", f"Found {new_wants_count} new tenders matching your Wants list!", "ok")
 
-        # Refresh Kanban board exactly ONCE at the end
-        try:
-            self._update_kanban()
-        except Exception:
-            pass
+
 
     def _add_single_row_immediate(self, rec, stats):
         bid_no = rec.get("bid_no")
@@ -557,21 +566,34 @@ class WorkersMixin:
                         existing_iid = iid
                         break
 
-        if existing_rec and existing_iid:
+        # Pre-evaluate derived want status and matching firm for the parsed record
+        is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+        rec["is_want_derived"] = is_want
+
+        if existing_rec:
+            # Always sync derived values to the existing record
+            existing_rec["is_want_derived"] = is_want
+            existing_rec["matched_firm"] = rec.get("matched_firm", "")
+            if existing_iid:
+                self.tv.set(existing_iid, "matched_firm", rec.get("matched_firm", ""))
+
             merged_fields = []
             for k, v in rec.items():
+                if k in ("is_want_derived", "matched_firm"):
+                    continue
                 if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
                     existing_rec[k] = v
-                    if k in TV_IDS:
+                    if existing_iid and k in TV_IDS:
                         self.tv.set(existing_iid, k, v)
                     merged_fields.append(k)
             if merged_fields:
                 stats["updated"] += 1
-                self.tv.item(existing_iid, tags=("fetched",))
+                if existing_iid:
+                    self.tv.item(existing_iid, tags=("fetched",))
                 self._log("ok", f"Updated {bid_no or bid_url} with {len(merged_fields)} new fields")
+            else:
+                self._log("info", f"Tender {bid_no or bid_url} already exists in database (skipped)")
         else:
-            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
-            rec["is_want_derived"] = is_want
             self._records.append(rec)
             self._tv_insert(rec)
             stats["added"] += 1
@@ -582,11 +604,7 @@ class WorkersMixin:
             else:
                 self._log("info", f"Added {bid_no or bid_url} to database (Don't Want / Filtered)")
 
-        # Refresh Kanban if active
-        try:
-            self._update_kanban()
-        except Exception:
-            pass
+
 
     def _finalize_parse(self, recs, stats, total, start_time):
         added_count = stats.get("added", 0)
@@ -610,6 +628,9 @@ class WorkersMixin:
         if recs:
             self.paste_txt.delete("1.0", "end")
             
+        # Refresh the table view immediately to show additions/updates correctly with current filters
+        self._refresh_table_view()
+
         # Rebuild vector search index
         start_background_embedding_worker(callback_fn=self._refresh_table_view)
         

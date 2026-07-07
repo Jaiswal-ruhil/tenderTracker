@@ -106,13 +106,27 @@ def setup_file_logger(db_path):
     except Exception as e:
         print(f"Failed to setup file logger at {log_path}: {e}")
 
+class SafeStreamHandler(logging.StreamHandler):
+    def emit(self, record):
+        try:
+            super().emit(record)
+        except Exception:
+            pass
+
+    def flush(self):
+        try:
+            super().flush()
+        except Exception:
+            pass
+
 # Base logger configuration
 logging.basicConfig(
     level=logging.DEBUG,
     format="[%(asctime)s] %(levelname)-7s %(message)s",
     datefmt="%H:%M:%S",
-    handlers=[logging.StreamHandler()]
+    handlers=[SafeStreamHandler()]
 )
+
 
 # ── Core log function ─────────────────────────────────────────────────────────
 def log(level, message):

@@ -135,6 +135,53 @@ class DatePickerPopup(tk.Toplevel):
             self.destroy()
 
 
+class TreeviewHover:
+    """
+    Hover row highlight effect for ttk.Treeview.
+    Dynamically applies a 'hover' tag to the row currently under the mouse cursor.
+    """
+    def __init__(self, treeview):
+        self.tv = treeview
+        self.last_hovered_iid = None
+        self.tv.tag_configure("hover", background="#26303C")  # Elegant dark slate gray for hover
+        self.tv.bind("<Motion>", self._on_motion, add="+")
+        self.tv.bind("<Leave>", self._on_leave, add="+")
+
+    def _on_motion(self, event):
+        iid = self.tv.identify_row(event.y)
+        if iid != self.last_hovered_iid:
+            if self.last_hovered_iid:
+                self._remove_hover(self.last_hovered_iid)
+            if iid:
+                self._add_hover(iid)
+                self.last_hovered_iid = iid
+            else:
+                self.last_hovered_iid = None
+
+    def _on_leave(self, event):
+        if self.last_hovered_iid:
+            self._remove_hover(self.last_hovered_iid)
+            self.last_hovered_iid = None
+
+    def _add_hover(self, iid):
+        try:
+            tags = list(self.tv.item(iid, "tags"))
+            if "hover" not in tags:
+                tags.append("hover")
+                self.tv.item(iid, tags=tuple(tags))
+        except Exception:
+            pass
+
+    def _remove_hover(self, iid):
+        try:
+            tags = list(self.tv.item(iid, "tags"))
+            if "hover" in tags:
+                tags.remove("hover")
+                self.tv.item(iid, tags=tuple(tags))
+        except Exception:
+            pass
+
+
 class CellTooltip:
     """
     Hover tooltip for ttk.Treeview cells.
@@ -313,7 +360,7 @@ class TableTabMixin:
 
         # Status View dropdown
         tk.Label(filter_fr, text="Status:", font=FL, bg=PANEL, fg=MUTED).pack(side="left")
-        self.status_view_var = tk.StringVar(value="To Be Filed")
+        self.status_view_var = tk.StringVar(value="All")
         status_view_opt = ttk.Combobox(filter_fr, textvariable=self.status_view_var,
                                        values=["All", "To Be Filed", "Evaluating", "Filed"],
                                        state="readonly", font=FL, width=13)
@@ -322,8 +369,8 @@ class TableTabMixin:
         
         # Date Filter in Table View
         tk.Label(filter_fr, text="Date Filter:", font=FL, bg=PANEL, fg=MUTED).pack(side="left", padx=(10, 0))
-        self.date_filter_type_var = tk.StringVar(value="End Date")
-        self.date_filter_preset_var = tk.StringVar(value="End Date: Today")
+        self.date_filter_type_var = tk.StringVar(value="None")
+        self.date_filter_preset_var = tk.StringVar(value="All Dates")
         
         self.date_filter_combo = ttk.Combobox(
             filter_fr, textvariable=self.date_filter_preset_var,
@@ -434,7 +481,8 @@ class TableTabMixin:
         txt_fr.pack(fill="both", expand=True)
 
         self.detail_txt = tk.Text(txt_fr, bg=CARD, fg=TEXT, insertbackground=TEXT,
-                                  relief="flat", font=FL, wrap="word", highlightthickness=0)
+                                  relief="flat", font=FL, wrap="word", highlightthickness=0,
+                                  padx=12, pady=12)
         self.detail_txt.pack(side="left", fill="both", expand=True)
 
         detail_vsb = ttk.Scrollbar(txt_fr, orient="vertical", command=self.detail_txt.yview)
@@ -447,6 +495,7 @@ class TableTabMixin:
         self.detail_txt.tag_configure("value", foreground=TEXT, font=("Segoe UI", 9))
         self.detail_txt.tag_configure("match_inc", background="#1A4A2A", foreground=SUCCESS, font=("Segoe UI", 9, "bold"))
         self.detail_txt.tag_configure("match_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_search", background="#0A4D8C", foreground="#FFFFFF", font=("Segoe UI", 9, "bold"))
 
         # Initialize detail text state
         self._clear_detail_panel()
@@ -474,6 +523,7 @@ class TableTabMixin:
 
         # Attach hover tooltip for full cell text (text-wrap workaround for Treeview)
         self._cell_tooltip = CellTooltip(self.tv, TV_IDS)
+        self._treeview_hover = TreeviewHover(self.tv)
 
         # Context Menu
         self.ctx_menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT, 
@@ -482,6 +532,15 @@ class TableTabMixin:
         self.ctx_menu.add_command(label="Mark as Don't Want (Ignore)", command=self._mark_selected_dont_want)
         self.ctx_menu.add_command(label="Reset Manual Tag", command=self._reset_selected_tag)
         self.ctx_menu.add_command(label="Manage Tags...", command=self._show_tags_dialog)
+        
+        # Submenu for Filing Status
+        self.status_menu = tk.Menu(self.ctx_menu, tearoff=0, bg=PANEL, fg=TEXT,
+                                   activebackground=SEL_BG, activeforeground=TEXT, font=FL)
+        self.status_menu.add_command(label="To Be Filed", command=lambda: self._set_selected_filing_status("To Be Filed"))
+        self.status_menu.add_command(label="Evaluating", command=lambda: self._set_selected_filing_status("Evaluating"))
+        self.status_menu.add_command(label="Filed", command=lambda: self._set_selected_filing_status("Filed"))
+        self.ctx_menu.add_cascade(label="Set Filing Status", menu=self.status_menu)
+        
         self.ctx_menu.add_separator()
         self.ctx_menu.add_command(label="Link PDF File...", command=self._link_associated_pdf)
         self.ctx_menu.add_command(label="Open Associated PDF", command=self._open_associated_pdf)
@@ -533,10 +592,40 @@ class TableTabMixin:
     _sort_state = {}
     def _sort(self, col):
         rev = self._sort_state.get(col, False)
-        items = [(self.tv.set(k,col),k) for k in self.tv.get_children()]
-        items.sort(reverse=rev)
-        for i,(_,k) in enumerate(items): self.tv.move(k,"",i)
+        raw_items = [(self.tv.set(k, col), k) for k in self.tv.get_children()]
+        
+        # Check if column is numeric (Estimated Value, Min Turnover, Exp Yrs, Qty, EMD, etc.)
+        is_numeric = False
+        if col in ("est_value", "min_turnover", "exp_years", "quantity"):
+            is_numeric = True
+            
+        if is_numeric:
+            def clean_num(val):
+                cleaned = "".join(c for c in val if c.isdigit() or c in (".", "-"))
+                try:
+                    return float(cleaned) if cleaned else 0.0
+                except ValueError:
+                    return 0.0
+            raw_items.sort(key=lambda x: clean_num(x[0]), reverse=rev)
+        else:
+            # Fallback to string collation (case-insensitive)
+            raw_items.sort(key=lambda x: x[0].lower(), reverse=rev)
+            
+        for i, (_, k) in enumerate(raw_items):
+            self.tv.move(k, "", i)
+            
         self._sort_state[col] = not rev
+        
+        # Update column headers with sorting indicator arrows
+        col_names = {c[0]: c[1] for c in TV_COLS}
+        for col_id in list(self.tv.cget("columns")):
+            base_name = col_names.get(col_id, col_id)
+            if col_id == col:
+                indicator = " ▲" if not rev else " ▼"
+                self.tv.heading(col_id, text=base_name + indicator)
+            else:
+                self.tv.heading(col_id, text=base_name)
+                
         self._refresh_alt()
 
     def _on_dbl(self, event):
@@ -681,8 +770,6 @@ class TableTabMixin:
                     self._update_details()
                 elif selected_tab == 2:
                     self._update_analytics()
-                elif selected_tab == 3:
-                    self._update_kanban()
             except:
                 pass
         def on_focus_out(ev):
@@ -795,8 +882,6 @@ class TableTabMixin:
                 self._update_details()
             elif selected_tab == 2:
                 self._update_analytics()
-            elif selected_tab == 3:
-                self._update_kanban()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -834,6 +919,12 @@ class TableTabMixin:
             if " and " in rule_clean.lower() or " or " in rule_clean.lower() or "not " in rule_clean.lower() or "(" in rule_clean or ")" in rule_clean:
                 return eval_expr(rule_clean.lower())
                 
+            # Smart keyword boundary matching for short words
+            if rule_clean.isalnum() and len(rule_clean) <= 3:
+                import re
+                pattern = r"\b" + re.escape(rule_clean.lower()) + r"\b"
+                return bool(re.search(pattern, combined_text, re.I))
+                
             # Standard Plain Substring Matching
             return rule_clean.lower() in combined_text
 
@@ -850,7 +941,7 @@ class TableTabMixin:
                 if p_clean.lower() in ("(", ")", "and", "or", "not"):
                     processed_tokens.append(p_clean.lower())
                 else:
-                    exists = p_clean.lower() in combined_text
+                    exists = check_single_rule(p_clean)
                     processed_tokens.append("True" if exists else "False")
             
             expr_str = " ".join(processed_tokens)
@@ -862,6 +953,64 @@ class TableTabMixin:
                 pass
             return False
 
+        # Check firms if configured
+        settings = db.load_settings()
+        firms = settings.get("firms", [])
+        if firms:
+            matched_firms = []
+            for firm in firms:
+                # 1. Exclude keywords
+                exc_raw = firm.get("exclude_keywords", "")
+                exc_list = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+                is_excluded = False
+                for kw in exc_list:
+                    if check_single_rule(kw):
+                        is_excluded = True
+                        break
+                if is_excluded:
+                    continue
+                    
+                # 2. Categories (Include Keywords)
+                cat_raw = firm.get("categories", "")
+                cat_list = [k.strip().lower() for k in cat_raw.split(",") if k.strip()]
+                cat_match = False
+                if cat_list:
+                    for kw in cat_list:
+                        if check_single_rule(kw):
+                            cat_match = True
+                            break
+                else:
+                    cat_match = True  # If empty, treat as matching
+                    
+                if not cat_match:
+                    continue
+                    
+                # 3. Locations
+                loc_raw = firm.get("locations", "")
+                loc_list = [k.strip().lower() for k in loc_raw.split(",") if k.strip()]
+                loc_match = False
+                if loc_list:
+                    for kw in loc_list:
+                        if check_single_rule(kw):
+                            loc_match = True
+                            break
+                else:
+                    loc_match = True  # If empty, treat as matching
+                    
+                if not loc_match:
+                    continue
+                    
+                matched_firms.append(firm.get("name", "Unnamed Firm"))
+                
+            if matched_firms:
+                rec["matched_firm"] = ", ".join(matched_firms)
+                return True
+            else:
+                rec["matched_firm"] = ""
+                return False
+
+        # Fallback to global include/exclude rules if no firms are configured
+        rec["matched_firm"] = ""
         matches_exc = False
         for rule in exc_kws:
             if check_single_rule(rule):
@@ -873,6 +1022,12 @@ class TableTabMixin:
                 for rule in inc_kws:
                     if check_single_rule(rule):
                         return True
+            return False
+            
+        if inc_kws:
+            for rule in inc_kws:
+                if check_single_rule(rule):
+                    return True
             return False
             
         return True
@@ -907,6 +1062,11 @@ class TableTabMixin:
         return None
 
     def _refresh_table_view(self):
+        import threading
+        if threading.current_thread() is not threading.main_thread():
+            self.after(0, self._refresh_table_view)
+            return
+
         if not hasattr(self, "tv") or self.tv is None:
             return
         for child in self.tv.get_children():
@@ -998,6 +1158,68 @@ class TableTabMixin:
         self.count_lbl.configure(text=f"{visible_count} visible / {len(self._records)} total")
 
     def _show_context_menu(self, event):
+        region = self.tv.identify_region(event.x, event.y)
+        if region == "heading":
+            column_id = self.tv.identify_column(event.x)
+            try:
+                col_index = int(column_id[1:]) - 1
+                display_cols = list(self.tv.cget("displaycolumns"))
+                if display_cols == ["#all"] or not display_cols:
+                    settings = db.load_settings()
+                    visible = settings.get("visible_columns")
+                    if not visible or not isinstance(visible, list):
+                        display_cols = [c[0] for c in TV_COLS]
+                    else:
+                        display_cols = visible
+                
+                if 0 <= col_index < len(display_cols):
+                    target_col = display_cols[col_index]
+                    
+                    # Create header context menu
+                    hdr_menu = tk.Menu(self, tearoff=0, bg=PANEL, fg=TEXT, activebackground=ACCENT, activeforeground=TEXT)
+                    
+                    # Move Left
+                    if col_index > 0:
+                        def move_left():
+                            cols = list(display_cols)
+                            cols[col_index], cols[col_index - 1] = cols[col_index - 1], cols[col_index]
+                            db.save_setting("visible_columns", cols)
+                            self._apply_column_visibility()
+                        hdr_menu.add_command(label="◀ Move Left", command=move_left)
+                    else:
+                        hdr_menu.add_command(label="◀ Move Left", state="disabled")
+                        
+                    # Move Right
+                    if col_index < len(display_cols) - 1:
+                        def move_right():
+                            cols = list(display_cols)
+                            cols[col_index], cols[col_index + 1] = cols[col_index + 1], cols[col_index]
+                            db.save_setting("visible_columns", cols)
+                            self._apply_column_visibility()
+                        hdr_menu.add_command(label="▶ Move Right", command=move_right)
+                    else:
+                        hdr_menu.add_command(label="▶ Move Right", state="disabled")
+                        
+                    hdr_menu.add_separator()
+                    
+                    # Hide Column
+                    def hide_col():
+                        cols = list(display_cols)
+                        cols.remove(target_col)
+                        if not cols:
+                            cols = ["bid_no"]
+                        db.save_setting("visible_columns", cols)
+                        self._apply_column_visibility()
+                    hdr_menu.add_command(label="👁 Hide Column", command=hide_col)
+                    
+                    # Manage Columns
+                    hdr_menu.add_command(label="⚙ Manage Columns...", command=self._show_column_selector)
+                    
+                    hdr_menu.post(event.x_root, event.y_root)
+                    return
+            except Exception as e:
+                self._log("err", f"Header menu error: {e}")
+
         iid = self.tv.identify_row(event.y)
         if iid:
             if iid not in self.tv.selection():
@@ -1062,6 +1284,38 @@ class TableTabMixin:
         db.save_all_tenders(self._records)
         self._refresh_table_view()
         self._log("info", f"Reset manual tag for {len(sel)} tender(s).")
+
+    def _set_selected_filing_status(self, status):
+        sel = self.tv.selection()
+        if not sel:
+            return
+        updated_count = 0
+        for iid in sel:
+            bid_no = self.tv.set(iid, "bid_no")
+            if bid_no:
+                for r in self._records:
+                    if r.get("bid_no") == bid_no:
+                        r["filing_status"] = status
+                        updated_count += 1
+                        break
+                # Update UI Treeview row
+                self.tv.set(iid, "filing_status", status)
+                # Update Database
+                db.upsert_tender_field(bid_no, "filing_status", status)
+                
+        if updated_count > 0:
+            self._log("ok", f"Set filing status to '{status}' for {updated_count} tender(s).")
+            self._refresh_table_view()
+            # Cascade view refreshes if active
+            try:
+                selected_tab = self.notebook.index(self.notebook.select())
+                if selected_tab == 1:
+                    self._update_calendar()
+                    self._update_details()
+                elif selected_tab == 2:
+                    self._update_analytics()
+            except Exception:
+                pass
 
     def _copy_table_output(self):
         headers = [c[1] for c in TV_COLS]
@@ -1266,6 +1520,18 @@ class TableTabMixin:
                 self.detail_txt.tag_add("match_exc", pos, end)
                 start = end
                 
+        # Highlight active search query
+        search_query = self.search_var.get().strip()
+        if search_query:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(search_query, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(search_query)}c"
+                self.detail_txt.tag_add("match_search", pos, end)
+                start = end
+                
         self.detail_txt.configure(state="disabled")
 
     def _bind_shortcuts(self):
@@ -1422,15 +1688,17 @@ class TableTabMixin:
     def _show_column_selector(self):
         win = tk.Toplevel(self)
         win.title("Select Columns")
-        win.geometry("380x500")
+        win.geometry("400x520")
         win.resizable(False, False)
         win.configure(bg=BG)
         win.transient(self)
         win.grab_set()
         
-        win.geometry(f"+{self.winfo_x() + 100}+{self.winfo_y() + 100}")
+        x = self.winfo_x() + (self.winfo_width() - 400) // 2
+        y = self.winfo_y() + (self.winfo_height() - 520) // 2
+        win.geometry(f"+{max(0, x)}+{max(0, y)}")
 
-        tk.Label(win, text="Select Columns to Display", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+        tk.Label(win, text="Manage Columns & Ordering", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
         
         list_frame = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
         list_frame.pack(fill="both", expand=True, padx=20, pady=5)
@@ -1449,34 +1717,89 @@ class TableTabMixin:
         canvas.pack(side="left", fill="both", expand=True)
         vsb.pack(side="right", fill="y")
         
+        # Load visible columns and custom order from settings
         settings = db.load_settings()
         visible = settings.get("visible_columns")
         if not visible or not isinstance(visible, list):
             visible = [c[0] for c in TV_COLS]
-        
-        checkbox_vars = {}
-        for col_id, col_name, _ in TV_COLS:
-            var = tk.BooleanVar(value=(col_id in visible))
-            checkbox_vars[col_id] = var
             
-            cb = tk.Checkbutton(
-                scroll_content, text=col_name, variable=var,
-                bg=PANEL, fg=TEXT, selectcolor=BG,
-                activebackground=PANEL, activeforeground=TEXT,
-                font=FL, relief="flat", anchor="w"
-            )
-            cb.pack(fill="x", padx=10, pady=3, anchor="w")
-
+        # Compile list of all column objects in their current order
+        all_cols_ids = [c[0] for c in TV_COLS]
+        current_order = []
+        for vcol in visible:
+            if vcol in all_cols_ids:
+                current_order.append(vcol)
+        for col_id in all_cols_ids:
+            if col_id not in current_order:
+                current_order.append(col_id)
+                
+        col_names = {c[0]: c[1] for c in TV_COLS}
+        
+        items = []
+        for cid in current_order:
+            var = tk.BooleanVar(value=(cid in visible))
+            items.append({
+                "id": cid,
+                "name": col_names[cid],
+                "var": var
+            })
+            
+        def draw_list():
+            for child in scroll_content.winfo_children():
+                child.destroy()
+                
+            for idx, item in enumerate(items):
+                row_fr = tk.Frame(scroll_content, bg=PANEL)
+                row_fr.pack(fill="x", padx=10, pady=2, anchor="w")
+                
+                cb = tk.Checkbutton(
+                    row_fr, text=item["name"], variable=item["var"],
+                    bg=PANEL, fg=TEXT, selectcolor=BG,
+                    activebackground=PANEL, activeforeground=TEXT,
+                    font=FL, relief="flat", anchor="w"
+                )
+                cb.pack(side="left", fill="x", expand=True)
+                
+                btn_fr = tk.Frame(row_fr, bg=PANEL)
+                btn_fr.pack(side="right", padx=5)
+                
+                up_btn = tk.Button(
+                    btn_fr, text="▲", font=("Arial", 8), bg=CARD, fg=TEXT, relief="flat", bd=0, padx=4, pady=1,
+                    command=lambda i=idx: move_up(i)
+                )
+                up_btn.pack(side="left", padx=2)
+                if idx == 0:
+                    up_btn.configure(state="disabled", fg=MUTED)
+                    
+                down_btn = tk.Button(
+                    btn_fr, text="▼", font=("Arial", 8), bg=CARD, fg=TEXT, relief="flat", bd=0, padx=4, pady=1,
+                    command=lambda i=idx: move_down(i)
+                )
+                down_btn.pack(side="left", padx=2)
+                if idx == len(items) - 1:
+                    down_btn.configure(state="disabled", fg=MUTED)
+                    
+        def move_up(index):
+            if index > 0:
+                items[index], items[index - 1] = items[index - 1], items[index]
+                draw_list()
+                
+        def move_down(index):
+            if index < len(items) - 1:
+                items[index], items[index + 1] = items[index + 1], items[index]
+                draw_list()
+                
+        draw_list()
+        
         def save_columns():
-            new_visible = [col_id for col_id, var in checkbox_vars.items() if var.get()]
+            new_visible = [item["id"] for item in items if item["var"].get()]
             if not new_visible:
                 new_visible = ["bid_no"]
-                checkbox_vars["bid_no"].set(True)
+                items[0]["var"].set(True)
                 messagebox.showwarning("Selection Warning", "At least one column must be visible.", parent=win)
                 return
                 
             db.save_setting("visible_columns", new_visible)
-            
             self._apply_column_visibility()
             win.destroy()
             

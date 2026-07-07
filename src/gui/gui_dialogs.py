@@ -420,6 +420,303 @@ class DialogsMixin:
         
         win.protocol("WM_DELETE_WINDOW", save_and_close)
 
+    def _change_db_location(self, parent_win=None):
+        initial = os.path.dirname(db.DB_FILE) if db.DB_FILE else ""
+        selected_dir = filedialog.askdirectory(
+            title="Select New Folder for Database (tenders_db.db)",
+            initialdir=initial,
+            parent=parent_win or self
+        )
+        if not selected_dir:
+            return
+            
+        new_db_path = os.path.join(os.path.abspath(selected_dir), "tenders_db.db")
+        old_db_path = db.DB_FILE
+        
+        if old_db_path and os.path.abspath(new_db_path) == os.path.abspath(old_db_path):
+            messagebox.showinfo("Database Location", "Selected folder is the same as the current database location.", parent=parent_win or self)
+            return
+            
+        # Ask if they want to copy the existing database to the new location
+        copy_existing = False
+        if old_db_path and os.path.exists(old_db_path):
+            copy_existing = messagebox.askyesno(
+                "Copy Existing Database?",
+                "Do you want to copy your existing database (with all tenders and history) to the new location?\n\n"
+                "Click 'Yes' to copy the current database.\n"
+                "Click 'No' to switch to the new folder (which will create a new empty database if one does not exist).",
+                parent=parent_win or self
+            )
+            
+        if copy_existing:
+            import shutil
+            try:
+                # If target file exists, ask to overwrite
+                if os.path.exists(new_db_path):
+                    overwrite = messagebox.askyesno(
+                        "Overwrite Existing Database?",
+                        f"A database file already exists at the new location:\n{new_db_path}\n\nDo you want to overwrite it with the current database?",
+                        parent=parent_win or self
+                    )
+                    if not overwrite:
+                        return
+                
+                # Copy the file
+                shutil.copy2(old_db_path, new_db_path)
+                self._log("ok", f"Copied database from {old_db_path} to {new_db_path}")
+            except Exception as e:
+                self._log("err", f"Failed to copy database file: {e}")
+                messagebox.showerror("Error", f"Failed to copy database file:\n{e}", parent=parent_win or self)
+                return
+
+        # Save setting and initialize path
+        try:
+            db.save_configured_db_path(new_db_path)
+            db.init_db_path(new_db_path)
+            
+            # Setup logger to the new log file path
+            import logger
+            logger.setup_file_logger(new_db_path)
+            
+            self._log("ok", f"Database relocated to: {new_db_path}")
+            
+            # Reload all tenders from the new database path into the GUI
+            self._records = db.load_all_tenders()
+            self._refresh_table_view()
+            if hasattr(self, "_update_analytics"):
+                self._update_analytics()
+            if hasattr(self, "_update_calendar"):
+                self._update_calendar()
+                self._update_details()
+                
+            messagebox.showinfo("Success", f"Database successfully relocated to:\n{new_db_path}", parent=parent_win or self)
+        except Exception as e:
+            self._log("err", f"Failed to relocate database: {e}")
+            messagebox.showerror("Error", f"Failed to relocate database:\n{e}", parent=parent_win or self)
+
+    def _show_firms_dialog(self):
+        win = tk.Toplevel(self)
+        win.grab_set()
+        win.transient(self)
+        win.title("Manage Firms")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        
+        x = self.winfo_x() + (self.winfo_width() - 700) // 2
+        y = self.winfo_y() + (self.winfo_height() - 500) // 2
+        win.geometry(f"700x500+{max(0, x)}+{max(0, y)}")
+        
+        tk.Label(win, text="Manage Firms & Matching Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+        
+        # Load firms from settings
+        settings = db.load_settings()
+        firms_list = settings.get("firms", [])
+        
+        # Frame for Treeview
+        tree_fr = tk.Frame(win, bg=BG)
+        tree_fr.pack(fill="both", expand=True, padx=20, pady=5)
+        
+        # Scrollbars
+        scroll_y = ttk.Scrollbar(tree_fr, orient="vertical")
+        scroll_y.pack(side="right", fill="y")
+        scroll_x = ttk.Scrollbar(tree_fr, orient="horizontal")
+        scroll_x.pack(side="bottom", fill="x")
+        
+        # Treeview definition
+        cols = ("name", "categories", "locations", "exclude_keywords")
+        tv = ttk.Treeview(tree_fr, columns=cols, show="headings",
+                          selectmode="browse", yscrollcommand=scroll_y.set, xscrollcommand=scroll_x.set)
+        tv.pack(fill="both", expand=True)
+        
+        scroll_y.configure(command=tv.yview)
+        scroll_x.configure(command=tv.xview)
+        
+        # Set headings & widths
+        tv.heading("name", text="Firm Name")
+        tv.heading("categories", text="Categories (Include Keywords)")
+        tv.heading("locations", text="Location Keywords")
+        tv.heading("exclude_keywords", text="Exclude Keywords")
+        
+        tv.column("name", width=140, anchor="w")
+        tv.column("categories", width=220, anchor="w")
+        tv.column("locations", width=140, anchor="w")
+        tv.column("exclude_keywords", width=140, anchor="w")
+        
+        # Insert current firms
+        def refresh_tree():
+            for child in tv.get_children():
+                tv.delete(child)
+            for idx, firm in enumerate(firms_list):
+                tv.insert("", "end", iid=str(idx), values=(
+                    firm.get("name", ""),
+                    firm.get("categories", ""),
+                    firm.get("locations", ""),
+                    firm.get("exclude_keywords", "")
+                ))
+                
+        refresh_tree()
+        
+        # Form for Add/Edit
+        def open_firm_form(edit_idx=None):
+            form_win = tk.Toplevel(win)
+            form_win.grab_set()
+            form_win.transient(win)
+            form_win.title("Add Firm" if edit_idx is None else "Edit Firm")
+            form_win.configure(bg=BG)
+            form_win.resizable(False, False)
+            
+            fx = win.winfo_x() + (win.winfo_width() - 450) // 2
+            fy = win.winfo_y() + (win.winfo_height() - 320) // 2
+            form_win.geometry(f"450x320+{max(0, fx)}+{max(0, fy)}")
+            
+            # Fields
+            tk.Label(form_win, text="Firm Configuration", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+            
+            grid_fr = tk.Frame(form_win, bg=PANEL, padx=15, pady=15, highlightthickness=1, highlightbackground="#30363D")
+            grid_fr.pack(fill="both", expand=True, padx=20, pady=5)
+            
+            # Firm Name
+            tk.Label(grid_fr, text="Firm Name:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=0, column=0, sticky="w", pady=6)
+            name_var = tk.StringVar()
+            name_ent = tk.Entry(grid_fr, textvariable=name_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                                highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, width=30)
+            name_ent.grid(row=0, column=1, sticky="w", padx=10, pady=6)
+            
+            # Categories
+            tk.Label(grid_fr, text="Categories:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", pady=6)
+            cat_var = tk.StringVar()
+            cat_ent = tk.Entry(grid_fr, textvariable=cat_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                               highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, width=30)
+            cat_ent.grid(row=1, column=1, sticky="w", padx=10, pady=6)
+            
+            # Locations
+            tk.Label(grid_fr, text="Locations:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=6)
+            loc_var = tk.StringVar()
+            loc_ent = tk.Entry(grid_fr, textvariable=loc_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                               highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, width=30)
+            loc_ent.grid(row=2, column=1, sticky="w", padx=10, pady=6)
+            
+            # Exclude Keywords
+            tk.Label(grid_fr, text="Excludes:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=3, column=0, sticky="w", pady=6)
+            exc_var = tk.StringVar()
+            exc_ent = tk.Entry(grid_fr, textvariable=exc_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
+                               highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, width=30)
+            exc_ent.grid(row=3, column=1, sticky="w", padx=10, pady=6)
+            
+            # Pre-populate if editing
+            if edit_idx is not None:
+                firm_data = firms_list[edit_idx]
+                name_var.set(firm_data.get("name", ""))
+                cat_var.set(firm_data.get("categories", ""))
+                loc_var.set(firm_data.get("locations", ""))
+                exc_var.set(firm_data.get("exclude_keywords", ""))
+                
+            def save_form():
+                n = name_var.get().strip()
+                c = cat_var.get().strip()
+                l = loc_var.get().strip()
+                e = exc_var.get().strip()
+                
+                if not n:
+                    messagebox.showerror("Error", "Firm Name is required.", parent=form_win)
+                    return
+                    
+                firm_data = {
+                    "name": n,
+                    "categories": c,
+                    "locations": l,
+                    "exclude_keywords": e
+                }
+                
+                if edit_idx is None:
+                    firms_list.append(firm_data)
+                else:
+                    firms_list[edit_idx] = firm_data
+                    
+                refresh_tree()
+                form_win.destroy()
+                
+            btn_fr2 = tk.Frame(form_win, bg=BG)
+            btn_fr2.pack(fill="x", side="bottom", pady=10)
+            self._btn(btn_fr2, "Save", save_form, bg=ACCENT).pack(side="left", padx=(50, 10), expand=True, fill="x")
+            self._btn(btn_fr2, "Cancel", form_win.destroy, bg=CARD).pack(side="right", padx=(10, 50), expand=True, fill="x")
+            
+        def add_firm():
+            open_firm_form()
+            
+        def edit_firm():
+            sel = tv.selection()
+            if not sel:
+                messagebox.showwarning("Warning", "Select a firm to edit.", parent=win)
+                return
+            idx = int(sel[0])
+            open_firm_form(edit_idx=idx)
+            
+        def delete_firm():
+            sel = tv.selection()
+            if not sel:
+                messagebox.showwarning("Warning", "Select a firm to delete.", parent=win)
+                return
+            idx = int(sel[0])
+            firm_name = firms_list[idx].get("name", "this firm")
+            confirm = messagebox.askyesno("Confirm Delete", f"Are you sure you want to delete '{firm_name}'?", parent=win)
+            if confirm:
+                firms_list.pop(idx)
+                refresh_tree()
+                
+        # Action buttons frame
+        act_fr = tk.Frame(win, bg=BG)
+        act_fr.pack(fill="x", padx=20, pady=10)
+        
+        self._btn(act_fr, "+ Add Firm", add_firm, bg=CARD).pack(side="left", padx=(0, 6))
+        self._btn(act_fr, "⚙ Edit Selected", edit_firm, bg=CARD).pack(side="left", padx=6)
+        self._btn(act_fr, "🗑 Delete Selected", delete_firm, bg=CARD, fg=ERR).pack(side="left", padx=6)
+        
+        def save_all_firms():
+            db.save_setting("firms", firms_list)
+            self._log("ok", f"Saved {len(firms_list)} firm(s) to settings.")
+            
+            # Show loading/processing dialog during database re-evaluation
+            def do_re_evaluate():
+                settings_inner = db.load_settings()
+                inc_raw = settings_inner.get("include_keywords", "")
+                exc_raw = settings_inner.get("exclude_keywords", "")
+                inc_kws = [k.strip().lower() for k in inc_raw.split(",") if k.strip()]
+                exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
+                
+                # Update all records in memory
+                updated_count = 0
+                for r in self._records:
+                    old_want = r.get("is_want_derived")
+                    old_firm = r.get("matched_firm", "")
+                    
+                    is_want = self._get_tender_status(r, inc_kws, exc_kws)
+                    r["is_want_derived"] = is_want
+                    
+                    if old_want != r.get("is_want_derived") or old_firm != r.get("matched_firm", ""):
+                        updated_count += 1
+                
+                if updated_count > 0:
+                    db.save_all_tenders(self._records)
+                    
+                self.after(0, self._refresh_table_view)
+                if hasattr(self, "_update_analytics"):
+                    self.after(0, self._update_analytics)
+                if hasattr(self, "_update_calendar"):
+                    self.after(0, self._update_calendar)
+                    self.after(0, self._update_details)
+                
+                self.after(0, lambda: self._log("ok", f"Re-evaluated database: {updated_count} tenders updated based on new firm rules."))
+                
+            LoadingDialog(self, title="Applying Rules", message="Re-evaluating matching rules on database...", task_fn=do_re_evaluate)
+            win.destroy()
+            
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=15)
+        
+        self._btn(btn_fr, "Save & Apply to Database", save_all_firms, bg=ACCENT2).pack(side="left", padx=(80, 10), expand=True, fill="x")
+        self._btn(btn_fr, "Cancel", win.destroy, bg=CARD).pack(side="right", padx=(10, 80), expand=True, fill="x")
+
     def _backup_db(self, parent_win=None):
         parent = parent_win or self
         if not os.path.exists(db.DB_FILE):
@@ -479,8 +776,6 @@ class DialogsMixin:
                     self._update_calendar()
                 elif selected_tab == 2:
                     self._update_analytics()
-                elif selected_tab == 3:
-                    self._update_kanban()
             except Exception:
                 pass
             self._log("ok", f"Database restored successfully from: {src_path}")
@@ -1223,7 +1518,7 @@ class DialogsMixin:
                 db.apply_value_mappings(r)
                 # 2. Apply category mappings next
                 raw_text = r.get("items") or r.get("category") or ""
-                r["category"] = parser.map_category(raw_text)
+                r["category"] = parser.map_category(raw_text, allow_llm=False)
                 
             db.save_all_tenders(self._records)
             self._log("info", "Filter rules, Category mappings, and Field mappings updated.")
@@ -1236,8 +1531,6 @@ class DialogsMixin:
                     self._update_calendar()
                 elif selected_tab == 2:
                     self._update_analytics()
-                elif selected_tab == 3:
-                    self._update_kanban()
             except Exception:
                 pass
                 

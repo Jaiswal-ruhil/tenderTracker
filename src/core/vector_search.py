@@ -220,11 +220,13 @@ def start_background_embedding_worker(callback_fn=None):
                     err_msg = str(ex)
                     logger.log("warn", f"Background Embedder: Failed to embed tender {bid_no}: {ex}")
                     
-                    # Suspend immediately on server config/endpoint/missing model errors to prevent log spam
                     suspend_keywords = [
                         "unexpected endpoint", "httperror 404", "httperror 405", 
                         "no models loaded", "model is known to be unavailable",
-                        "known to be unavailable", "disabled"
+                        "known to be unavailable", "disabled",
+                        "failed to load local model", "model not found",
+                        "model_load_failed", "failed to load", "httperror 500",
+                        "httperror 400", "bad request"
                     ]
                     if any(kw in err_msg.lower() for kw in suspend_keywords):
                         logger.log("warn", "Background Embedder: Local server configuration/endpoint error. Suspending background embedder immediately to prevent server spam.")

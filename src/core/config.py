@@ -44,6 +44,7 @@ TV_COLS = [
     ("filing_status", "Filing Status",    130),
     ("tags",         "Tags",              120),
     ("remarks",      "Remarks",           140),
+    ("matched_firm",  "Matched Firm",      120),
 ]
 TV_IDS = [c[0] for c in TV_COLS]
 

@@ -184,7 +184,8 @@ def get_conn():
                     remarks TEXT,
                     tags TEXT,
                     pdf_path TEXT,
-                    embedding TEXT
+                    embedding TEXT,
+                    matched_firm TEXT
                 )
             """)
             conn.commit()
@@ -285,7 +286,7 @@ COLUMNS = [
     "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
     "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
     "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path",
-    "embedding"
+    "embedding", "matched_firm"
 ]
 
 def row_to_dict(row):
@@ -348,7 +349,10 @@ def load_all_tenders():
         except sqlite3.DatabaseError as e:
             handle_db_error(e)
             return []
-        except Exception:
+        except Exception as e:
+            print("LOAD ERROR:", e)
+            import traceback
+            traceback.print_exc()
             return []
         finally:
             if conn:
@@ -537,7 +541,7 @@ def upsert_tender(record):
                     existing = row_to_dict(row)
                     for k, v in record.items():
                         if v is not None and str(v).strip() != "":
-                            if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                            if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags", "is_want_derived", "matched_firm"):
                                 # Never overwrite a manually-filed status
                                 if k == "filing_status" and existing.get("filing_status") == "Filed":
                                     continue

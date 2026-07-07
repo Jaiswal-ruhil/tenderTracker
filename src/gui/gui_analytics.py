@@ -25,6 +25,25 @@ class AnalyticsTabMixin:
             lbl_title.pack(anchor="w")
             lbl_val = tk.Label(card, text="0", font=("Segoe UI", 24, "bold"), bg=PANEL, fg=color)
             lbl_val.pack(anchor="w", pady=(4, 0))
+            
+            # Hover glow animations
+            def on_enter(e):
+                card.configure(bg="#1C2128", highlightbackground=ACCENT2)
+                lbl_title.configure(bg="#1C2128")
+                lbl_val.configure(bg="#1C2128")
+                
+            def on_leave(e):
+                card.configure(bg=PANEL, highlightbackground="#30363D")
+                lbl_title.configure(bg=PANEL)
+                lbl_val.configure(bg=PANEL)
+                
+            card.bind("<Enter>", on_enter)
+            card.bind("<Leave>", on_leave)
+            lbl_title.bind("<Enter>", on_enter)
+            lbl_title.bind("<Leave>", on_leave)
+            lbl_val.bind("<Enter>", on_enter)
+            lbl_val.bind("<Leave>", on_leave)
+            
             return lbl_val
 
         self.lbl_total_tenders = make_card(cards_fr, 0, "Total Tenders", TEXT)
@@ -163,16 +182,46 @@ class AnalyticsTabMixin:
                     status_color = WARN if days_left < 4 else SUCCESS
                     status_bg = "#2D261A" if days_left < 4 else "#1E2D1E"
                     
-                lbl_left = tk.Label(row, text=r.get("bid_no", ""), font=FB, bg=PANEL, fg=TEXT, width=18, anchor="w")
+                lbl_left = tk.Label(row, text=r.get("bid_no", ""), font=FB, bg=PANEL, fg=TEXT, width=18, anchor="w", cursor="hand2")
                 lbl_left.pack(side="left")
                 
-                lbl_mid = tk.Label(row, text=r.get("items", "")[:25], font=FL, bg=PANEL, fg=MUTED, anchor="w")
+                lbl_mid = tk.Label(row, text=r.get("items", "")[:25], font=FL, bg=PANEL, fg=MUTED, anchor="w", cursor="hand2")
                 lbl_mid.pack(side="left", fill="x", expand=True, padx=10)
                 
                 # Modern styled status badge
                 badge = tk.Label(row, text=status_lbl, font=("Segoe UI", 8, "bold"), bg=status_bg, fg=status_color, padx=6, pady=2)
                 badge.pack(side="right")
                 
+                # Hover highlights & click handling
+                bid_no = r.get("bid_no", "")
+                def make_hover_enter(target_row=row, left_lbl=lbl_left, mid_lbl=lbl_mid):
+                    return lambda e: [
+                        target_row.configure(bg="#21262D"),
+                        left_lbl.configure(bg="#21262D"),
+                        mid_lbl.configure(bg="#21262D")
+                    ]
+                def make_hover_leave(target_row=row, left_lbl=lbl_left, mid_lbl=lbl_mid):
+                    return lambda e: [
+                        target_row.configure(bg=PANEL),
+                        left_lbl.configure(bg=PANEL),
+                        mid_lbl.configure(bg=PANEL)
+                    ]
+                def make_click(b_no=bid_no):
+                    return lambda e: self._locate_in_table(b_no)
+
+                row.configure(cursor="hand2")
+                row.bind("<Enter>", make_hover_enter())
+                row.bind("<Leave>", make_hover_leave())
+                row.bind("<Button-1>", make_click())
+                
+                lbl_left.bind("<Enter>", make_hover_enter())
+                lbl_left.bind("<Leave>", make_hover_leave())
+                lbl_left.bind("<Button-1>", make_click())
+                
+                lbl_mid.bind("<Enter>", make_hover_enter())
+                lbl_mid.bind("<Leave>", make_hover_leave())
+                lbl_mid.bind("<Button-1>", make_click())
+
                 sep = tk.Frame(self.deadlines_inner_fr, bg="#30363D", height=1)
                 sep.pack(fill="x", padx=10)
 
@@ -212,11 +261,52 @@ class AnalyticsTabMixin:
             # Color coding: top gets bright blue, others get standard accent blue
             bar_color = "#388BFD" if idx == 0 else "#1F6FEB"
             
+            group_tag = f"bar_group_{idx}"
+            bar_tag = f"bar_line_{idx}"
+            
+            # Draw label
+            self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w", tags=(group_tag, f"text_{idx}"))
+            
             # Draw drop shadow (offset by 2px down/right)
-            self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13")
+            self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13", tags=group_tag)
             
             # Draw rounded bar
-            self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color)
+            self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color, tags=(group_tag, bar_tag))
             
             # Draw count label
-            self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w")
+            self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w", tags=(group_tag, f"count_{idx}"))
+
+            # Interactive bindings for ministries
+            def make_enter_handler(bt=bar_tag):
+                return lambda e: [
+                    self.chart_canvas.itemconfig(bt, fill="#58A6FF"),  # Bright blue glow
+                    self.chart_canvas.configure(cursor="hand2")
+                ]
+            def make_leave_handler(bt=bar_tag, col=bar_color):
+                return lambda e: [
+                    self.chart_canvas.itemconfig(bt, fill=col),
+                    self.chart_canvas.configure(cursor="")
+                ]
+            def make_click_handler(name=min_name):
+                return lambda e: self._filter_by_ministry(name)
+
+            self.chart_canvas.tag_bind(group_tag, "<Enter>", make_enter_handler())
+            self.chart_canvas.tag_bind(group_tag, "<Leave>", make_leave_handler())
+            self.chart_canvas.tag_bind(group_tag, "<Button-1>", make_click_handler())
+
+    def _filter_by_ministry(self, name):
+        self.notebook.select(self.tab_table)
+        # Reset filters to ensure the search finds it
+        if hasattr(self, "view_var"):
+            self.view_var.set("All Tenders")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "date_filter_preset_var"):
+            self.date_filter_preset_var.set("All Dates")
+            self._apply_date_filter_preset(initial=False)
+            
+        if hasattr(self, "search_var"):
+            self.search_var.set(name)
+            
+        self._refresh_table_view()
+        self._log("info", f"Filtered Table View to Ministry: '{name}'")

@@ -384,6 +384,26 @@ class CalendarTabMixin:
 
     def _locate_in_table(self, bid):
         self.notebook.select(self.tab_table)
+        
+        # Clear search and filters to ensure the target bid is actually visible in the treeview
+        filter_changed = False
+        if hasattr(self, "view_var") and self.view_var.get() != "All Tenders":
+            self.view_var.set("All Tenders")
+            filter_changed = True
+        if hasattr(self, "status_view_var") and self.status_view_var.get() != "All":
+            self.status_view_var.set("All")
+            filter_changed = True
+        if hasattr(self, "date_filter_preset_var") and self.date_filter_preset_var.get() != "All Dates":
+            self.date_filter_preset_var.set("All Dates")
+            self._apply_date_filter_preset(initial=False)
+            filter_changed = True
+        if hasattr(self, "search_var") and self.search_var.get().strip():
+            self.search_var.set("")
+            filter_changed = True
+            
+        if filter_changed:
+            self._refresh_table_view()
+            
         for iid in self.tv.get_children():
             if self.tv.set(iid, "bid_no") == bid:
                 self.tv.selection_set(iid)

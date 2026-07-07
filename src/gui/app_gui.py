@@ -31,9 +31,8 @@ from gui_analytics import AnalyticsTabMixin
 from gui_dialogs import DialogsMixin
 from gui_table_tab import TableTabMixin, DatePickerPopup
 from gui_workers import WorkersMixin
-from gui_kanban import KanbanTabMixin
 
-class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin, KanbanTabMixin):
+class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin):
     def __init__(self):
         super().__init__()
         self.title("GEM Tender Logger  v4")
@@ -81,6 +80,9 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         for o in ("Vertical","Horizontal"):
             s.configure(f"{o}.TScrollbar", background=CARD, troughcolor=BG,
                         bordercolor=BG, arrowcolor=MUTED, gripcount=0)
+            s.map(f"{o}.TScrollbar",
+                  background=[("pressed", ACCENT2), ("active", "#30363D")],
+                  arrowcolor=[("pressed", TEXT), ("active", TEXT)])
         s.configure("TProgressbar", troughcolor=CARD, background=ACCENT2,
                     bordercolor=BG, lightcolor=ACCENT2, darkcolor=ACCENT2)
         s.configure("TNotebook", background=BG, borderwidth=0)
@@ -118,6 +120,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self.fy_lbl = tk.Label(top, text="", font=FL, bg=ACCENT2, fg=TEXT, padx=10, pady=3)
         self.fy_lbl.pack(side="right", padx=(6,0))
         self._btn(top, "⚙ Settings", self._show_settings, bg=CARD).pack(side="right")
+        self._btn(top, "🏢 Manage Firms", self._show_firms_dialog, bg=CARD).pack(side="right", padx=(0, 6))
 
         # paned: left = paste+log, right = table
         pane = tk.PanedWindow(self, orient="horizontal", bg=BG,
@@ -133,7 +136,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self.paste_txt = tk.Text(left, bg=CARD, fg=TEXT, insertbackground=TEXT,
                                  relief="flat", font=FH, height=12,
                                  highlightthickness=1, highlightbackground="#30363D",
-                                 highlightcolor=ACCENT2, wrap="word", undo=True)
+                                 highlightcolor=ACCENT2, wrap="word", undo=True,
+                                 padx=8, pady=8)
         self.paste_txt.pack(fill="x")
         tk.Label(left, text="Paste one or many blocks — each starting with BID NO:",
                  font=("Segoe UI",8), bg=BG, fg=TEXTSUB).pack(anchor="w", pady=(2,4))
@@ -185,7 +189,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         log_fr.pack(fill="both", expand=True)
         self.log_txt = tk.Text(log_fr, bg=CARD, fg=TEXTSUB, relief="flat",
                                font=("Consolas",8), state="disabled", wrap="word",
-                               highlightthickness=0)
+                               highlightthickness=0, padx=8, pady=8)
         lsb = ttk.Scrollbar(log_fr, orient="vertical", command=self.log_txt.yview)
         self.log_txt.configure(yscrollcommand=lsb.set)
         lsb.pack(side="right", fill="y")
@@ -208,9 +212,6 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self.notebook.add(self.tab_table, text="  Table View  ")
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
         self.notebook.add(self.tab_analytics, text="  Analytics View  ")
-        # Board / Kanban View
-        self._build_kanban_tab()
-
         # Build Table tab layouts
         self._build_table_tab()
 
@@ -244,7 +245,9 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         hover_colors = {
             CARD: "#30363D",
             ACCENT2: "#388BFD",
-            BG: "#161B22"
+            ACCENT: "#2EA44F",  # Modern lighter green hover for the Excel button
+            BG: "#161B22",
+            "#2D333B": "#444C56"  # Modern lighter dark hover for Fetch button
         }
         hover_bg = hover_colors.get(bg, "#30363D")
         
@@ -355,7 +358,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
 
     def _on_tab_changed(self, event):
         import logger as _logger_mod
-        TAB_NAMES = ["Table View", "Calendar View", "Analytics View", "Board View"]
+        TAB_NAMES = ["Table View", "Calendar View", "Analytics View"]
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
@@ -364,11 +367,6 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
                 self._update_details()
             elif selected_tab == 2:
                 self._update_analytics()
-            elif selected_tab == 3:
-                try:
-                    self._update_kanban()
-                except Exception:
-                    pass
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -390,6 +388,24 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
     def _fy_tick(self):
         self.fy_lbl.configure(text=f"FY {financial_year(datetime.now())}")
         self.after(60000, self._fy_tick)
+
+    def _reload(self):
+        self._set_status("Reloading tenders from database...", MUTED)
+        try:
+            self._records = db.load_all_tenders()
+            self._refresh_table_view()
+            try:
+                self._update_calendar()
+                self._update_details()
+            except Exception:
+                pass
+            self._log("ok", f"Reloaded {len(self._records)} tender(s) from database.")
+            display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
+            self._set_status(f"Database: {display_path}", SUCCESS)
+        except Exception as e:
+            self._log("err", f"Failed to reload database: {e}")
+            self._set_status("Reload failed", ERR)
+        return "break"
 
     def _load_from_db(self):
         # Resolve DB path on first run
@@ -450,10 +466,6 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
                 self._log("info", f"Migrated filing_status for {len(needs_migration)} existing tender(s).")
 
             self._refresh_table_view()
-            try:
-                self._update_kanban()
-            except Exception:
-                pass
             
             # Start background embedding worker on startup
             from vector_search import start_background_embedding_worker
