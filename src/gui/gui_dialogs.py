@@ -585,9 +585,42 @@ class DialogsMixin:
             # Categories
             tk.Label(grid_fr, text="Categories:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", pady=6)
             cat_var = tk.StringVar()
-            cat_ent = tk.Entry(grid_fr, textvariable=cat_var, bg=CARD, fg=TEXT, insertbackground=TEXT, relief="flat", font=FL,
-                               highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2, width=30)
+            
+            # Retrieve existing category options
+            settings = db.load_settings()
+            mappings = settings.get("category_mappings")
+            if not mappings:
+                try:
+                    from config import CATEGORY_MAPPING
+                    mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+                except Exception:
+                    mappings = []
+            category_options = sorted(list(set(m["name"] for m in mappings if m.get("name"))))
+            
+            cat_ent = ttk.Combobox(grid_fr, textvariable=cat_var, values=category_options, font=FL, width=28)
             cat_ent.grid(row=1, column=1, sticky="w", padx=10, pady=6)
+            
+            prev_cat_val = [""]
+            
+            def on_focus_in(event):
+                prev_cat_val[0] = cat_var.get()
+                
+            cat_ent.bind("<FocusIn>", on_focus_in)
+            cat_ent.bind("<KeyRelease>", lambda e: prev_cat_val.__setitem__(0, cat_var.get()))
+            
+            def on_cat_selected(event):
+                new_sel = cat_ent.get().strip()
+                old_val = prev_cat_val[0].strip()
+                if old_val:
+                    parts = [p.strip() for p in old_val.split(",") if p.strip()]
+                    if new_sel not in parts:
+                        parts.append(new_sel)
+                    cat_var.set(", ".join(parts))
+                else:
+                    cat_var.set(new_sel)
+                prev_cat_val[0] = cat_var.get()
+                
+            cat_ent.bind("<<ComboboxSelected>>", on_cat_selected)
             
             # Locations
             tk.Label(grid_fr, text="Locations:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=6)
@@ -610,6 +643,7 @@ class DialogsMixin:
                 cat_var.set(firm_data.get("categories", ""))
                 loc_var.set(firm_data.get("locations", ""))
                 exc_var.set(firm_data.get("exclude_keywords", ""))
+                prev_cat_val[0] = firm_data.get("categories", "")
                 
             def save_form():
                 n = name_var.get().strip()
