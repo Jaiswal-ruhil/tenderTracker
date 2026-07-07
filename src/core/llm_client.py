@@ -18,6 +18,7 @@ class ClassificationResult(BaseModel):
     confidence: float = Field(description="Confidence rating from 0.0 to 1.0")
     summary: str = Field(description="Concise summary of the tender details")
     recommended: bool = Field(description="Whether to recommend bidding on this tender")
+    llm_thinking: str = Field(default="", description="Optional raw reasoning captured from <think> blocks")
 
 def calculate_bid_hash(bid_obj: dict) -> str:
     """
@@ -148,8 +149,11 @@ class LMStudioClient:
                 
                 # Use standard parser helper to strip thinking tags if present
                 import llm
+                thinking = llm.extract_thinking_block(content)
                 cleaned_json_str = llm.clean_json_response(content)
                 parsed_json = json.loads(cleaned_json_str)
+                if thinking:
+                    parsed_json["llm_thinking"] = thinking
 
                 # Ensure Pydantic validation passes
                 result = ClassificationResult(**parsed_json)

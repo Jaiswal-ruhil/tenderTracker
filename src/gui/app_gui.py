@@ -47,6 +47,8 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self._fetch_running = False
         self._scrape_running = False
         self._stop_scrape_flag = False
+        self._log_detail_seq = 0
+        self._log_detail_buttons = []
 
         # Calendar State
         self.cal_year = datetime.now().year
@@ -139,7 +141,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
                                  highlightcolor=ACCENT2, wrap="word", undo=True,
                                  padx=8, pady=8)
         self.paste_txt.pack(fill="x")
-        tk.Label(left, text="Paste one or many blocks — each starting with BID NO:",
+        tk.Label(left, text="Paste tender text, bid numbers, URLs, or local PDF paths. One item per line also works.",
                  font=("Segoe UI",8), bg=BG, fg=TEXTSUB).pack(anchor="w", pady=(2,4))
 
         # progress
@@ -153,13 +155,13 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         # buttons
         btn_row = tk.Frame(left, bg=BG)
         btn_row.pack(fill="x", pady=(4,8))
-        self._btn(btn_row, "  1a. Parse (Python)  ", lambda: self._do_parse(force_llm=False),
+        self._btn(btn_row, "Parse", lambda: self._do_parse(force_llm=False),
                   bg=ACCENT2, pad=6).pack(side="left")
-        self._btn(btn_row, "  1b. Parse (LLM)  ", lambda: self._do_parse(force_llm=True),
+        self._btn(btn_row, "Parse with AI", lambda: self._do_parse(force_llm=True),
                   bg=ACCENT, pad=6).pack(side="left", padx=6)
-        self._btn(btn_row, "  2. Fetch (Selenium)  ",
+        self._btn(btn_row, "Fetch Details",
                   self._do_fetch_all, bg=CARD, pad=6).pack(side="left")
-        self._btn(btn_row, "Clear", lambda: self.paste_txt.delete("1.0","end"),
+        self._btn(btn_row, "Clear Input", lambda: self.paste_txt.delete("1.0","end"),
                   bg=CARD).pack(side="left", padx=6)
 
 
@@ -177,12 +179,22 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
                 self._log("info", "Log copied to clipboard.")
             except Exception as e:
                 self._log("err", f"Failed to copy log: {e}")
+
+        def clear_log():
+            self.log_txt.configure(state="normal")
+            self.log_txt.delete("1.0", "end")
+            self.log_txt.configure(state="disabled")
                 
         copy_btn = tk.Button(log_hdr, text="📋 Copy", command=copy_log,
                              bg=CARD, fg=TEXTSUB, relief="flat", font=("Segoe UI", 8),
                              padx=4, pady=0, activebackground=ACCENT2, activeforeground=TEXT,
                              cursor="hand2")
         copy_btn.pack(side="right")
+        clear_btn = tk.Button(log_hdr, text="Clear", command=clear_log,
+                              bg=CARD, fg=TEXTSUB, relief="flat", font=("Segoe UI", 8),
+                              padx=6, pady=0, activebackground=ACCENT2, activeforeground=TEXT,
+                              cursor="hand2")
+        clear_btn.pack(side="right", padx=(0, 6))
 
         log_fr = tk.Frame(left, bg=CARD,
                           highlightthickness=1, highlightbackground="#30363D")
@@ -255,11 +267,11 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
         return btn
 
-    def _log(self, level, msg):
+    def _log(self, level, msg, details=None):
         import logger
-        logger.log(level, msg)
+        logger.log(level, msg, details)
 
-    def _write_to_log_widget(self, level, msg):
+    def _write_to_log_widget(self, level, msg, details=None):
         self.log_txt.configure(state="normal")
         ts = datetime.now().strftime("%H:%M:%S")
         icons = {
@@ -269,10 +281,77 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
             "info": "ℹ "
         }
         icon = icons.get(level, "")
-        self.log_txt.insert("end", f"[{ts}] {icon}{msg}\n", level)
+        self.log_txt.insert("end", f"[{ts}] {icon}{msg}", level)
+        if details and any(str(section.get("content", "")).strip() for section in details.get("sections", [])):
+            btn = tk.Button(
+                self.log_txt,
+                text="Expand",
+                command=lambda message=msg, payload=details: self._show_log_details(message, payload),
+                bg=CARD,
+                fg=TEXT,
+                relief="flat",
+                font=("Segoe UI", 8, "bold"),
+                padx=6,
+                pady=0,
+                activebackground=ACCENT2,
+                activeforeground=TEXT,
+                cursor="hand2",
+            )
+            self._log_detail_buttons.append(btn)
+            self.log_txt.insert("end", "  ")
+            self.log_txt.window_create("end", window=btn)
+        self.log_txt.insert("end", "\n")
         self.log_txt.see("end")
         self.log_txt.configure(state="disabled")
         self.update_idletasks()
+
+    def _show_log_details(self, msg, details):
+        win = tk.Toplevel(self)
+        win.title("Log Details")
+        win.configure(bg=BG)
+        win.geometry("980x720")
+        win.minsize(720, 480)
+
+        hdr = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        hdr.pack(fill="x")
+        tk.Label(hdr, text=details.get("title", "Log Details"), font=("Segoe UI", 11, "bold"), bg=PANEL, fg=TEXT).pack(anchor="w")
+        tk.Label(hdr, text=msg, font=FL, bg=PANEL, fg=MUTED, wraplength=920, justify="left").pack(anchor="w", pady=(4, 0))
+
+        body = tk.Frame(win, bg=BG, padx=10, pady=10)
+        body.pack(fill="both", expand=True)
+
+        txt = tk.Text(
+            body,
+            bg=CARD,
+            fg=TEXT,
+            insertbackground=TEXT,
+            relief="flat",
+            font=("Consolas", 9),
+            wrap="word",
+            padx=12,
+            pady=12,
+            highlightthickness=1,
+            highlightbackground="#30363D",
+        )
+        sb = ttk.Scrollbar(body, orient="vertical", command=txt.yview)
+        txt.configure(yscrollcommand=sb.set)
+        sb.pack(side="right", fill="y")
+        txt.pack(side="left", fill="both", expand=True)
+
+        txt.tag_configure("section", foreground=ACCENT2, font=("Segoe UI", 10, "bold"))
+        txt.tag_configure("body", foreground=TEXT)
+
+        first = True
+        for section in details.get("sections", []):
+            content = str(section.get("content", "")).strip()
+            if not content:
+                continue
+            if not first:
+                txt.insert("end", "\n\n", "body")
+            first = False
+            txt.insert("end", f"{section.get('label', 'Details')}\n", "section")
+            txt.insert("end", f"{content}\n", "body")
+        txt.configure(state="disabled")
 
     def _poll_log_queue(self):
         import logger
@@ -280,8 +359,13 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
             logger.update_heartbeat()  # keep watchdog informed the main thread is alive
             while not logger.log_queue.empty():
                 try:
-                    level, msg = logger.log_queue.get_nowait()
-                    self._write_to_log_widget(level, msg)
+                    payload = logger.log_queue.get_nowait()
+                    if isinstance(payload, tuple) and len(payload) == 3:
+                        level, msg, details = payload
+                    else:
+                        level, msg = payload
+                        details = None
+                    self._write_to_log_widget(level, msg, details)
                 except Exception:
                     break
             self.after(50, self._poll_log_queue)

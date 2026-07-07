@@ -13,6 +13,18 @@ _local_llm_lock = threading.RLock()
 _chat_route_cache = {}
 _embed_route_cache = {}
 
+
+def extract_thinking_block(text):
+    """
+    Extract model reasoning emitted inside <think>...</think> blocks.
+    Returns a plain text string or an empty string when unavailable.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    matches = re.findall(r"<think>\s*([\s\S]*?)\s*</think>", text, flags=re.IGNORECASE)
+    cleaned = [m.strip() for m in matches if m and m.strip()]
+    return "\n\n".join(cleaned)
+
 def normalize_local_service_key(base_url):
     return (base_url or "http://localhost:1234").strip().rstrip("/")
 
@@ -947,8 +959,11 @@ Provide ONLY the valid JSON object in response.
 """
     try:
         response_text = call_llm(prompt, provider, api_key, base_url, model, response_json=True)
+        thinking = extract_thinking_block(response_text)
         cleaned_json_str = clean_json_response(response_text)
         parsed_dict = json.loads(cleaned_json_str)
+        if thinking:
+            parsed_dict["_llm_thinking"] = thinking
         return parsed_dict
     except Exception as e:
         logger.log("err", f"LLM parsing failed: {e}")

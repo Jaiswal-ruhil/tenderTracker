@@ -135,6 +135,7 @@ class TestPerfRefactor(unittest.TestCase):
         self.assertEqual(result.bid_no, "GEM/2026/B/888888")
         self.assertEqual(result.subcategory, "Oxygen")
         self.assertTrue(result.recommended)
+        self.assertIn("matching Oxygen Cylinders", result.llm_thinking)
         
         # Verify classification was stored in DB classifications table
         stored = db.get_classification("GEM/2026/B/888888")

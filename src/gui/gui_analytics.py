@@ -11,14 +11,14 @@ class AnalyticsTabMixin:
         container = tk.Frame(self.tab_analytics, bg=BG)
         container.pack(fill="both", expand=True, padx=15, pady=15)
         
-        # Grid layout for cards
+        # Grid layout for cards (5 columns)
         cards_fr = tk.Frame(container, bg=BG)
         cards_fr.pack(fill="x", pady=(0, 15))
         
-        for col in range(4):
+        for col in range(5):
             cards_fr.columnconfigure(col, weight=1)
             
-        def make_card(parent, col, title, color):
+        def make_card(parent, col, title, color, on_click=None):
             card = tk.Frame(parent, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
             card.grid(row=0, column=col, padx=6, sticky="nsew")
             lbl_title = tk.Label(card, text=title, font=FL, bg=PANEL, fg=MUTED)
@@ -43,36 +43,54 @@ class AnalyticsTabMixin:
             lbl_title.bind("<Leave>", on_leave)
             lbl_val.bind("<Enter>", on_enter)
             lbl_val.bind("<Leave>", on_leave)
+
+            if on_click:
+                for widget in (card, lbl_title, lbl_val):
+                    widget.configure(cursor="hand2")
+                    widget.bind("<Button-1>", lambda e, fn=on_click: fn())
             
             return lbl_val
 
-        self.lbl_total_tenders = make_card(cards_fr, 0, "Total Tenders", TEXT)
-        self.lbl_matching_wants = make_card(cards_fr, 1, "Matching Wants", SUCCESS)
-        self.lbl_filtered_dont_wants = make_card(cards_fr, 2, "Filtered Don't Wants", ERR)
-        self.lbl_not_filed = make_card(cards_fr, 3, "Not Filed Wants", WARN)
+        self.lbl_total_tenders = make_card(cards_fr, 0, "Total Tenders", TEXT, self._show_all_tenders)
+        self.lbl_matching_wants = make_card(cards_fr, 1, "Matching Wants", SUCCESS, self._show_matching_wants)
+        self.lbl_filtered_dont_wants = make_card(cards_fr, 2, "Filtered Don't Wants", ERR, self._show_filtered_dont_wants)
+        self.lbl_not_filed = make_card(cards_fr, 3, "Not Filed Wants", WARN, self._show_not_filed_wants)
+        self.lbl_firm_matched = make_card(cards_fr, 4, "Firm Matched Tenders", "#84D2FF", self._show_firm_matched)
         
-        # Bottom half
-        bottom_fr = tk.Frame(container, bg=BG)
-        bottom_fr.pack(fill="both", expand=True)
+        # Middle row for charts (Ministries & Firms side-by-side)
+        middle_fr = tk.Frame(container, bg=BG)
+        middle_fr.pack(fill="x", pady=(0, 15))
         
-        bottom_fr.columnconfigure(0, weight=1)
-        bottom_fr.columnconfigure(1, weight=1)
-        bottom_fr.rowconfigure(0, weight=1)
+        middle_fr.columnconfigure(0, weight=1)
+        middle_fr.columnconfigure(1, weight=1)
         
         # Left Panel: Top Ministries Chart
-        chart_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
+        chart_fr = tk.Frame(middle_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
         chart_fr.grid(row=0, column=0, padx=(0, 6), sticky="nsew")
         tk.Label(chart_fr, text="Top Ministries / Departments", font=FT, bg=PANEL, fg=TEXT).pack(anchor="w", pady=(0, 10))
         
-        self.chart_canvas = tk.Canvas(chart_fr, bg=PANEL, highlightthickness=0, height=260)
+        self.chart_canvas = tk.Canvas(chart_fr, bg=PANEL, highlightthickness=0, height=180)
         self.chart_canvas.pack(fill="both", expand=True)
         
         # Bind Configure event to make the chart canvas responsive!
         self.chart_canvas.bind("<Configure>", lambda e: self._redraw_chart())
         
-        # Right Panel: Upcoming Deadlines
+        # Right Panel: Firm Matching Chart
+        firm_fr = tk.Frame(middle_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
+        firm_fr.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
+        tk.Label(firm_fr, text="Tenders Matched per Firm", font=FT, bg=PANEL, fg=TEXT).pack(anchor="w", pady=(0, 10))
+        
+        self.firm_chart_canvas = tk.Canvas(firm_fr, bg=PANEL, highlightthickness=0, height=180)
+        self.firm_chart_canvas.pack(fill="both", expand=True)
+        
+        self.firm_chart_canvas.bind("<Configure>", lambda e: self._redraw_firm_chart())
+        
+        # Bottom row: Upcoming Deadlines (Full Width)
+        bottom_fr = tk.Frame(container, bg=BG)
+        bottom_fr.pack(fill="both", expand=True)
+        
         deadlines_fr = tk.Frame(bottom_fr, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=15, pady=12)
-        deadlines_fr.grid(row=0, column=1, padx=(6, 0), sticky="nsew")
+        deadlines_fr.pack(fill="both", expand=True)
         tk.Label(deadlines_fr, text="Upcoming Deadlines (Wants)", font=FT, bg=PANEL, fg=TEXT).pack(anchor="w", pady=(0, 10))
         
         self.deadlines_scroll = ttk.Scrollbar(deadlines_fr, orient="vertical")
@@ -110,12 +128,14 @@ class AnalyticsTabMixin:
         self.deadlines_list.pack(side="left", fill="both", expand=True)
 
         self._last_ministry_data = []
+        self._last_firm_data = []
 
     def _update_analytics(self):
         total = len(self._records)
         wants = 0
         dont_wants = 0
         not_filed = 0
+        firm_matched = 0
         
         settings = db.load_settings()
         inc_raw = settings.get("include_keywords", "")
@@ -124,6 +144,13 @@ class AnalyticsTabMixin:
         exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
         
         ministry_counts = {}
+        firm_counts = {}
+        
+        # Pre-populate firm counts list from settings so we show all configured firms
+        firms_settings = settings.get("firms", [])
+        for f in firms_settings:
+            firm_counts[f["name"]] = 0
+            
         upcoming_deadlines = []
         
         for r in self._records:
@@ -144,14 +171,23 @@ class AnalyticsTabMixin:
             min_name = r.get("ministry", "").strip() or "Unknown Ministry"
             ministry_counts[min_name] = ministry_counts.get(min_name, 0) + 1
             
+            # Count firm matches
+            matched_f = r.get("matched_firm", "").strip()
+            if matched_f:
+                firm_matched += 1
+                firm_counts[matched_f] = firm_counts.get(matched_f, 0) + 1
+            
         self.lbl_total_tenders.configure(text=str(total))
         self.lbl_matching_wants.configure(text=str(wants))
         self.lbl_filtered_dont_wants.configure(text=str(dont_wants))
         self.lbl_not_filed.configure(text=str(not_filed))
+        self.lbl_firm_matched.configure(text=str(firm_matched))
         
-        # Save last ministry count sorted list for redrawing on configure
+        # Save counts sorted lists for redrawing on configure
         self._last_ministry_data = sorted(ministry_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+        self._last_firm_data = sorted(firm_counts.items(), key=lambda x: x[1], reverse=True)[:5]
         self._redraw_chart()
+        self._redraw_firm_chart()
 
         # Update deadlines
         for child in self.deadlines_inner_fr.winfo_children():
@@ -228,12 +264,11 @@ class AnalyticsTabMixin:
     def _redraw_chart(self):
         self.chart_canvas.delete("all")
         if not self._last_ministry_data:
-            self.chart_canvas.create_text(150, 100, text="No ministry data available", fill=MUTED, font=FL)
+            self.chart_canvas.create_text(150, 80, text="No ministry data available", fill=MUTED, font=FL)
             return
 
         max_count = self._last_ministry_data[0][1]
         canvas_w = self.chart_canvas.winfo_width()
-        # If canvas is not yet initialized or zero size, default to 320
         if canvas_w < 50:
             canvas_w = 320
             
@@ -243,20 +278,12 @@ class AnalyticsTabMixin:
         for ratio in [0.25, 0.5, 0.75, 1.0]:
             grid_x = 130 + int(ratio * bar_max_w)
             grid_val = int(ratio * max_count)
-            # Draw vertical grid line
-            self.chart_canvas.create_line(grid_x, 15, grid_x, 240, fill="#21262D", dash=(3, 3))
-            # Label at bottom
-            self.chart_canvas.create_text(grid_x, 248, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
+            self.chart_canvas.create_line(grid_x, 15, grid_x, 160, fill="#21262D", dash=(3, 3))
+            self.chart_canvas.create_text(grid_x, 168, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
             
         for idx, (min_name, count) in enumerate(self._last_ministry_data):
-            y_offset = idx * 46 + 32
+            y_offset = idx * 30 + 26
             disp_name = min_name[:18] + "..." if len(min_name) > 18 else min_name
-            
-            # Draw label
-            self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w")
-            
-            bar_w = int((count / max_count) * bar_max_w)
-            bar_w = max(4, bar_w)
             
             # Color coding: top gets bright blue, others get standard accent blue
             bar_color = "#388BFD" if idx == 0 else "#1F6FEB"
@@ -266,12 +293,15 @@ class AnalyticsTabMixin:
             
             # Draw label
             self.chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w", tags=(group_tag, f"text_{idx}"))
-            
+
+            bar_w = int((count / max_count) * bar_max_w)
+            bar_w = max(4, bar_w)
+
             # Draw drop shadow (offset by 2px down/right)
-            self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=18, capstyle="round", fill="#090D13", tags=group_tag)
+            self.chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=12, capstyle="round", fill="#090D13", tags=group_tag)
             
             # Draw rounded bar
-            self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=18, capstyle="round", fill=bar_color, tags=(group_tag, bar_tag))
+            self.chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=12, capstyle="round", fill=bar_color, tags=(group_tag, bar_tag))
             
             # Draw count label
             self.chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w", tags=(group_tag, f"count_{idx}"))
@@ -294,6 +324,68 @@ class AnalyticsTabMixin:
             self.chart_canvas.tag_bind(group_tag, "<Leave>", make_leave_handler())
             self.chart_canvas.tag_bind(group_tag, "<Button-1>", make_click_handler())
 
+    def _redraw_firm_chart(self):
+        self.firm_chart_canvas.delete("all")
+        if not self._last_firm_data:
+            self.firm_chart_canvas.create_text(150, 80, text="No firm matching data available", fill=MUTED, font=FL)
+            return
+
+        max_count = max([val for name, val in self._last_firm_data] + [1])
+        canvas_w = self.firm_chart_canvas.winfo_width()
+        if canvas_w < 50:
+            canvas_w = 320
+            
+        bar_max_w = max(100, canvas_w - 220)
+        
+        # Draw background grid lines and labels
+        for ratio in [0.25, 0.5, 0.75, 1.0]:
+            grid_x = 130 + int(ratio * bar_max_w)
+            grid_val = int(ratio * max_count)
+            self.firm_chart_canvas.create_line(grid_x, 15, grid_x, 160, fill="#21262D", dash=(3, 3))
+            self.firm_chart_canvas.create_text(grid_x, 168, text=str(grid_val), fill=MUTED, font=("Segoe UI", 8))
+            
+        for idx, (firm_name, count) in enumerate(self._last_firm_data):
+            y_offset = idx * 30 + 26
+            disp_name = firm_name[:18] + "..." if len(firm_name) > 18 else firm_name
+            
+            bar_color = "#3FB950" if idx == 0 and count > 0 else "#84D2FF"
+            
+            group_tag = f"firm_bar_group_{idx}"
+            bar_tag = f"firm_bar_line_{idx}"
+            
+            # Draw label
+            self.firm_chart_canvas.create_text(10, y_offset, text=disp_name, fill=TEXT, font=FL, anchor="w", tags=(group_tag, f"firm_text_{idx}"))
+            
+            bar_w = int((count / max_count) * bar_max_w)
+            bar_w = max(4, bar_w)
+            
+            # Draw drop shadow
+            self.firm_chart_canvas.create_line(132, y_offset + 2, 132 + bar_w, y_offset + 2, width=12, capstyle="round", fill="#090D13", tags=group_tag)
+            
+            # Draw rounded bar
+            self.firm_chart_canvas.create_line(130, y_offset, 130 + bar_w, y_offset, width=12, capstyle="round", fill=bar_color, tags=(group_tag, bar_tag))
+            
+            # Draw count label
+            self.firm_chart_canvas.create_text(130 + bar_w + 12, y_offset, text=str(count), fill=TEXT, font=FB, anchor="w", tags=(group_tag, f"firm_count_{idx}"))
+
+            # Interactive bindings for firms
+            def make_enter_handler(bt=bar_tag):
+                return lambda e: [
+                    self.firm_chart_canvas.itemconfig(bt, fill="#A5E2FF"),
+                    self.firm_chart_canvas.configure(cursor="hand2")
+                ]
+            def make_leave_handler(bt=bar_tag, col=bar_color):
+                return lambda e: [
+                    self.firm_chart_canvas.itemconfig(bt, fill=col),
+                    self.firm_chart_canvas.configure(cursor="")
+                ]
+            def make_click_handler(name=firm_name):
+                return lambda e: self._filter_by_firm(name)
+
+            self.firm_chart_canvas.tag_bind(group_tag, "<Enter>", make_enter_handler())
+            self.firm_chart_canvas.tag_bind(group_tag, "<Leave>", make_leave_handler())
+            self.firm_chart_canvas.tag_bind(group_tag, "<Button-1>", make_click_handler())
+
     def _filter_by_ministry(self, name):
         self.notebook.select(self.tab_table)
         # Reset filters to ensure the search finds it
@@ -310,3 +402,85 @@ class AnalyticsTabMixin:
             
         self._refresh_table_view()
         self._log("info", f"Filtered Table View to Ministry: '{name}'")
+
+    def _show_all_tenders(self):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("All Tenders")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "search_var"):
+            self.search_var.set("")
+        if hasattr(self, "date_filter_preset_var"):
+            self.date_filter_preset_var.set("All Dates")
+            self._apply_date_filter_preset(initial=False)
+        self._refresh_table_view()
+        self._log("info", "Filtered Table View to all tenders.")
+
+    def _show_matching_wants(self):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("Wants (Matches)")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "search_var"):
+            self.search_var.set("")
+        self._refresh_table_view()
+        self._log("info", "Filtered Table View to matching wants.")
+
+    def _show_filtered_dont_wants(self):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("Don't Wants (Filtered)")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "search_var"):
+            self.search_var.set("")
+        self._refresh_table_view()
+        self._log("info", "Filtered Table View to filtered don't wants.")
+
+    def _show_not_filed_wants(self):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("Wants (Matches)")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("To Be Filed")
+        if hasattr(self, "search_var"):
+            self.search_var.set("")
+        self._refresh_table_view()
+        self._log("info", "Filtered Table View to wants not yet filed.")
+
+    def _show_firm_matched(self):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("All Tenders")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "search_var"):
+            self.search_var.set("")
+        self._refresh_table_view()
+        # Limit to firm-matched rows by selecting them visually for now.
+        matched_rows = []
+        for iid in self.tv.get_children():
+            if self.tv.set(iid, "matched_firm").strip():
+                matched_rows.append(iid)
+        if matched_rows:
+            self.tv.selection_set(matched_rows)
+            self.tv.see(matched_rows[0])
+        self._log("info", "Highlighted firm-matched tenders in Table View.")
+
+    def _filter_by_firm(self, name):
+        self.notebook.select(self.tab_table)
+        if hasattr(self, "view_var"):
+            self.view_var.set("All Tenders")
+        if hasattr(self, "status_view_var"):
+            self.status_view_var.set("All")
+        if hasattr(self, "date_filter_preset_var"):
+            self.date_filter_preset_var.set("All Dates")
+            self._apply_date_filter_preset(initial=False)
+            
+        if hasattr(self, "search_var"):
+            self.search_var.set(name)
+            
+        self._refresh_table_view()
+        self._log("info", f"Filtered Table View to Firm: '{name}'")

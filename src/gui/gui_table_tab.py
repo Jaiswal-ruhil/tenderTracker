@@ -304,6 +304,18 @@ class CellTooltip:
 
 
 class TableTabMixin:
+    def _firm_multi_values(self, value):
+        if isinstance(value, list):
+            raw_items = value
+        else:
+            raw_items = str(value or "").split(",")
+        items = []
+        for item in raw_items:
+            cleaned = str(item).strip()
+            if cleaned:
+                items.append(cleaned)
+        return items
+
     def _build_table_tab(self):
         # Table Tab Header (formerly right header)
         hdr = tk.Frame(self.tab_table, bg=BG)
@@ -317,8 +329,23 @@ class TableTabMixin:
         self._btn(hdr,"Delete Selected", self._del_sel, bg=CARD, fg=ERR).pack(side="right",padx=2)
         self._btn(hdr,"  Fetch Selected (Selenium)  ",
                   self._do_fetch_sel, bg="#2D333B").pack(side="right",padx=2)
+        self._btn(hdr,"  Process Local PDFs  ",
+                  self._do_process_local_pdfs, bg="#2D333B").pack(side="right",padx=2)
         self._btn(hdr,"  Save Selected to Excel  ",
                   self._save_selected, bg=ACCENT, pad=10).pack(side="right",padx=(6,2))
+
+        summary_fr = tk.Frame(self.tab_table, bg=PANEL, padx=10, pady=6,
+                              highlightthickness=1, highlightbackground="#30363D")
+        summary_fr.pack(fill="x", pady=(0, 6))
+        self.table_summary_lbl = tk.Label(
+            summary_fr,
+            text="Visible: 0   Wants: 0   Not Filed: 0   Firm Matched: 0",
+            font=("Segoe UI", 8, "bold"),
+            bg=PANEL,
+            fg=TEXTSUB,
+            anchor="w"
+        )
+        self.table_summary_lbl.pack(fill="x")
 
         # ── Filter & Refine Bar ──────────────────────────────────────────────
         filter_fr = tk.Frame(self.tab_table, bg=PANEL, padx=10, pady=6,
@@ -460,6 +487,17 @@ class TableTabMixin:
         detail_title = tk.Label(self.detail_panel, text="TENDER DETAILS", font=FT, bg=PANEL, fg=TEXT)
         detail_title.pack(anchor="w", pady=(0, 6))
 
+        self.detail_meta_lbl = tk.Label(
+            self.detail_panel,
+            text="No tender selected",
+            font=("Segoe UI", 8, "bold"),
+            bg=PANEL,
+            fg=MUTED,
+            anchor="w",
+            justify="left"
+        )
+        self.detail_meta_lbl.pack(fill="x", pady=(0, 8))
+
         # PDF Control Frame
         self.pdf_frame = tk.Frame(self.detail_panel, bg=PANEL)
         self.pdf_frame.pack(fill="x", pady=(0, 8))
@@ -475,6 +513,19 @@ class TableTabMixin:
         
         self.btn_unlink_pdf = self._btn(self.pdf_frame, "❌", self._unlink_associated_pdf, bg=CARD)
         self.btn_unlink_pdf.pack(side="right", padx=2)
+
+        self.detail_actions_fr = tk.Frame(self.detail_panel, bg=PANEL)
+        self.detail_actions_fr.pack(fill="x", pady=(0, 10))
+        self.btn_detail_want = self._btn(self.detail_actions_fr, "Keep", self._mark_selected_want, bg=CARD)
+        self.btn_detail_want.pack(side="left", padx=(0, 6))
+        self.btn_detail_dont_want = self._btn(self.detail_actions_fr, "Ignore", self._mark_selected_dont_want, bg=CARD, fg=ERR)
+        self.btn_detail_dont_want.pack(side="left", padx=6)
+        self.btn_detail_reset = self._btn(self.detail_actions_fr, "Reset Tag", self._reset_selected_tag, bg=CARD)
+        self.btn_detail_reset.pack(side="left", padx=6)
+        self.btn_detail_fetch = self._btn(self.detail_actions_fr, "Fetch Selected", self._do_fetch_sel, bg=CARD)
+        self.btn_detail_fetch.pack(side="right", padx=(6, 0))
+        self.btn_detail_filed = self._btn(self.detail_actions_fr, "Mark Filed", lambda: self._set_selected_filing_status("Filed"), bg=ACCENT2)
+        self.btn_detail_filed.pack(side="right", padx=(6, 0))
 
         # Detail Scrollable Text widget
         txt_fr = tk.Frame(self.detail_panel, bg=PANEL)
@@ -974,8 +1025,7 @@ class TableTabMixin:
                     continue
                     
                 # 2. Categories (Include Keywords)
-                cat_raw = firm.get("categories", "")
-                cat_list = [k.strip().lower() for k in cat_raw.split(",") if k.strip()]
+                cat_list = [k.lower() for k in self._firm_multi_values(firm.get("categories", []))]
                 cat_match = False
                 if cat_list:
                     for kw in cat_list:
@@ -1112,6 +1162,9 @@ class TableTabMixin:
             records_to_render = matched_recs
         
         visible_count = 0
+        visible_wants = 0
+        visible_not_filed = 0
+        visible_firm_matched = 0
         for rec in records_to_render:
             is_want = self._get_tender_status(rec, inc_kws, exc_kws)
             rec["is_want_derived"] = is_want
@@ -1156,9 +1209,18 @@ class TableTabMixin:
                     
             self._tv_insert(rec)
             visible_count += 1
+            if is_want:
+                visible_wants += 1
+                if rec.get("filing_status", "Not Filed") == "Not Filed":
+                    visible_not_filed += 1
+            if rec.get("matched_firm", "").strip():
+                visible_firm_matched += 1
             
         self._refresh_alt()
         self.count_lbl.configure(text=f"{visible_count} visible / {len(self._records)} total")
+        self.table_summary_lbl.configure(
+            text=f"Visible: {visible_count}   Wants: {visible_wants}   Not Filed: {visible_not_filed}   Firm Matched: {visible_firm_matched}"
+        )
 
     def _show_context_menu(self, event):
         region = self.tv.identify_region(event.x, event.y)
@@ -1400,11 +1462,23 @@ class TableTabMixin:
         self.detail_txt.delete("1.0", "end")
         self.detail_txt.insert("end", "\n\nSelect a tender from the table to view its full details here.", "value")
         self.detail_txt.configure(state="disabled")
+
+        if hasattr(self, "detail_meta_lbl"):
+            self.detail_meta_lbl.configure(text="No tender selected", fg=MUTED)
         
         if hasattr(self, "pdf_lbl"):
             self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
             self.btn_open_pdf.configure(state="disabled")
             self.btn_unlink_pdf.configure(state="disabled")
+            for btn in (
+                getattr(self, "btn_detail_want", None),
+                getattr(self, "btn_detail_dont_want", None),
+                getattr(self, "btn_detail_reset", None),
+                getattr(self, "btn_detail_fetch", None),
+                getattr(self, "btn_detail_filed", None),
+            ):
+                if btn:
+                    btn.configure(state="disabled")
 
     def _on_treeview_select(self, event):
         sel = self.tv.selection()
@@ -1437,6 +1511,35 @@ class TableTabMixin:
             self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
             self.btn_open_pdf.configure(state="disabled")
             self.btn_unlink_pdf.configure(state="disabled")
+
+        for btn in (
+            getattr(self, "btn_detail_want", None),
+            getattr(self, "btn_detail_dont_want", None),
+            getattr(self, "btn_detail_reset", None),
+            getattr(self, "btn_detail_fetch", None),
+            getattr(self, "btn_detail_filed", None),
+        ):
+            if btn:
+                btn.configure(state="normal")
+
+        status_bits = []
+        if rec.get("matched_firm", "").strip():
+            status_bits.append(f"Firm: {rec.get('matched_firm')}")
+        status_bits.append(f"Status: {rec.get('filing_status', 'Not Filed') or 'Not Filed'}")
+        if rec.get("is_want") is True:
+            status_text = "Marked Keep"
+            status_color = SUCCESS
+        elif rec.get("is_want") is False:
+            status_text = "Marked Ignore"
+            status_color = ERR
+        elif rec.get("is_want_derived", True):
+            status_text = "Auto Match"
+            status_color = ACCENT2
+        else:
+            status_text = "Filtered Out"
+            status_color = WARN
+        status_bits.insert(0, status_text)
+        self.detail_meta_lbl.configure(text="   |   ".join(status_bits), fg=status_color)
 
         self.detail_txt.configure(state="normal")
         self.detail_txt.delete("1.0", "end")
@@ -1527,7 +1630,7 @@ class TableTabMixin:
         firms = settings.get("firms", [])
         for firm in firms:
             # 1. Categories
-            for kw in [k.strip() for k in firm.get("categories", "").split(",") if k.strip()]:
+            for kw in self._firm_multi_values(firm.get("categories", [])):
                 start = "1.0"
                 while True:
                     pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)

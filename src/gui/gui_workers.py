@@ -60,6 +60,20 @@ def _format_eta(seconds):
 
 
 class WorkersMixin:
+    def _build_log_details(self, title, pdf_markdown="", llm_thinking="", extra_sections=None):
+        sections = []
+        if pdf_markdown and str(pdf_markdown).strip():
+            sections.append({"label": "PDF Markdown", "content": pdf_markdown})
+        if llm_thinking and str(llm_thinking).strip():
+            sections.append({"label": "LLM Thinking", "content": llm_thinking})
+        for section in extra_sections or []:
+            content = str(section.get("content", "")).strip()
+            if content:
+                sections.append({"label": section.get("label", "Details"), "content": content})
+        if not sections:
+            return None
+        return {"title": title, "sections": sections}
+
     def _do_parse(self, force_llm=None):
         raw = self.paste_txt.get("1.0","end").strip()
         if not raw: self._log("warn","Paste area is empty."); return
@@ -181,7 +195,12 @@ class WorkersMixin:
                                     rec = parse_one(md_text, allow_llm=False)
                                 if rec.get("bid_no"):
                                     rec["pdf_path"] = os.path.abspath(blk)
-                                    self.after(0, lambda b=rec['bid_no']: self._log("ok", f"Parsed PDF {b}"))
+                                    details = self._build_log_details(
+                                        "Parsed PDF",
+                                        pdf_markdown=md_text,
+                                        llm_thinking=rec.get("_llm_thinking", ""),
+                                    )
+                                    self.after(0, lambda b=rec['bid_no'], d=details: self._log("ok", f"Parsed PDF {b}", d))
                                     return rec
                                 else:
                                     self.after(0, lambda f=blk: self._log("warn", f"Failed to find Bid Number in PDF: {os.path.basename(f)}"))
@@ -298,7 +317,12 @@ class WorkersMixin:
                                         f"  - Dept: {pdf_rec.get('dept', 'N/A')}\n"
                                         f"  - End Date: {pdf_rec.get('end_date', 'N/A')}"
                                     )
-                                    self.after(0, lambda m=msg: self._log("ok", m))
+                                    details = self._build_log_details(
+                                        "Downloaded PDF Parse",
+                                        pdf_markdown=md_text,
+                                        llm_thinking=pdf_rec.get("_llm_thinking", ""),
+                                    )
+                                    self.after(0, lambda m=msg, d=details: self._log("ok", m, d))
                                     return pdf_rec
                                 else:
                                     self.after(0, lambda: self._log("err", f"Failed to download PDF for {bid_no or bid_url}"))
@@ -377,6 +401,16 @@ class WorkersMixin:
                                     res = classified_by_bid[bid_no]
                                     r["is_want_derived"] = 1 if res.recommended else 0
                                     r["remarks"] = f"AI Classification: {res.category} / {res.subcategory}\nRelevance Score: {res.confidence}\nSummary: {res.summary}"
+                                    r["_classification_llm_thinking"] = res.llm_thinking
+                                    details = self._build_log_details(
+                                        "AI Classification",
+                                        llm_thinking=res.llm_thinking,
+                                        extra_sections=[{
+                                            "label": "Classification Summary",
+                                            "content": r["remarks"],
+                                        }],
+                                    )
+                                    self.after(0, lambda b=bid_no, d=details: self._log("ok", f"AI classified {b}", d))
                         finally:
                             loop.run_until_complete(client.close())
                             loop.close()
@@ -794,6 +828,16 @@ class WorkersMixin:
                                 res = classified_by_bid[bid_no]
                                 r["is_want_derived"] = 1 if res.recommended else 0
                                 r["remarks"] = f"AI Classification: {res.category} / {res.subcategory}\nRelevance Score: {res.confidence}\nSummary: {res.summary}"
+                                r["_classification_llm_thinking"] = res.llm_thinking
+                                details = self._build_log_details(
+                                    "AI Classification",
+                                    llm_thinking=res.llm_thinking,
+                                    extra_sections=[{
+                                        "label": "Classification Summary",
+                                        "content": r["remarks"],
+                                    }],
+                                )
+                                self.after(0, lambda b=bid_no, d=details: self._log("ok", f"AI classified {b}", d))
                                 
                                 # Update UI and Database with final LLM result
                                 iid = iid_map.get(bid_no)
@@ -833,3 +877,173 @@ class WorkersMixin:
             self.after(0, fetch_finished)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _do_process_local_pdfs(self):
+        """Finds tender PDFs in Downloads, moves them to D:\\gem tenders, parses un-evaluated ones, and updates the database."""
+        if self._fetch_running or self._scrape_running:
+            self._log("warn", "A fetch or scrape is currently running. Please wait.")
+            return
+
+        def worker():
+            import shutil
+            self.after(0, lambda: self._log("info", "--- Local PDF Process Started ---"))
+            
+            downloads_dir = os.path.join(os.path.expanduser("~"), "Downloads")
+            dest_dir = r"D:\gem tenders"
+            
+            # Create dest_dir if not exists
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except Exception as e:
+                self.after(0, lambda: self._log("err", f"Failed to create directory {dest_dir}: {e}"))
+                self.after(0, lambda: self._set_prog(0, "Process Failed"))
+                self._fetch_running = False
+                return
+
+            moved_files = []
+            if os.path.exists(downloads_dir):
+                self.after(0, lambda: self._log("info", f"Scanning {downloads_dir} for new tender PDFs..."))
+                for filename in os.listdir(downloads_dir):
+                    if filename.lower().startswith("gem-bidding-") and filename.lower().endswith(".pdf"):
+                        src_path = os.path.join(downloads_dir, filename)
+                        dest_path = os.path.join(dest_dir, filename)
+                        try:
+                            # Move file. If exists, it will overwrite
+                            if os.path.exists(dest_path):
+                                os.remove(dest_path)
+                            shutil.move(src_path, dest_path)
+                            moved_files.append(filename)
+                            self.after(0, lambda f=filename: self._log("ok", f"Moved {f} to {dest_dir}"))
+                        except Exception as move_err:
+                            self.after(0, lambda f=filename, err=move_err: self._log("err", f"Failed to move {f}: {err}"))
+            
+            self.after(0, lambda: self._log("info", f"Moved {len(moved_files)} PDF(s) to {dest_dir}."))
+
+            # Now, scan D:\gem tenders for un-evaluated PDFs
+            self.after(0, lambda: self._log("info", f"Scanning {dest_dir} for un-evaluated PDFs..."))
+            
+            all_pdfs = []
+            if os.path.exists(dest_dir):
+                for filename in os.listdir(dest_dir):
+                    if filename.lower().endswith(".pdf"):
+                        all_pdfs.append(os.path.join(dest_dir, filename))
+
+            if not all_pdfs:
+                self.after(0, lambda: self._log("info", "No PDFs found to parse."))
+                self.after(0, lambda: self._set_prog(100, "Done"))
+                self._fetch_running = False
+                return
+
+            # Load all tenders to find which are not evaluated or not linked
+            records = db.load_all_tenders()
+            # Map of normalized pdf path to record
+            linked_paths = {}
+            for r in records:
+                path = r.get("pdf_path")
+                if path:
+                    linked_paths[os.path.normpath(os.path.abspath(path))] = r
+
+            # Find un-evaluated PDFs: PDFs that are not in linked_paths
+            unevaluated_pdfs = []
+            for pdf_path in all_pdfs:
+                norm_pdf = os.path.normpath(os.path.abspath(pdf_path))
+                if norm_pdf not in linked_paths:
+                    unevaluated_pdfs.append(pdf_path)
+
+            total_unevaluated = len(unevaluated_pdfs)
+            self.after(0, lambda: self._log("info", f"Found {total_unevaluated} un-evaluated PDF(s) to process."))
+            
+            if total_unevaluated == 0:
+                self.after(0, lambda: self._log("ok", "All PDFs are already evaluated."))
+                self.after(0, lambda: self._set_prog(100, "Done"))
+                self._fetch_running = False
+                return
+
+            # Load settings for LLM parsing if configured
+            settings = db.load_settings()
+            provider = settings.get("llm_provider", "Disabled")
+            use_llm = settings.get("llm_use_parsing", False)
+            api_key = settings.get("llm_api_key", "")
+            base_url = settings.get("llm_base_url", "")
+            model = settings.get("llm_model", "")
+
+            parsed_count = 0
+            for pdf_path in unevaluated_pdfs:
+                filename = os.path.basename(pdf_path)
+                self.after(0, lambda f=filename: self._log("info", f"Parsing PDF: {f}..."))
+                
+                try:
+                    reader = pypdf.PdfReader(pdf_path)
+                    pdf_text = ""
+                    for page in reader.pages:
+                        t = page.extract_text()
+                        if t:
+                            pdf_text += t + "\n"
+                    
+                    md_text = convert_pdf_text_to_markdown(pdf_text)
+                    
+                    pdf_rec = None
+                    if provider != "Disabled" and use_llm:
+                        try:
+                            pdf_rec = _llm_module.llm_parse_tender(md_text, provider, api_key, base_url, model)
+                        except Exception as ex:
+                            self.after(0, lambda f=filename, err=ex: self._log("err", f"LLM parsing failed for {f}, falling back to regex: {err}"))
+                    
+                    if not pdf_rec:
+                        pdf_rec = parse_one(md_text, allow_llm=False)
+
+                    if pdf_rec and pdf_rec.get("bid_no"):
+                        bid_no = pdf_rec["bid_no"]
+                        pdf_rec["pdf_path"] = os.path.abspath(pdf_path)
+                        pdf_rec["is_fetched"] = True
+                        
+                        db.upsert_tender(pdf_rec)
+                        details = self._build_log_details(
+                            "Local PDF Parse",
+                            pdf_markdown=md_text,
+                            llm_thinking=pdf_rec.get("_llm_thinking", ""),
+                        )
+                        self.after(0, lambda b=bid_no, d=details: self._log("ok", f"Successfully parsed and updated {b} in database.", d))
+                    else:
+                        # Fallback if no bid number could be parsed from PDF text
+                        # Infer bid number from filename pattern (e.g. GeM-Bidding-9483215.pdf)
+                        bid_num_match = re.search(r"GeM-Bidding-(\d+)", filename, re.I)
+                        if bid_num_match:
+                            inferred_bid = f"GEM/2026/B/{bid_num_match.group(1)}"
+                            pdf_rec = {
+                                "bid_no": inferred_bid,
+                                "pdf_path": os.path.abspath(pdf_path),
+                                "is_fetched": True
+                            }
+                            db.upsert_tender(pdf_rec)
+                            self.after(0, lambda b=inferred_bid: self._log("ok", f"No bid number in PDF text. Inferred {b} from filename and linked PDF."))
+                        else:
+                            self.after(0, lambda f=filename: self._log("warn", f"Could not extract bid number from PDF text or filename of {f}"))
+                except Exception as parse_err:
+                    self.after(0, lambda f=filename, err=parse_err: self._log("err", f"Failed to parse {f}: {err}"))
+
+                parsed_count += 1
+                prog_val = int(parsed_count / total_unevaluated * 100)
+                self.after(0, lambda p=prog_val, c=parsed_count, t=total_unevaluated: self._set_prog(p, f"Processed {c}/{t} PDFs…"))
+
+            # Complete and refresh
+            def completion_cleanup():
+                self._records = db.load_all_tenders()
+                self._refresh_table_view()
+                start_background_embedding_worker(callback_fn=self._refresh_table_view)
+                try:
+                    if self.notebook.index(self.notebook.select()) == 1:
+                        self._update_calendar()
+                        self._update_details()
+                except Exception:
+                    pass
+                self._set_prog(100, "Done")
+                self._log("ok", f"--- Local PDF Process Finished: processed {parsed_count} PDF(s) ---")
+                self._show_toast("PDF Processing Complete", f"Successfully processed {parsed_count} PDF(s).", "info")
+
+            self.after(0, completion_cleanup)
+            self._fetch_running = False
+
+        self._fetch_running = True
+        t = threading.Thread(target=worker, daemon=True, name="LocalPDFWorker")
+        t.start()

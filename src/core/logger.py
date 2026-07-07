@@ -129,7 +129,7 @@ logging.basicConfig(
 
 
 # ── Core log function ─────────────────────────────────────────────────────────
-def log(level, message):
+def log(level, message, details=None):
     """
     Log a message with a specific UI level (info, ok, warn, err).
     Writes to the file logger and queues for the GUI log panel.
@@ -142,12 +142,12 @@ def log(level, message):
         logging.error(f"[ERR]  {message}")
     else:
         logging.info(f"[INFO] {message}")
-    log_queue.put((level, message))
+    log_queue.put((level, message, details))
 
-def log_info(msg): log("info", msg)
-def log_ok(msg):   log("ok",   msg)
-def log_warn(msg): log("warn", msg)
-def log_err(msg):  log("err",  msg)
+def log_info(msg, details=None): log("info", msg, details)
+def log_ok(msg, details=None):   log("ok",   msg, details)
+def log_warn(msg, details=None): log("warn", msg, details)
+def log_err(msg, details=None):  log("err",  msg, details)
 
 # ── Structured UI event helpers ───────────────────────────────────────────────
 def log_button_click(label: str):
@@ -170,4 +170,3 @@ def log_worker_done(name: str, start: float):
 def log_worker_error(name: str, start: float, error):
     """Log background worker failure with elapsed time."""
     log("err", f"[WORK] ✗ {name} failed after {elapsed_since(start)}: {error}")
-

@@ -8,7 +8,7 @@ except ImportError:
     keyring = None
 
 # Local imports
-from config import BG, PANEL, CARD, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, WARN, FT, FL, TV_COLS
+from config import BG, PANEL, CARD, ACCENT, ACCENT2, MUTED, TEXT, TEXTSUB, ERR, SUCCESS, WARN, FT, FL, TV_COLS
 import db
 
 class LoadingDialog(tk.Toplevel):
@@ -507,10 +507,32 @@ class DialogsMixin:
         win.geometry(f"700x500+{max(0, x)}+{max(0, y)}")
         
         tk.Label(win, text="Manage Firms & Matching Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+
+        def normalize_multi_value(value):
+            if isinstance(value, list):
+                raw_items = value
+            else:
+                raw_items = str(value or "").split(",")
+            items = []
+            for item in raw_items:
+                cleaned = str(item).strip()
+                if cleaned and cleaned not in items:
+                    items.append(cleaned)
+            return items
+
+        def display_multi_value(value):
+            return ", ".join(normalize_multi_value(value))
         
         # Load firms from settings
         settings = db.load_settings()
-        firms_list = settings.get("firms", [])
+        firms_list = []
+        for firm in settings.get("firms", []):
+            firms_list.append({
+                "name": firm.get("name", ""),
+                "categories": normalize_multi_value(firm.get("categories", [])),
+                "locations": firm.get("locations", ""),
+                "exclude_keywords": firm.get("exclude_keywords", "")
+            })
         
         # Frame for Treeview
         tree_fr = tk.Frame(win, bg=BG)
@@ -533,7 +555,7 @@ class DialogsMixin:
         
         # Set headings & widths
         tv.heading("name", text="Firm Name")
-        tv.heading("categories", text="Categories (Include Keywords)")
+        tv.heading("categories", text="Categories")
         tv.heading("locations", text="Location Keywords")
         tv.heading("exclude_keywords", text="Exclude Keywords")
         
@@ -549,7 +571,7 @@ class DialogsMixin:
             for idx, firm in enumerate(firms_list):
                 tv.insert("", "end", iid=str(idx), values=(
                     firm.get("name", ""),
-                    firm.get("categories", ""),
+                    display_multi_value(firm.get("categories", [])),
                     firm.get("locations", ""),
                     firm.get("exclude_keywords", "")
                 ))
@@ -565,9 +587,9 @@ class DialogsMixin:
             form_win.configure(bg=BG)
             form_win.resizable(False, False)
             
-            fx = win.winfo_x() + (win.winfo_width() - 450) // 2
-            fy = win.winfo_y() + (win.winfo_height() - 320) // 2
-            form_win.geometry(f"450x320+{max(0, fx)}+{max(0, fy)}")
+            fx = win.winfo_x() + (win.winfo_width() - 500) // 2
+            fy = win.winfo_y() + (win.winfo_height() - 430) // 2
+            form_win.geometry(f"500x430+{max(0, fx)}+{max(0, fy)}")
             
             # Fields
             tk.Label(form_win, text="Firm Configuration", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
@@ -583,8 +605,7 @@ class DialogsMixin:
             name_ent.grid(row=0, column=1, sticky="w", padx=10, pady=6)
             
             # Categories
-            tk.Label(grid_fr, text="Categories:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", pady=6)
-            cat_var = tk.StringVar()
+            tk.Label(grid_fr, text="Categories:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="nw", pady=6)
             
             # Retrieve existing category options
             settings = db.load_settings()
@@ -596,31 +617,72 @@ class DialogsMixin:
                 except Exception:
                     mappings = []
             category_options = sorted(list(set(m["name"] for m in mappings if m.get("name"))))
-            
-            cat_ent = ttk.Combobox(grid_fr, textvariable=cat_var, values=category_options, font=FL, width=28)
-            cat_ent.grid(row=1, column=1, sticky="w", padx=10, pady=6)
-            
-            prev_cat_val = [""]
-            
-            def on_focus_in(event):
-                prev_cat_val[0] = cat_var.get()
-                
-            cat_ent.bind("<FocusIn>", on_focus_in)
-            cat_ent.bind("<KeyRelease>", lambda e: prev_cat_val.__setitem__(0, cat_var.get()))
-            
-            def on_cat_selected(event):
-                new_sel = cat_ent.get().strip()
-                old_val = prev_cat_val[0].strip()
-                if old_val:
-                    parts = [p.strip() for p in old_val.split(",") if p.strip()]
-                    if new_sel not in parts:
-                        parts.append(new_sel)
-                    cat_var.set(", ".join(parts))
-                else:
-                    cat_var.set(new_sel)
-                prev_cat_val[0] = cat_var.get()
-                
-            cat_ent.bind("<<ComboboxSelected>>", on_cat_selected)
+
+            cat_picker_fr = tk.Frame(grid_fr, bg=PANEL)
+            cat_picker_fr.grid(row=1, column=1, sticky="w", padx=10, pady=6)
+
+            cat_listbox = tk.Listbox(
+                cat_picker_fr,
+                selectmode="extended",
+                exportselection=False,
+                height=7,
+                width=30,
+                bg=CARD,
+                fg=TEXT,
+                selectbackground=ACCENT2,
+                selectforeground=TEXT,
+                relief="flat",
+                highlightthickness=1,
+                highlightbackground="#30363D",
+                font=FL
+            )
+            cat_listbox.pack(fill="x")
+            for option in category_options:
+                cat_listbox.insert("end", option)
+
+            cat_preview_var = tk.StringVar(value="Selected: None")
+            tk.Label(cat_picker_fr, textvariable=cat_preview_var, font=("Segoe UI", 8), bg=PANEL, fg=MUTED, anchor="w", justify="left").pack(fill="x", pady=(4, 0))
+
+            custom_cat_var = tk.StringVar()
+            custom_cat_row = tk.Frame(cat_picker_fr, bg=PANEL)
+            custom_cat_row.pack(fill="x", pady=(6, 0))
+            custom_cat_ent = tk.Entry(
+                custom_cat_row,
+                textvariable=custom_cat_var,
+                bg=CARD,
+                fg=TEXT,
+                insertbackground=TEXT,
+                relief="flat",
+                font=FL,
+                highlightthickness=1,
+                highlightbackground="#30363D",
+                highlightcolor=ACCENT2,
+                width=22
+            )
+            custom_cat_ent.pack(side="left", fill="x", expand=True)
+
+            def get_selected_categories():
+                return [cat_listbox.get(i) for i in cat_listbox.curselection()]
+
+            def refresh_category_preview():
+                selected = get_selected_categories()
+                cat_preview_var.set(f"Selected: {', '.join(selected)}" if selected else "Selected: None")
+
+            def add_custom_categories():
+                raw = custom_cat_var.get().strip()
+                if not raw:
+                    return
+                new_items = normalize_multi_value(raw)
+                existing = [cat_listbox.get(i) for i in range(cat_listbox.size())]
+                for item in new_items:
+                    if item not in existing:
+                        cat_listbox.insert("end", item)
+                        existing.append(item)
+                custom_cat_var.set("")
+                refresh_category_preview()
+
+            self._btn(custom_cat_row, "Add", add_custom_categories, bg=CARD).pack(side="left", padx=(6, 0))
+            cat_listbox.bind("<<ListboxSelect>>", lambda e: refresh_category_preview())
             
             # Locations
             tk.Label(grid_fr, text="Locations:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=2, column=0, sticky="w", pady=6)
@@ -640,19 +702,31 @@ class DialogsMixin:
             if edit_idx is not None:
                 firm_data = firms_list[edit_idx]
                 name_var.set(firm_data.get("name", ""))
-                cat_var.set(firm_data.get("categories", ""))
                 loc_var.set(firm_data.get("locations", ""))
                 exc_var.set(firm_data.get("exclude_keywords", ""))
-                prev_cat_val[0] = firm_data.get("categories", "")
+                selected_categories = normalize_multi_value(firm_data.get("categories", []))
+                current_options = [cat_listbox.get(i) for i in range(cat_listbox.size())]
+                for cat in selected_categories:
+                    if cat not in current_options:
+                        cat_listbox.insert("end", cat)
+                        current_options.append(cat)
+                for idx, option in enumerate(current_options):
+                    if option in selected_categories:
+                        cat_listbox.selection_set(idx)
+                refresh_category_preview()
                 
             def save_form():
                 n = name_var.get().strip()
-                c = cat_var.get().strip()
+                add_custom_categories()
+                c = get_selected_categories()
                 l = loc_var.get().strip()
                 e = exc_var.get().strip()
                 
                 if not n:
                     messagebox.showerror("Error", "Firm Name is required.", parent=form_win)
+                    return
+                if not c:
+                    messagebox.showerror("Error", "Select at least one category for the firm.", parent=form_win)
                     return
                     
                 firm_data = {

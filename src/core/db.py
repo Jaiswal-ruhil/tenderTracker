@@ -539,13 +539,25 @@ def upsert_tender(record):
                 
                 if row:
                     existing = row_to_dict(row)
+                    updated_fields = []
                     for k, v in record.items():
                         if v is not None and str(v).strip() != "":
-                            if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags", "is_want_derived", "matched_firm"):
+                            is_diff = (k in existing) and (str(existing[k]).strip() != str(v).strip())
+                            if (k not in existing or 
+                                not str(existing[k]).strip() or 
+                                is_diff or 
+                                k in ("is_saved", "is_fetched", "is_want", "tags", "is_want_derived", "matched_firm")):
+                                
                                 # Never overwrite a manually-filed status
                                 if k == "filing_status" and existing.get("filing_status") == "Filed":
                                     continue
+                                
+                                if is_diff and k not in ("is_want_derived", "matched_firm"):
+                                    updated_fields.append(f"{k}: '{existing.get(k)}' -> '{v}'")
+                                    
                                 existing[k] = v
+                    if updated_fields:
+                        logger.log_info(f"Updated {bid_no} in database due to field difference(s): {', '.join(updated_fields)}")
                     row_data = dict_to_row(existing)
                 else:
                     row_data = dict_to_row(record)
@@ -589,13 +601,25 @@ def upsert_tenders(new_records):
                     
                     if row:
                         existing = row_to_dict(row)
+                        updated_fields = []
                         for k, v in record.items():
                             if v is not None and str(v).strip() != "":
-                                if k not in existing or not str(existing[k]).strip() or k in ("is_saved", "is_fetched", "is_want", "tags"):
+                                is_diff = (k in existing) and (str(existing[k]).strip() != str(v).strip())
+                                if (k not in existing or 
+                                    not str(existing[k]).strip() or 
+                                    is_diff or 
+                                    k in ("is_saved", "is_fetched", "is_want", "tags", "is_want_derived", "matched_firm")):
+                                    
                                     # Never overwrite a manually-filed status
                                     if k == "filing_status" and existing.get("filing_status") == "Filed":
                                         continue
+                                    
+                                    if is_diff and k not in ("is_want_derived", "matched_firm"):
+                                        updated_fields.append(f"{k}: '{existing.get(k)}' -> '{v}'")
+                                        
                                     existing[k] = v
+                        if updated_fields:
+                            logger.log_info(f"Updated {bid_no} in database due to field difference(s): {', '.join(updated_fields)}")
                         row_data = dict_to_row(existing)
                     else:
                         row_data = dict_to_row(record)

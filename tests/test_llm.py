@@ -59,6 +59,7 @@ class TestLLM(unittest.TestCase):
 
         # Test cleaning JSON with <think>...</think> reasoning block
         self.assertEqual(llm.clean_json_response('<think>\nI should extract field x.\n{\n "nested": true\n}\n</think>\n{"test": 5}'), '{"test": 5}')
+        self.assertEqual(llm.extract_thinking_block('<think>\nI should extract field x.\n</think>\n{"test": 5}'), "I should extract field x.")
 
     @patch('urllib.request.urlopen')
     def test_test_llm_connection_gemini_success(self, mock_urlopen):
@@ -96,6 +97,9 @@ class TestLLM(unittest.TestCase):
     @patch('llm.call_llm')
     def test_llm_parse_tender(self, mock_call_llm):
         mock_call_llm.return_value = """
+        <think>
+        Extract bid number, dates, and category from the tender body.
+        </think>
         {
             "bid_no": "GEM/2026/B/7711387",
             "bid_url": "https://bidplus.gem.gov.in/showbidDocument/7711387",
@@ -129,6 +133,7 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(res["bid_no"], "GEM/2026/B/7711387")
         self.assertEqual(res["category"], "Industrial Gas")
         self.assertEqual(res["quantity"], "500")
+        self.assertIn("Extract bid number", res["_llm_thinking"])
 
     @patch('llm.call_llm')
     def test_llm_map_category(self, mock_call_llm):
