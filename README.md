@@ -23,33 +23,39 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 
 ## Application Flow Diagram
 
-Below is the workflow showing how inputs are processed, parsed, filtered, stored, and displayed within the application:
+Below is the high-level workflow showing how inputs are processed, parsed, filtered, stored, and displayed within the application:
 
 ```mermaid
 flowchart TD
     subgraph Input & Parsing
-        A[User Pastes Text, URLs, or PDF Paths] --> B[ThreadPoolExecutor split & process blocks]
-        B --> C{Is PDF Path?}
-        C -->|Yes| D[Parse local PDF file]
-        C -->|No| E[Parse text metadata block]
-        D & E --> E_Clean[Deterministic Cleaner & Parser]
+        A["User Pastes Text / URLs (Option A)\nor Clicks 'Process Local PDFs' (Option B)"] --> B[ThreadPoolExecutor split & process blocks]
+        B --> C{Is PDF?}
+        C -->|Yes| D["pypdf extracts raw text → convert_pdf_text_to_markdown()
+Returns structured markdown string"]
+        C -->|No| E[Parse pasted text block]
+        D & E --> E_Clean[Deterministic Regex Cleaner & Parser]
+        E_Clean --> E_LLM{Bid No found by regex?}
+        E_LLM -->|No - LLM fallback enabled| E_LLFB["LLM Parse Fallback\nHTTP POST → LM Studio /v1/chat/completions\n(markdown text sent as prompt message)"]  
+        E_LLM -->|Yes| F_Check
+        E_LLFB --> F_Check
     end
 
     subgraph Database Check & Caching
-        E_Clean --> F{Is in SQLite 'Don't Wants'?}
-        F -->|Yes| G[Skip block / Ignore]
-        F -->|No| H{Has full details?}
+        F_Check{Is in SQLite Don't Wants?}
+        F_Check -->|Yes| G[Skip / Ignore]
+        F_Check -->|No| H{Has full details?}
         H -->|Yes| I[Use parsed details]
-        H -->|No| J[Concurrent Selenium Crawl]
-        J --> I
+        H -->|No| J["Concurrent Selenium Crawl\nor in-memory PDF download & parse"]
+        J -->|Selenium incomplete| J_LLM["LLM page-body parse fallback\n(body text sent as prompt)"]  
+        J & J_LLM --> I
         I --> K[Deduplicate by Bid Number]
     end
 
     subgraph LLM Reasoning & Classification
         K --> L[Chunk into Batches of max 10]
         L --> M{Is Hash in Cache?}
-        M -->|Yes| N[Retrieve from cache]
-        M -->|No| O[Async LM Studio Client]
+        M -->|Yes| N[Retrieve cached ClassificationResult]
+        M -->|No| O["Async LM Studio Client\nHTTP POST /v1/chat/completions\n(JSON schema structured output)"]
         O --> P[Pydantic JSON Validation]
         P --> Q[Save Classification & Set Cache]
     end
@@ -70,7 +76,72 @@ flowchart TD
         Y[User Semantic Search Query] -->|Embedding API| FAISS_DB
         FAISS_DB -->|Rank & Re-order| W
     end
+
+    subgraph MCP Server - External AI Clients Only
+        MCP_AI["AI Client (Claude Desktop / Cursor)"] -->|MCP stdio protocol| MCP_SRV["mcp_server.py\nExposes: parse_tender_text, search_bids,\nclassify_bid, add_tender_to_db, etc."]
+        MCP_SRV --> R
+    end
 ```
+
+---
+
+## PDF Processing Flow
+
+When **Process Local PDFs** is clicked (or a PDF path is pasted), the app runs the following pipeline entirely within the Python process — **LM Studio is called directly via plain HTTP**, not via MCP:
+
+```mermaid
+sequenceDiagram
+    participant UI as GUI Worker Thread
+    participant FS as Filesystem
+    participant pypdf as pypdf (in-process)
+    participant Parser as parser.py
+    participant LLM as llm.py (HTTP client)
+    participant LMS as LM Studio REST API
+    participant DB as SQLite (tenders_db.db)
+
+    UI->>FS: Scan Downloads + PDF folder for un-evaluated PDFs
+    FS-->>UI: List of PDF files
+
+    loop For each PDF
+        UI->>pypdf: PdfReader(pdf_bytes) — extract text from all pages
+        pypdf-->>UI: raw_pdf_text
+
+        UI->>Parser: convert_pdf_text_to_markdown(raw_pdf_text)
+        Parser-->>UI: markdown_text (structured, cleaned)
+
+        UI->>Parser: parse_one(markdown_text) — deterministic regex parse
+        Parser-->>UI: partial_record (may be missing fields)
+
+        alt bid_no not found by regex AND LLM enabled
+            UI->>LLM: llm_parse_tender(markdown_text)
+            LLM->>LMS: POST /v1/chat/completions\n{model, messages:[{role:user, content:markdown_text}]}
+            LMS-->>LLM: JSON response with extracted fields
+            LLM-->>UI: parsed_record (full)
+        end
+
+        UI->>DB: upsert_tender(record) — fuzzy org unification + save
+        DB-->>UI: updated tenders list
+    end
+
+    UI->>UI: Refresh table view
+```
+
+### Step-by-Step Breakdown
+
+| Step | Module | What Happens |
+|------|--------|--------------|
+| 1. Scan folders | `gui_workers.py` | Moves new PDFs from Downloads → PDF folder; lists un-evaluated files |
+| 2. Extract text | `pypdf.PdfReader` | In-memory byte read; concatenates text from every page |
+| 3. Convert to markdown | `parser.convert_pdf_text_to_markdown()` | Strips GeM boilerplate, formats key–value pairs into a clean text block |
+| 4. Deterministic parse | `parser.parse_one()` | Regex patterns extract `bid_no`, `est_value`, `end_date`, etc. without any LLM call |
+| 5. LLM fallback (if needed) | `llm.llm_parse_tender()` | Only invoked when regex fails to find a valid Bid Number. Sends the markdown text as a chat message directly to LM Studio via `HTTP POST /v1/chat/completions` |
+| 6. Model auto-load | `llm._auto_load_local_model_impl()` | Before the first call, checks `/v1/models`; if not loaded, tries `POST /api/v1/models/load` with up to 3 body variants (400 errors are caught and retried) |
+| 7. Upsert to DB | `db.upsert_tender()` | Fuzzy org-name unification, value-mapping rules applied, then saved to SQLite |
+| 8. UI refresh | `gui_table_tab.py` | Treeview reloaded; toast shown if tender matches Want rules |
+
+> **Note:** LM Studio is called by the app's own `llm.py` HTTP client, **not** via the MCP server.
+> The MCP server (`mcp_server.py`) is a separate entry point for external AI clients (Claude Desktop, Cursor, etc.)
+> and is never invoked during the internal PDF processing pipeline.
 
 ---
 
