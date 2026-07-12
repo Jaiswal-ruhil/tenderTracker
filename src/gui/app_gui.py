@@ -37,7 +37,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         super().__init__()
         self.title("GEM Tender Logger  v4")
         self.configure(bg=BG)
-        self.geometry("1400x860")
+        self.geometry("1600x900")
         self.minsize(900, 600)
 
         self.save_folder = tk.StringVar(
@@ -267,6 +267,14 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         btn.bind("<Leave>", lambda e: btn.configure(bg=bg))
         return btn
 
+    def _copy_to_clipboard(self, text):
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self.update()
+        except Exception as e:
+            self._log("err", f"Failed to copy to clipboard: {e}")
+
     def _log(self, level, msg, details=None):
         import logger
         logger.log(level, msg, details)
@@ -477,7 +485,16 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self._set_status("Reloading tenders from database...", MUTED)
         try:
             self._records = db.load_all_tenders()
-            self._refresh_table_view()
+            
+            is_initial = not getattr(self, "_initial_load_done", False)
+            if is_initial:
+                self._initial_load_done = True
+                if hasattr(self, "table_tab"):
+                    self.table_tab.set_dynamic_default_date_filter()
+                else:
+                    self._refresh_table_view()
+            else:
+                self._refresh_table_view()
             try:
                 self._update_calendar()
                 self._update_details()

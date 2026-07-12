@@ -1,0 +1,323 @@
+import tkinter as tk
+from tkinter import ttk
+import os
+
+# Local imports
+from config import (
+    PANEL, CARD, ACCENT, ACCENT2, MUTED, TEXT, TEXTSUB, SUCCESS, ERR, WARN,
+    FL, FT
+)
+import db
+
+class TenderDetailPanel(tk.Frame):
+    def __init__(self, parent, app, table_tab):
+        super().__init__(parent, bg=PANEL, highlightthickness=1, highlightbackground="#30363D", padx=12, pady=10)
+        self.app = app
+        self.table_tab = table_tab
+
+        # Detail Title
+        detail_title = tk.Label(self, text="TENDER DETAILS", font=FT, bg=PANEL, fg=TEXT)
+        detail_title.pack(anchor="w", pady=(0, 6))
+
+        self.detail_meta_lbl = tk.Label(
+            self,
+            text="No tender selected",
+            font=("Segoe UI", 8, "bold"),
+            bg=PANEL,
+            fg=MUTED,
+            anchor="w",
+            justify="left"
+        )
+        self.detail_meta_lbl.pack(fill="x", pady=(0, 8))
+
+        # PDF Control Frame
+        self.pdf_frame = tk.Frame(self, bg=PANEL)
+        self.pdf_frame.pack(fill="x", pady=(0, 8))
+        
+        self.pdf_lbl = tk.Label(self.pdf_frame, text="PDF: Not Linked", font=FL, bg=PANEL, fg=TEXTSUB, anchor="w")
+        self.pdf_lbl.pack(side="left", fill="x", expand=True)
+        
+        self.btn_open_pdf = self.app._btn(self.pdf_frame, "📄 Open", lambda: self.table_tab.open_associated_pdf(), bg=CARD)
+        self.btn_open_pdf.pack(side="right", padx=2)
+        
+        self.btn_link_pdf = self.app._btn(self.pdf_frame, "🔗 Link", lambda: self.table_tab.link_associated_pdf(), bg=CARD)
+        self.btn_link_pdf.pack(side="right", padx=2)
+        
+        self.btn_unlink_pdf = self.app._btn(self.pdf_frame, "❌", lambda: self.table_tab.unlink_associated_pdf(), bg=CARD)
+        self.btn_unlink_pdf.pack(side="right", padx=2)
+
+        self.detail_actions_fr = tk.Frame(self, bg=PANEL)
+        self.detail_actions_fr.pack(fill="x", pady=(0, 10))
+        self.btn_detail_want = self.app._btn(self.detail_actions_fr, "Keep", lambda: self.table_tab.mark_selected_want(), bg=CARD)
+        self.btn_detail_want.pack(side="left", padx=(0, 6))
+        self.btn_detail_dont_want = self.app._btn(self.detail_actions_fr, "Ignore", lambda: self.table_tab.mark_selected_dont_want(), bg=CARD, fg=ERR)
+        self.btn_detail_dont_want.pack(side="left", padx=6)
+        self.btn_detail_reset = self.app._btn(self.detail_actions_fr, "Reset Tag", lambda: self.table_tab.reset_selected_tag(), bg=CARD)
+        self.btn_detail_reset.pack(side="left", padx=6)
+        self.btn_detail_fetch = self.app._btn(self.detail_actions_fr, "Fetch Selected", lambda: self.table_tab.do_fetch_sel(), bg=CARD)
+        self.btn_detail_fetch.pack(side="right", padx=(6, 0))
+        self.btn_detail_filed = self.app._btn(self.detail_actions_fr, "Mark Filed", lambda: self.table_tab.set_selected_filing_status("Filed"), bg=ACCENT2)
+        self.btn_detail_filed.pack(side="right", padx=(6, 0))
+
+        # Detail Scrollable Text widget
+        txt_fr = tk.Frame(self, bg=PANEL)
+        txt_fr.pack(fill="both", expand=True)
+
+        self.detail_txt = tk.Text(txt_fr, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                                  relief="flat", font=FL, wrap="word", highlightthickness=0,
+                                  padx=12, pady=12)
+        self.detail_txt.pack(side="left", fill="both", expand=True)
+
+        detail_vsb = ttk.Scrollbar(txt_fr, orient="vertical", command=self.detail_txt.yview)
+        detail_vsb.pack(side="right", fill="y")
+        self.detail_txt.configure(yscrollcommand=detail_vsb.set)
+        
+        # Configure tags for detail_txt formatting & highlighting
+        self.detail_txt.tag_configure("header", foreground=ACCENT2, font=("Segoe UI", 10, "bold"))
+        self.detail_txt.tag_configure("label", foreground=MUTED, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("value", foreground=TEXT, font=("Segoe UI", 9))
+        self.detail_txt.tag_configure("match_inc", background="#1A4A2A", foreground=SUCCESS, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_search", background="#0A4D8C", foreground="#FFFFFF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_inc", background="#0A3C5C", foreground="#84D2FF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_loc", background="#2D1C4C", foreground="#C09EFF", font=("Segoe UI", 9, "bold"))
+        self.detail_txt.tag_configure("match_firm_exc", background="#4A1A1A", foreground=ERR, font=("Segoe UI", 9, "bold"))
+
+        # Initialize detail text state
+        self.clear_detail_panel()
+
+        # Bind MouseWheel events for self.detail_txt
+        def on_detail_mousewheel(event):
+            if event.num == 5 or event.delta < 0:
+                self.detail_txt.yview_scroll(1, "units")
+            elif event.num == 4 or event.delta > 0:
+                self.detail_txt.yview_scroll(-1, "units")
+        self.detail_txt.bind("<MouseWheel>", on_detail_mousewheel)
+        self.detail_txt.bind("<Button-4>", on_detail_mousewheel)
+        self.detail_txt.bind("<Button-5>", on_detail_mousewheel)
+
+    @staticmethod
+    def _firm_multi_values(value):
+        if not value:
+            return []
+        if isinstance(value, list):
+            return value
+        if isinstance(value, str):
+            return [v.strip() for v in value.split(",") if v.strip()]
+        return []
+
+    def clear_detail_panel(self):
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        self.detail_txt.insert("end", "\n\nSelect a tender from the table to view its full details here.", "value")
+        self.detail_txt.configure(state="disabled")
+
+        if hasattr(self, "detail_meta_lbl"):
+            self.detail_meta_lbl.configure(text="No tender selected", fg=MUTED)
+        
+        if hasattr(self, "pdf_lbl"):
+            self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
+            self.btn_open_pdf.configure(state="disabled")
+            self.btn_unlink_pdf.configure(state="disabled")
+            for btn in (
+                getattr(self, "btn_detail_want", None),
+                getattr(self, "btn_detail_dont_want", None),
+                getattr(self, "btn_detail_reset", None),
+                getattr(self, "btn_detail_fetch", None),
+                getattr(self, "btn_detail_filed", None),
+            ):
+                if btn:
+                    btn.configure(state="disabled")
+
+    def on_treeview_select(self, event):
+        sel = self.table_tab.table_view.tv.selection()
+        if not sel:
+            self.clear_detail_panel()
+            return
+            
+        # Get selected record
+        bid_no = self.table_tab.table_view.tv.set(sel[0], "bid_no")
+        rec = None
+        for r in self.app._records:
+            if r.get("bid_no") == bid_no:
+                rec = r
+                break
+        if not rec:
+            self.clear_detail_panel()
+            return
+            
+        # Update PDF frame widgets
+        pdf_path = rec.get("pdf_path", "")
+        if pdf_path:
+            filename = os.path.basename(pdf_path)
+            if len(filename) > 25:
+                filename = filename[:22] + "..."
+            self.pdf_lbl.configure(text=f"PDF: {filename}", fg=SUCCESS)
+            self.btn_open_pdf.configure(state="normal")
+            self.btn_unlink_pdf.configure(state="normal")
+        else:
+            self.pdf_lbl.configure(text="PDF: Not Linked", fg=TEXTSUB)
+            self.btn_open_pdf.configure(state="disabled")
+            self.btn_unlink_pdf.configure(state="disabled")
+
+        for btn in (
+            getattr(self, "btn_detail_want", None),
+            getattr(self, "btn_detail_dont_want", None),
+            getattr(self, "btn_detail_reset", None),
+            getattr(self, "btn_detail_fetch", None),
+            getattr(self, "btn_detail_filed", None),
+        ):
+            if btn:
+                btn.configure(state="normal")
+
+        status_bits = []
+        if rec.get("matched_firm", "").strip():
+            status_bits.append(f"Firm: {rec.get('matched_firm')}")
+        status_bits.append(f"Status: {rec.get('filing_status', 'Not Filed') or 'Not Filed'}")
+        if rec.get("is_want") is True:
+            status_text = "Marked Keep"
+            status_color = SUCCESS
+        elif rec.get("is_want") is False:
+            status_text = "Marked Ignore"
+            status_color = ERR
+        elif rec.get("is_want_derived", True):
+            status_text = "Auto Match"
+            status_color = ACCENT2
+        else:
+            status_text = "Filtered Out"
+            status_color = WARN
+        status_bits.insert(0, status_text)
+        self.detail_meta_lbl.configure(text="   |   ".join(status_bits), fg=status_color)
+
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        
+        # Display fields in group categories
+        categories = {
+            "Basic Info": ["bid_no", "bid_url", "category", "items", "quantity", "location"],
+            "Department Info": ["ministry", "dept", "organisation", "office"],
+            "Dates & Schedule": ["start_date", "end_date", "bid_opening"],
+            "Financial Details": ["est_value", "emd", "epbg", "min_turnover"],
+            "Qualifications": ["exp_years", "contract_dur", "mii", "mse_pref", "mse_relax", "startup_relax"],
+            "Status & Metadata": ["filing_status", "tags", "remarks", "pdf_path"]
+        }
+        
+        # Mapping DB field keys to human readable labels
+        labels = {
+            "bid_no": "Bid Number", "bid_url": "Bid URL", "category": "Category", "items": "Items", 
+            "quantity": "Quantity", "location": "Location/Consignee", "ministry": "Ministry", 
+            "dept": "Department", "organisation": "Organisation", "office": "Office", 
+            "start_date": "Start Date", "end_date": "End Date", "bid_opening": "Bid Opening Date", 
+            "est_value": "Estimated Value", "emd": "EMD Required", "epbg": "ePBG Required", 
+            "min_turnover": "Min Turnover", "exp_years": "Exp Years Required", "contract_dur": "Contract Duration", 
+            "mii": "MII Compliant", "mse_pref": "MSE Pref", "mse_relax": "MSE Relaxation", 
+            "startup_relax": "Startup Relaxation", "filing_status": "Filing Status", "tags": "Tags", 
+            "remarks": "Remarks", "pdf_path": "Associated PDF"
+        }
+        
+        first = True
+        for cat_name, fields in categories.items():
+            if not first:
+                self.detail_txt.insert("end", "\n\n")
+            first = False
+            
+            # Print Category Header
+            self.detail_txt.insert("end", f"■ {cat_name}\n", "header")
+            self.detail_txt.insert("end", "─" * 32 + "\n", "label")
+            
+            for field in fields:
+                val = rec.get(field, "")
+                if field == "tags":
+                    if isinstance(val, list):
+                        val = ", ".join(val)
+                    elif not val:
+                        val = "None"
+                elif isinstance(val, bool):
+                    val = "Yes" if val else "No"
+                else:
+                    val = str(val).strip()
+                    
+                if not val:
+                    val = "N/A"
+                    
+                lbl = labels.get(field, field.capitalize())
+                self.detail_txt.insert("end", f"{lbl}: ", "label")
+                self.detail_txt.insert("end", f"{val}\n", "value")
+                
+        # Highlight match words (include / exclude keywords)
+        settings = db.load_settings()
+        inc_raw = settings.get("include_keywords", "")
+        exc_raw = settings.get("exclude_keywords", "")
+        
+        inc_kws = [k.strip() for k in inc_raw.split(",") if k.strip()]
+        exc_kws = [k.strip() for k in exc_raw.split(",") if k.strip()]
+        
+        # Apply include tags (case-insensitive)
+        for kw in inc_kws:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(kw)}c"
+                self.detail_txt.tag_add("match_inc", pos, end)
+                start = end
+                
+        # Apply exclude tags (case-insensitive)
+        for kw in exc_kws:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(kw)}c"
+                self.detail_txt.tag_add("match_exc", pos, end)
+                start = end
+                
+        # Highlight firm-specific words
+        firms = settings.get("firms", [])
+        for firm in firms:
+            # 1. Categories
+            for kw in self._firm_multi_values(firm.get("categories", [])):
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_inc", pos, end)
+                    start = end
+            # 2. Locations
+            for kw in [k.strip() for k in firm.get("locations", "").split(",") if k.strip()]:
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_loc", pos, end)
+                    start = end
+            # 3. Excludes
+            for kw in [k.strip() for k in firm.get("exclude_keywords", "").split(",") if k.strip()]:
+                start = "1.0"
+                while True:
+                    pos = self.detail_txt.search(kw, start, stopindex="end", nocase=True)
+                    if not pos:
+                        break
+                    end = f"{pos} + {len(kw)}c"
+                    self.detail_txt.tag_add("match_firm_exc", pos, end)
+                    start = end
+                
+        # Highlight active search query
+        search_query = self.table_tab.search_var.get().strip()
+        if search_query:
+            start = "1.0"
+            while True:
+                pos = self.detail_txt.search(search_query, start, stopindex="end", nocase=True)
+                if not pos:
+                    break
+                end = f"{pos} + {len(search_query)}c"
+                self.detail_txt.tag_add("match_search", pos, end)
+                start = end
+                
+        self.detail_txt.configure(state="disabled")

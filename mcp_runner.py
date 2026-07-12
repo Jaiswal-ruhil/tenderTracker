@@ -3,6 +3,7 @@
 
 import os
 import sys
+import argparse
 import subprocess
 
 # Ensure we use the virtual environment's Python if available
@@ -19,8 +20,21 @@ if os.path.exists(venv_python):
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "core"))
 
-# Run the server
-from mcp_server import mcp
+SERVER_MODULES = {
+    "legacy": "mcp_server",
+    "catalog": "mcp_catalog_server",
+    "analysis": "mcp_analysis_server",
+    "filing": "mcp_filing_server",
+}
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Run a TenderTracker MCP server")
+    parser.add_argument("--server", choices=SERVER_MODULES, default="legacy")
+    parser.add_argument("--transport", choices=("stdio", "sse", "streamable-http"), default="stdio")
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    mcp.run()
+    args = parse_args()
+    module = __import__(SERVER_MODULES[args.server], fromlist=["mcp"])
+    module.mcp.run(transport=args.transport)

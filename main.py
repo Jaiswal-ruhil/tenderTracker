@@ -23,5 +23,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
 from app_gui import TenderApp
 
 if __name__ == "__main__":
+    # Enable high-DPI awareness on Windows for a crisper UI and more screen real estate
+    try:
+        import ctypes
+        ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
     app = TenderApp()
     app.mainloop()

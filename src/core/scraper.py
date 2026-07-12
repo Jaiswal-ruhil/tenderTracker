@@ -306,7 +306,8 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
         if log_fn:
             try: log_fn(level, msg)
             except Exception: pass
-        logger.log(level, msg)
+        else:
+            logger.log(level, msg)
         
     is_url = str(bid_no_or_url).lower().startswith("http")
     if is_url:
@@ -322,10 +323,10 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
     os.makedirs(download_dir, exist_ok=True)
     dest_path = os.path.abspath(os.path.join(download_dir, filename))
     
-    # Delete pre-existing file if any to prevent conflict/false positives
-    if os.path.exists(dest_path):
-        try: os.remove(dest_path)
-        except Exception: pass
+    # If the file already exists and has content, reuse it instead of downloading again
+    if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
+        log_local("info", f"[{log_id}] File already downloaded: {dest_path}")
+        return dest_path
         
     mods = _try_import_selenium()
     if not mods:
@@ -395,13 +396,55 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
             
             search_btn = driver.find_element(By.ID, "searchBidRA")
             search_btn.click()
-            time.sleep(5)
             
-            links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
-            if not links:
+            # Wait for search results to load and locate the correct link matching the bid number
+            log_local("info", f"[{log_id}] Waiting for search results to load bid: {bid_no_or_url}...")
+            doc_url = None
+            for _ in range(15):
+                links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
+                for link in links:
+                    href = link.get_attribute("href")
+                    try:
+                        curr = link
+                        # Check up to 5 parent container levels to match the bid number in the card text
+                        for _ in range(5):
+                            curr = curr.find_element(By.XPATH, "..")
+                            if bid_no_or_url.lower() in curr.text.lower():
+                                doc_url = href
+                                break
+                        if doc_url:
+                            break
+                    except Exception:
+                        pass
+                if doc_url:
+                    break
+                time.sleep(1)
+                
+            if not doc_url:
+                log_local("warn", f"[{log_id}] Bid number text not found in card containers. Trying suffix link fallback...")
+                suffix = bid_no_or_url.split('/')[-1] if '/' in bid_no_or_url else bid_no_or_url
+                links = driver.find_elements(By.XPATH, f"//a[contains(@href, 'showbidDocument') and contains(@href, '{suffix}')]")
+                if links:
+                    doc_url = links[0].get_attribute("href")
+                else:
+                    # Final fallback: check if bid number is on the page before using the first link
+                    body_text = driver.find_element(By.TAG_NAME, "body").text
+                    if bid_no_or_url.lower() in body_text.lower():
+                        links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
+                        if links:
+                            doc_url = links[0].get_attribute("href")
+                            
+            if not doc_url:
                 log_local("err", f"[{log_id}] PDF document link not found on portal search results.")
                 return None
-            doc_url = links[0].get_attribute("href")
+                
+            # Check if resolved URL PDF already exists
+            doc_id = doc_url.rstrip('/').split('/')[-1]
+            url_filename = f"GeM-Bidding-{doc_id}.pdf"
+            url_dest_path = os.path.abspath(os.path.join(download_dir, url_filename))
+            if os.path.exists(url_dest_path) and os.path.getsize(url_dest_path) > 0:
+                log_local("info", f"[{log_id}] Resolved document URL already exists: {url_dest_path}")
+                return url_dest_path
             
         log_local("info", f"[{log_id}] Triggering PDF download via Chrome: {doc_url}")
         driver.get(doc_url)
@@ -446,7 +489,7 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
                 }
             )
             context = ssl._create_unverified_context()
-            with urllib.request.urlopen(req, context=context) as response:
+            with urllib.request.urlopen(req, timeout=15, context=context) as response:
                 with open(dest_path, 'wb') as out_file:
                     out_file.write(response.read())
             if os.path.exists(dest_path) and os.path.getsize(dest_path) > 0:
@@ -472,7 +515,8 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
         if log_fn:
             try: log_fn(level, msg)
             except Exception: pass
-        logger.log(level, msg)
+        else:
+            logger.log(level, msg)
         
     mods = _try_import_selenium()
     if not mods:

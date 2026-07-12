@@ -12,6 +12,11 @@ ERR     = "#F85149"
 WARN    = "#D29922"
 SEL_BG  = "#1F6FEB"
 
+# Urgency row colors (used for deadline-based row highlighting)
+URGENT_BG  = "#3B1A1A"   # closing in <=24h — deep red
+WARN_BG    = "#2E2300"   # closing in <=72h — deep amber
+CLOSED_FG  = "#3D4450"   # already closed — greyed
+
 FH = ("Consolas", 9)
 FB = ("Segoe UI", 10)
 FL = ("Segoe UI", 9)
@@ -19,12 +24,13 @@ FT = ("Segoe UI", 12, "bold")
 
 # Table columns configuration
 TV_COLS = [
-    ("bid_no",       "Bid No",            180),
+    ("bid_no",       "Bid No",            190),
+    ("closing_in",   "Closing In",         88),
     ("ministry",     "Ministry",          160),
     ("dept",         "Department",        200),
     ("organisation", "Organisation",      160),
-    ("category",     "Category",          130),
-    ("items",        "Items",             220),
+    ("category",     "Category",          180),
+    ("items",        "Items",             340),
     ("quantity",     "Qty",                55),
     ("location",     "Consignee/Location",160),
     ("est_value",    "Est. Value (Rs)",   110),
@@ -40,8 +46,8 @@ TV_COLS = [
     ("exp_years",    "Exp Yrs",            55),
     ("bid_opening",  "Bid Opening",       140),
     ("start_date",   "Start Date",        100),
-    ("end_date",     "End Date",          140),
-    ("filing_status", "Filing Status",    130),
+    ("end_date",     "End Date",          165),
+    ("filing_status", "Filing Status",    145),
     ("tags",         "Tags",              120),
     ("remarks",      "Remarks",           140),
     ("matched_firm",  "Matched Firm",      120),

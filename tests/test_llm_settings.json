@@ -1,6 +1,0 @@
-{
-    "llm_provider": "Google AI Studio (Gemini)",
-    "llm_api_key": "test_key",
-    "llm_use_parsing": true,
-    "llm_use_mapping": true
-}

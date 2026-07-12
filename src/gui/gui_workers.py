@@ -64,6 +64,23 @@ def _format_eta(seconds):
 
 
 class WorkersMixin:
+    def _unload_local_llm_after_job(self, settings=None):
+        """Release a local inference model after a background job finishes."""
+        settings = settings or db.load_settings()
+        if settings.get("llm_provider") != "Local LLM (LM Studio / Ollama)":
+            return
+
+        try:
+            _llm_module.unload_local_models(
+                settings.get("llm_base_url", ""),
+                settings.get("llm_api_key", ""),
+            )
+            self.after(0, lambda: self._log("info", "Local LLM unloaded after job completion."))
+        except Exception as exc:
+            # Releasing memory is best-effort and must not change a completed
+            # tender-processing job into a failure.
+            self.after(0, lambda err=exc: self._log("warn", f"Could not unload local LLM: {err}"))
+
     def _build_log_details(self, title, pdf_markdown="", llm_thinking="", extra_sections=None):
         sections = []
         if pdf_markdown and str(pdf_markdown).strip():
@@ -282,7 +299,10 @@ class WorkersMixin:
                         else:
                             self.after(0, lambda: self._log("info", f"Downloading PDF to fetch details for {bid_no or bid_url}..."))
                             try:
-                                dl_dir = os.path.dirname(db.DB_FILE)
+                                settings = db.load_settings()
+                                dl_dir = settings.get("pdf_save_folder") or os.path.join(
+                                    os.path.expanduser("~"), "Documents", "TenderPDFs"
+                                )
                                 dest_path = None
                                 
                                 with _selenium_semaphore:
@@ -441,6 +461,7 @@ class WorkersMixin:
                         self.after(0, lambda err=db_err: self._log("err", f"Failed to save tenders to database: {err}"))
                 self.after(0, lambda: self._finalize_parse(recs, stats, total, _t0))
             finally:
+                self._unload_local_llm_after_job()
                 resume_background_embedder()
         threading.Thread(target=worker, daemon=True).start()
 
@@ -754,7 +775,9 @@ class WorkersMixin:
                         provider = settings.get("llm_provider", "Disabled")
                         if provider != "Disabled":
                             self.after(0, lambda: self._log("info", f"Selenium failed. Attempting LLM rescue via PDF download for {bid}..."))
-                            dl_dir = os.path.dirname(db.DB_FILE)
+                            dl_dir = settings.get("pdf_save_folder") or os.path.join(
+                                os.path.expanduser("~"), "Documents", "TenderPDFs"
+                            )
                             with _selenium_semaphore:
                                 pdf_path = download_tender_pdf(url, dl_dir, log_fn=self._log, headless=headless_opt)
                             if pdf_path and os.path.exists(pdf_path):
@@ -865,6 +888,7 @@ class WorkersMixin:
                 except Exception as llm_err:
                     self.after(0, lambda err=llm_err: self._log("warn", f"AI classification failed: {err}"))
 
+            self._unload_local_llm_after_job(settings)
             self._fetch_running = False
             self.after(0, lambda: self._set_prog(100, "Fetch complete."))
             msg = f"Selenium fetch done: {total} URL(s) processed"
@@ -1058,6 +1082,7 @@ class WorkersMixin:
                 self._log("ok", f"--- Local PDF Process Finished: processed {parsed_count} PDF(s) ---")
                 self._show_toast("PDF Processing Complete", f"Successfully processed {parsed_count} PDF(s).", "info")
 
+            self._unload_local_llm_after_job(settings)
             self.after(0, completion_cleanup)
             self._fetch_running = False
 

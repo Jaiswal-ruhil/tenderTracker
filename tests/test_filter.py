@@ -13,6 +13,25 @@ class TestFilterLogic(unittest.TestCase):
         # Since _get_tender_status is self-contained and takes (self, rec, inc_kws, exc_kws),
         # we can test it using a dummy self.
         self.app = object.__new__(TenderApp)
+        from components.table_tab import TableTab
+        self.app.table_tab = object.__new__(TableTab)
+        self.app.table_tab.app = self.app
+        from components.calendar_tab import CalendarTab
+        self.app.calendar_tab = object.__new__(CalendarTab)
+        self.app.calendar_tab.app = self.app
+        import db
+        self.old_settings = db.SETTINGS_FILE
+        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_filter_settings.json")
+        if os.path.exists(db.SETTINGS_FILE):
+            try: os.remove(db.SETTINGS_FILE)
+            except: pass
+
+    def tearDown(self):
+        import db
+        if os.path.exists(db.SETTINGS_FILE):
+            try: os.remove(db.SETTINGS_FILE)
+            except: pass
+        db.SETTINGS_FILE = self.old_settings
 
     def test_filter_wants_empty_rules(self):
         # When rules are empty, all tenders should be Wants (True)
@@ -110,12 +129,15 @@ class TestFilterLogic(unittest.TestCase):
 
     def test_table_view_date_filtering(self):
         import tkinter as tk
+        from components.table_view import TendersTableView
         root = tk.Tk()
-        self.app.date_filter_type_var = tk.StringVar(value="Start Date")
-        self.app.date_from_var = tk.StringVar(value="01-07-2026")
-        self.app.date_to_var = tk.StringVar(value="15-07-2026")
-        self.app.view_var = tk.StringVar(value="All Tenders")
-        self.app.search_var = tk.StringVar(value="")
+        self.app.table_tab.date_filter_type_var = tk.StringVar(value="Start Date")
+        self.app.table_tab.date_from_var = tk.StringVar(value="01-07-2026")
+        self.app.table_tab.date_to_var = tk.StringVar(value="15-07-2026")
+        self.app.table_tab.view_var = tk.StringVar(value="All Tenders")
+        self.app.table_tab.search_var = tk.StringVar(value="")
+        self.app.table_tab.semantic_search_var = tk.BooleanVar(value=False)
+        self.app.table_tab.status_view_var = tk.StringVar(value="All")
         
         class DummyTreeview:
             def __init__(self):
@@ -128,10 +150,20 @@ class TestFilterLogic(unittest.TestCase):
                 self.items.append("dummy")
                 return "dummy"
         
-        self.app.tv = DummyTreeview()
-        self.app._refresh_alt = lambda: None
-        self.app._tv_insert = lambda rec: self.app.tv.insert()
-        self.app.count_lbl = tk.Label(root)
+        self.app.table_tab.table_view = object.__new__(TendersTableView)
+        self.app.table_tab.table_view.tv = DummyTreeview()
+        self.app.table_tab.tv = self.app.table_tab.table_view.tv
+        self.app.table_tab.count_lbl = tk.Label(root)
+        self.app.table_tab.table_summary_lbl = tk.Label(root)
+        self.app.table_tab.custom_date_frame = tk.Frame(root)
+        
+        self.app.table_tab.table_view.tv_insert = lambda rec: self.app.table_tab.table_view.tv.insert()
+        self.app.table_tab.table_view.refresh_alt = lambda: None
+        
+        # Keep references on app as well for backwards compatibility
+        self.app.tv = self.app.table_tab.tv
+        self.app.search_var = self.app.table_tab.search_var
+        self.app.view_var = self.app.table_tab.view_var
         
         self.app._records = [
             {"bid_no": "GEM/2026/B/100", "start_date": "05-07-2026"}, 
@@ -140,7 +172,7 @@ class TestFilterLogic(unittest.TestCase):
         ]
         
         self.app._refresh_table_view()
-        self.assertEqual(len(self.app.tv.items), 1)
+        self.assertEqual(len(self.app.table_tab.table_view.tv.items), 1)
         root.destroy()
 
     def test_parse_date_str_robustness(self):
