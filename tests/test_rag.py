@@ -165,5 +165,37 @@ class TestRAG(unittest.TestCase):
         examples = llm.get_similar_past_examples("Laptop computer for lab")
         self.assertIn('"comments": "This is a very high priority requirement for the lab."', examples)
 
+    def test_comments_active_learning(self):
+        # Setup initial record
+        tender = {
+            "bid_no": "GEM/2026/B/7721923_test",
+            "items": "Refilling of Industrial Gases ...",
+            "category": "Refilling Of Industrial Gases ...",
+            "dept": "Uttar Pradesh Cooperative Sugar Factories Federation Limited",
+            "organisation": "",
+            "comments": "you missed this... Sahkari Chini Mills Ltd. Sultanpur ... thi shoud map organization KSCM Sultanpur"
+        }
+        db.upsert_tender(tender)
+        
+        # Verify settings does not have this mapping yet
+        settings = db.load_settings()
+        mappings = settings.get("value_mappings", [])
+        original_mapping_count = len(mappings)
+        
+        # Run active learning
+        db.apply_active_learning_from_comments()
+        
+        # Verify the record organisation is updated
+        updated = db.get_tender("GEM/2026/B/7721923_test")
+        self.assertEqual(updated.get("organisation"), "KSCM Sultanpur")
+        
+        # Verify settings has been updated with value mapping
+        new_settings = db.load_settings()
+        new_mappings = new_settings.get("value_mappings", [])
+        self.assertEqual(len(new_mappings), original_mapping_count + 1)
+        self.assertEqual(new_mappings[-1]["field"], "organisation")
+        self.assertEqual(new_mappings[-1]["phrase"], "Sahkari Chini Mills Ltd.")
+        self.assertEqual(new_mappings[-1]["key"], "KSCM Sultanpur")
+
 if __name__ == '__main__':
     unittest.main()

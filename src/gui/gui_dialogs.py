@@ -1630,6 +1630,17 @@ class DialogsMixin:
             
             # Refresh table tab and details side panel
             self._refresh_table_view()
+            
+            # Run active learning to immediately apply any comment rules
+            try:
+                db.apply_active_learning_from_comments()
+                # Reload the record from the database to reflect active learning corrections
+                updated_rec = db.get_tender(bid_no)
+                if updated_rec:
+                    rec.update(updated_rec)
+            except Exception as al_err:
+                self._log("warn", f"Could not apply active learning: {al_err}")
+                
             if hasattr(self, "table_tab") and self.table_tab and hasattr(self.table_tab, "detail_panel") and self.table_tab.detail_panel:
                 self.table_tab.detail_panel.on_treeview_select(None)
                 

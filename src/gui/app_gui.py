@@ -580,6 +580,12 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
             from vector_search import start_background_embedding_worker
             start_background_embedding_worker(callback_fn=self._refresh_table_view)
             
+            # Run active learning from comments on startup
+            try:
+                db.apply_active_learning_from_comments()
+            except Exception as al_err:
+                self._log("warn", f"Could not run active learning from comments on startup: {al_err}")
+            
             display_path = db.DB_FILE.replace(os.path.expanduser("~"), "~")
             self._set_status(f"Database: {display_path}", SUCCESS)
             self._log("info", f"Loaded {len(self._records)} historical tender(s) from database: {db.DB_FILE}")

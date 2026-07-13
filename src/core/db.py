@@ -875,3 +875,81 @@ def get_tender(bid_no):
             if conn:
                 try: conn.close()
                 except Exception: pass
+
+
+def apply_active_learning_from_comments():
+    """
+    Scans all tender records in the database for comment instructions
+    (e.g., 'this should map organization to X') and automatically
+    updates the record and adds global value mapping rules to settings.
+    """
+    import re
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT bid_no, comments, dept, organisation, category FROM bids WHERE comments IS NOT NULL AND comments != ''")
+            rows = cursor.fetchall()
+            
+            settings_changed = False
+            settings = load_settings()
+            mappings = settings.get("value_mappings", [])
+            
+            for bid_no, comment, dept, organisation, category in rows:
+                match = re.search(r'(?:thi[s]?\s+)?shoud?\s+map\s+(organisation|organization|dept|department|category|location|office|ministry)\s+(?:to\s+)?(.+)', comment, re.IGNORECASE)
+                if match:
+                    field_type = match.group(1).lower()
+                    target_value = match.group(2).strip()
+                    
+                    field = "organisation" if field_type in ("organisation", "organization") else "dept" if field_type in ("dept", "department") else field_type
+                    
+                    # Check if database already matches the target value
+                    cursor.execute(f"SELECT {field} FROM bids WHERE bid_no=?", (bid_no,))
+                    curr_row = cursor.fetchone()
+                    if curr_row and curr_row[0] != target_value:
+                        cursor.execute(f"UPDATE bids SET {field} = ?, embedding = NULL WHERE bid_no = ?", (target_value, bid_no))
+                        conn.commit()
+                        logger.log_ok(f"Active Learning: Updated bid {bid_no} field {field} to '{target_value}' based on comment.")
+                    
+                    # Extract trigger phrase from comment
+                    phrase = None
+                    for line in comment.split("\n"):
+                        line_clean = line.strip()
+                        if "Sahkari Chini" in line_clean or "Mills Ltd" in line_clean or "Mill" in line_clean:
+                            for kw in ["Sahkari Chini Mills Ltd.", "Sahkari Chini Mills Ltd", "Sahkari Chini Mills", "Kisan Sahkari Chini Mills"]:
+                                if kw.lower() in line_clean.lower():
+                                    phrase = kw
+                                    break
+                            if not phrase:
+                                phrase = line_clean
+                                phrase = re.sub(r'^[0-9\s,]+', '', phrase).strip()
+                            break
+                    if not phrase:
+                        phrase = dept or organisation or category
+                    
+                    if phrase:
+                        # Add mapping rule if not present
+                        exists = False
+                        for rule in mappings:
+                            if rule.get("field") == field and rule.get("phrase") == phrase and rule.get("key") == target_value:
+                                exists = True
+                                break
+                        if not exists:
+                            mappings.append({
+                                "field": field,
+                                "phrase": phrase,
+                                "key": target_value
+                            })
+                            settings_changed = True
+                            logger.log_ok(f"Active Learning: Extracted keyword mapping '{phrase}' -> '{target_value}' for field '{field}' from comments.")
+                            
+            if settings_changed:
+                save_setting("value_mappings", mappings)
+                
+        except Exception as e:
+            logger.log_err(f"Active learning from comments failed: {e}")
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
