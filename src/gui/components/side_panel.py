@@ -216,7 +216,7 @@ class TenderDetailPanel(tk.Frame):
             "Dates & Schedule": ["start_date", "end_date", "bid_opening"],
             "Financial Details": ["est_value", "emd", "epbg", "min_turnover"],
             "Qualifications": ["exp_years", "contract_dur", "mii", "mse_pref", "mse_relax", "startup_relax"],
-            "Status & Metadata": ["filing_status", "tags", "remarks", "pdf_path"]
+            "Status & Metadata": ["filing_status", "tags", "remarks", "pdf_path", "comments"]
         }
         
         # Mapping DB field keys to human readable labels
@@ -229,7 +229,7 @@ class TenderDetailPanel(tk.Frame):
             "min_turnover": "Min Turnover", "exp_years": "Exp Years Required", "contract_dur": "Contract Duration", 
             "mii": "MII Compliant", "mse_pref": "MSE Pref", "mse_relax": "MSE Relaxation", 
             "startup_relax": "Startup Relaxation", "filing_status": "Filing Status", "tags": "Tags", 
-            "remarks": "Remarks", "pdf_path": "Associated PDF"
+            "remarks": "Remarks", "pdf_path": "Associated PDF", "comments": "Comments"
         }
         
         first = True

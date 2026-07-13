@@ -185,7 +185,8 @@ def get_conn():
                     tags TEXT,
                     pdf_path TEXT,
                     embedding TEXT,
-                    matched_firm TEXT
+                    matched_firm TEXT,
+                    comments TEXT
                 )
             """)
             conn.commit()
@@ -286,7 +287,7 @@ COLUMNS = [
     "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
     "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
     "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path",
-    "embedding", "matched_firm"
+    "embedding", "matched_firm", "comments"
 ]
 
 def row_to_dict(row):

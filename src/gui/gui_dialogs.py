@@ -1538,6 +1538,85 @@ class DialogsMixin:
         self._btn(btn_fr, "  Cancel  ", win.destroy, bg=CARD).pack(side="right", padx=(10, 40), expand=True, fill="x")
 
         render_tags_list()
+    def _show_comments_dialog(self):
+        sel = self.tv.selection()
+        if not sel:
+            messagebox.showwarning("No Rows Selected", "Please select a tender to view or add comments.", parent=self)
+            return
+
+        iid = sel[0]
+        bid_no = self.tv.set(iid, "bid_no")
+        if not bid_no:
+            return
+
+        # Find the record
+        rec = None
+        for r in self._records:
+            if r.get("bid_no") == bid_no:
+                rec = r
+                break
+        
+        if not rec:
+            return
+
+        current_comments = rec.get("comments") or ""
+
+        win = tk.Toplevel(self)
+        win.grab_set()
+        win.transient(self)
+        win.title(f"Tender Comments - {bid_no}")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+
+        x = self.winfo_x() + (self.winfo_width() - 480) // 2
+        y = self.winfo_y() + (self.winfo_height() - 320) // 2
+        win.geometry(f"480x320+{max(0, x)}+{max(0, y)}")
+
+        tk.Label(win, text=f"Comments for {bid_no}", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+
+        txt_frame = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
+        txt_frame.pack(fill="both", expand=True, padx=20, pady=6)
+
+        comments_text = tk.Text(txt_frame, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                                relief="flat", font=FL, wrap="word", highlightthickness=0,
+                                padx=8, pady=8)
+        comments_text.pack(fill="both", expand=True)
+        comments_text.insert("1.0", current_comments)
+
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=12, padx=20)
+
+        def save_comments():
+            comments = comments_text.get("1.0", "end-1c").strip()
+            # Save to database
+            import db
+            db.upsert_tender_field(bid_no, "comments", comments)
+            
+            # Clear embedding to trigger re-embedding with new comments
+            db.upsert_tender_field(bid_no, "embedding", None)
+            
+            # Update local record
+            rec["comments"] = comments
+            rec["embedding"] = None
+            
+            # Trigger background embedding in background thread
+            try:
+                import vector_search
+                vector_search.start_background_embedding_worker()
+            except Exception as ex:
+                self._log("warn", f"Could not restart background embedder: {ex}")
+            
+            # Refresh table tab and details side panel
+            self._refresh_table_view()
+            if hasattr(self, "table_tab") and self.table_tab and hasattr(self.table_tab, "detail_panel") and self.table_tab.detail_panel:
+                self.table_tab.detail_panel.on_treeview_select(None)
+                
+            self._log("ok", f"Saved comments for bid {bid_no}. Regenerating embedding in background.")
+            win.destroy()
+
+        self._btn(btn_fr, "Save Comments", save_comments, bg=ACCENT2).pack(side="right", padx=4)
+        self._btn(btn_fr, "Cancel", win.destroy, bg=CARD).pack(side="right", padx=4)
+
 
     def _show_filter_rules_dialog(self):
         win = tk.Toplevel(self)

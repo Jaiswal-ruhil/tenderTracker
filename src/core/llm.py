@@ -869,7 +869,8 @@ def get_similar_past_examples(text, limit=3):
                 "exp_years": r.get("exp_years", ""),
                 "bid_opening": r.get("bid_opening", ""),
                 "start_date": r.get("start_date", ""),
-                "end_date": r.get("end_date", "")
+                "end_date": r.get("end_date", ""),
+                "comments": r.get("comments", "")
             }
             ex_txt += f"Parsed Output JSON:\n{json.dumps(ex_json, indent=2)}\n"
             example_strs.append(ex_txt)

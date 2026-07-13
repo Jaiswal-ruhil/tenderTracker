@@ -142,5 +142,28 @@ class TestRAG(unittest.TestCase):
         self.assertIn("Cable", examples)
         self.assertTrue(mock_semantic_search.called)
 
+    def test_comments_in_rag_and_embedding(self):
+        # 1. Test database comments field upsert and retrieve
+        tender = {
+            "bid_no": "GEM/2026/B/99995",
+            "items": "Laptop computer",
+            "category": "Computer",
+            "organisation": "DRDO",
+            "dept": "Ministry of Defence",
+            "comments": "This is a very high priority requirement for the lab."
+        }
+        db.upsert_tender(tender)
+        
+        retrieved = db.get_tender("GEM/2026/B/99995")
+        self.assertEqual(retrieved.get("comments"), "This is a very high priority requirement for the lab.")
+        
+        # 2. Test get_tender_embedding_text includes comments
+        embedding_text = vector_search.get_tender_embedding_text(retrieved)
+        self.assertIn("This is a very high priority requirement for the lab.", embedding_text)
+        
+        # 3. Test get_similar_past_examples includes comments in few-shot example JSON
+        examples = llm.get_similar_past_examples("Laptop computer for lab")
+        self.assertIn('"comments": "This is a very high priority requirement for the lab."', examples)
+
 if __name__ == '__main__':
     unittest.main()

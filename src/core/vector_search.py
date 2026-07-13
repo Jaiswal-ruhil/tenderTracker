@@ -37,7 +37,8 @@ def get_tender_embedding_text(rec):
     org = rec.get("organisation") or ""
     dept = rec.get("dept") or ""
     loc = rec.get("location") or ""
-    return f"{items} {cat} {org} {dept} {loc}".strip()
+    comments = rec.get("comments") or ""
+    return f"{items} {cat} {org} {dept} {loc} {comments}".strip()
 
 def pause_background_embedder():
     """Pause background embedding while parse/fetch workers need the local LLM."""

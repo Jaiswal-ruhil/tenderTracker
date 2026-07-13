@@ -24,6 +24,7 @@ class TenderContextMenu:
         self.row_menu.add_command(label="Mark as Don't Want (Ignore)", command=self.table_tab.mark_selected_dont_want)
         self.row_menu.add_command(label="Reset Manual Tag", command=self.table_tab.reset_selected_tag)
         self.row_menu.add_command(label="Manage Tags...", command=self.table_tab.show_tags_dialog)
+        self.row_menu.add_command(label="📝 Add/Edit Comments...", command=self.table_tab.show_comments_dialog)
         
         # Batch operations submenu
         self.batch_menu = tk.Menu(self.row_menu, tearoff=0, bg=PANEL, fg=TEXT,

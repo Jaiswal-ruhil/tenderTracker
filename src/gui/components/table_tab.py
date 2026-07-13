@@ -1613,3 +1613,6 @@ class TableTab(tk.Frame):
 
     def show_tags_dialog(self):
         self.app._show_tags_dialog()
+
+    def show_comments_dialog(self):
+        self.app._show_comments_dialog()
