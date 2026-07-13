@@ -1217,7 +1217,13 @@ class TableTab(tk.Frame):
             lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
         )
         
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas_window = canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        
+        canvas.bind(
+            "<Configure>",
+            lambda e: canvas.itemconfig(canvas_window, width=e.width)
+        )
+        
         canvas.configure(yscrollcommand=scrollbar.set)
         
         canvas.pack(side="left", fill="both", expand=True)
@@ -1232,7 +1238,7 @@ class TableTab(tk.Frame):
         summary_frame.pack(fill="x", padx=20, pady=10)
         
         tk.Label(summary_frame, text="Filing Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w", pady=5)
-        tk.Label(summary_frame, text=folder_path, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).grid(row=0, column=1, sticky="w", pady=5, padx=(10, 0))
+        tk.Label(summary_frame, text=folder_path, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB, wraplength=550, justify="left").grid(row=0, column=1, sticky="w", pady=5, padx=(10, 0))
         
         tk.Label(summary_frame, text="Document Status:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=1, column=0, sticky="w", pady=5)
         status_text = f"Required: {required} | Matched: {matched} | Missing: {missing}"
