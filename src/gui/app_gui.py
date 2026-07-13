@@ -476,7 +476,8 @@ class TenderApp(tk.Tk, WorkersMixin):
                     self._write_to_log_widget(level, msg, details)
                 except Exception:
                     break
-            self.after(50, self._poll_log_queue)
+            if self.winfo_exists():
+                self._poll_log_after_id = self.after(50, self._poll_log_queue)
         except Exception:
             # Widget has been destroyed — stop rescheduling silently
             pass
@@ -490,6 +491,11 @@ class TenderApp(tk.Tk, WorkersMixin):
 
     def destroy(self):
         """Stop watchdog thread and destroy the window."""
+        if hasattr(self, '_poll_log_after_id') and self._poll_log_after_id:
+            try:
+                self.after_cancel(self._poll_log_after_id)
+            except Exception:
+                pass
         import logger as _logger_mod
         _logger_mod.stop_watchdog()
         super().destroy()
