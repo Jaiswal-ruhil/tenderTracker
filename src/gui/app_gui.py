@@ -130,12 +130,14 @@ class TenderApp(tk.Tk, WorkersMixin):
         self.tab_ingest = tk.Frame(self.notebook, bg=BG)
         self.tab_calendar = tk.Frame(self.notebook, bg=BG)
         self.tab_analytics = tk.Frame(self.notebook, bg=BG)
+        self.tab_chat = tk.Frame(self.notebook, bg=BG)
         
         self.notebook.add(self.tab_table, text="  Tenders Table  ")
         self.notebook.add(self.tab_dashboard, text="  Dashboard  ")
         self.notebook.add(self.tab_ingest, text="  Import / Ingest  ")
         self.notebook.add(self.tab_calendar, text="  Calendar View  ")
         self.notebook.add(self.tab_analytics, text="  Analytics  ")
+        self.notebook.add(self.tab_chat, text="  Chat with Ruhil  ")
 
         # ── Import & Ingest Tab Layout ────────────────────────────────────────
         # Split ingest into left (paste/import options) and right (logs)
@@ -243,6 +245,9 @@ class TenderApp(tk.Tk, WorkersMixin):
 
         # Build Analytics tab layouts
         self._build_analytics_tab()
+        
+        # Build Chat tab layouts
+        self._build_chat_tab()
 
         # Bind notebook tab change event to refresh calendar if switched to it
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
@@ -461,7 +466,7 @@ class TenderApp(tk.Tk, WorkersMixin):
 
     def _on_tab_changed(self, event):
         import logger as _logger_mod
-        TAB_NAMES = ["Tenders Table", "Dashboard", "Import / Ingest", "Calendar View", "Analytics"]
+        TAB_NAMES = ["Tenders Table", "Dashboard", "Import / Ingest", "Calendar View", "Analytics", "Chat with Ruhil"]
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
@@ -472,6 +477,8 @@ class TenderApp(tk.Tk, WorkersMixin):
                 self._update_details()
             elif selected_tab == self.notebook.index(self.tab_analytics):
                 self._update_analytics()
+            elif selected_tab == self.notebook.index(self.tab_chat):
+                self.chat_tab._update_status()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
 
@@ -905,3 +912,9 @@ class TenderApp(tk.Tk, WorkersMixin):
 
     def _filter_by_firm(self, name):
         self.analytics_tab._filter_by_firm(name)
+
+    def _build_chat_tab(self):
+        from components.chat_tab import ChatTab
+        self.chat_tab = ChatTab(self.tab_chat, self)
+        self.chat_tab.pack(fill="both", expand=True)
+
