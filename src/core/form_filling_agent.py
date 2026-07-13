@@ -27,7 +27,7 @@ class FormFillingAgent:
     def initialize_browser(self, headless: bool = False):
         """Initializes Chrome Selenium WebDriver."""
         self._log("info", "Initializing Chrome browser for form filling...")
-        mods = scraper.import_selenium_modules()
+        mods = scraper._try_import_selenium()
         if not mods:
             raise ImportError("Selenium and required web drivers are not installed.")
             

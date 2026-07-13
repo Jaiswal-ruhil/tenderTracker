@@ -187,6 +187,59 @@ def create_server(port: int = 8103) -> FastMCP:
         except Exception as exc:
             return {"valid": False, "errors": [f"Verification failed: {exc}"], "warnings": []}
 
+    @mcp.tool()
+    def execute_portal_filing(
+        bid_no: str,
+        firm_name: Optional[str] = None,
+        headless: bool = False
+    ) -> Dict[str, Any]:
+        """
+        Launches a Selenium browser session to log in to GeM, navigate to the target bid,
+        and upload all gathered compliance documents.
+        """
+        from form_filling_agent import FormFillingAgent
+        
+        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        if not tender:
+            return {"success": False, "error": f"Tender not found: {bid_no}"}
+            
+        workflow = FilingWorkflow()
+        result = workflow.start_filing_process(tender, firm_name=firm_name)
+        if not result.get("success"):
+            return {"success": False, "error": f"Filing preparation failed: {result.get('error')}"}
+            
+        filing_folder = result.get("filing_folder")
+        matched_docs = result.get("matched_documents", {})
+        
+        if not matched_docs:
+            return {"success": False, "error": "No documents matched for filing."}
+            
+        agent = FormFillingAgent()
+        try:
+            agent.initialize_browser(headless=headless)
+            
+            # Step 1: Login
+            if not agent.gem_portal_login():
+                return {"success": False, "error": "Login or MFA verification timed out."}
+                
+            # Step 2: Navigate to bid
+            if not agent.navigate_to_bid(bid_no):
+                return {"success": False, "error": f"Failed to navigate to bid {bid_no}."}
+                
+            # Step 3: Upload files
+            upload_results = agent.upload_all_filing_pack(filing_folder, matched_docs)
+            
+            return {
+                "success": True,
+                "bid_no": bid_no,
+                "upload_results": upload_results,
+                "filing_folder": filing_folder
+            }
+        except Exception as e:
+            return {"success": False, "error": f"Filing execution failed: {e}"}
+        finally:
+            agent.close()
+
     return mcp
 
 
