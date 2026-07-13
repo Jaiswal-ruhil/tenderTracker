@@ -1596,6 +1596,9 @@ class DialogsMixin:
 
         tk.Label(win, text=f"Comments for {bid_no}", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
 
+        btn_fr = tk.Frame(win, bg=BG)
+        btn_fr.pack(fill="x", side="bottom", pady=12, padx=20)
+
         txt_frame = tk.Frame(win, bg=PANEL, highlightthickness=1, highlightbackground="#30363D")
         txt_frame.pack(fill="both", expand=True, padx=20, pady=6)
 
@@ -1604,9 +1607,6 @@ class DialogsMixin:
                                 padx=8, pady=8)
         comments_text.pack(fill="both", expand=True)
         comments_text.insert("1.0", current_comments)
-
-        btn_fr = tk.Frame(win, bg=BG)
-        btn_fr.pack(fill="x", side="bottom", pady=12, padx=20)
 
         def save_comments():
             comments = comments_text.get("1.0", "end-1c").strip()
