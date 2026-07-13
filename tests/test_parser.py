@@ -10,6 +10,7 @@ import parser
 class TestParser(unittest.TestCase):
     def setUp(self):
         import db
+        import shutil
         self.old_db = db.DB_FILE
         self.old_settings = db.SETTINGS_FILE
         db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_parser_tenders_db.db")
@@ -20,6 +21,7 @@ class TestParser(unittest.TestCase):
         if os.path.exists(db.SETTINGS_FILE):
             try: os.remove(db.SETTINGS_FILE)
             except: pass
+        shutil.copy(os.path.join(os.path.dirname(__file__), "test_settings.json"), db.SETTINGS_FILE)
 
     def tearDown(self):
         import db

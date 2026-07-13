@@ -4,11 +4,6 @@ try:
 except ImportError:  # geocode not available (e.g. build environment)
     def _enrich_location(loc): return loc
 
-try:
-    from config import CATEGORY_MAPPING
-except ImportError:
-    CATEGORY_MAPPING = []
-
 def map_category(raw_val, allow_llm=True):
     if not raw_val or not str(raw_val).strip():
         return ""
@@ -24,12 +19,7 @@ def map_category(raw_val, allow_llm=True):
         settings = {}
         
     if not mappings:
-        # Fallback to config
-        try:
-            from config import CATEGORY_MAPPING
-            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-        except ImportError:
-            mappings = []
+        mappings = []
 
     # Fast keyword matching first — avoids an LLM round-trip when rules already match
     for item in mappings:
@@ -69,10 +59,7 @@ def _is_mapped_category(category_name):
     try:
         import db
         settings = db.load_settings()
-        mappings = settings.get("category_mappings")
-        if not mappings:
-            from config import CATEGORY_MAPPING
-            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
+        mappings = settings.get("category_mappings") or []
         known_names = {m["name"].lower() for m in mappings if m.get("name")}
         return category_name.strip().lower() in known_names
     except Exception:
@@ -614,13 +601,7 @@ def learn_category_mapping(items, new_category):
     settings = db.load_settings()
 
     # Load mappings early (needed for LLM category mapping below)
-    mappings = settings.get("category_mappings")
-    if not mappings:
-        try:
-            from config import CATEGORY_MAPPING
-            mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-        except Exception:
-            mappings = []
+    mappings = settings.get("category_mappings") or []
 
     # If LLM mapping is enabled, ask the LLM to normalize/suggest a canonical
     # category name for these items. This helps keep category names consistent.

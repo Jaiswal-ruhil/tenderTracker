@@ -341,13 +341,7 @@ class TendersTableView(tk.Frame):
         
         if col_id == "category":
             settings = db.load_settings()
-            mappings = settings.get("category_mappings")
-            if not mappings:
-                try:
-                    from config import CATEGORY_MAPPING
-                    mappings = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-                except Exception:
-                    mappings = []
+            mappings = settings.get("category_mappings") or []
             category_options = sorted(list(set(m["name"] for m in mappings if m.get("name"))))
             
             e = ttk.Combobox(self.tv, textvariable=var, values=category_options, font=FL)

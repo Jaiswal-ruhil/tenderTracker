@@ -28,6 +28,9 @@ class TestLLM(unittest.TestCase):
         if os.path.exists(db.SETTINGS_FILE):
             try: os.remove(db.SETTINGS_FILE)
             except: pass
+            
+        import shutil
+        shutil.copy(os.path.join(os.path.dirname(__file__), "test_settings.json"), db.SETTINGS_FILE)
 
         # Reset LLM module cache state for isolated tests
         llm._loaded_local_models.clear()

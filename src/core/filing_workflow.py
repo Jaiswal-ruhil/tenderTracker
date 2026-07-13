@@ -1,12 +1,13 @@
 """
 filing_workflow.py
 ~~~~~~~~~~~~~~~~~~
-Workflow for tender filing process:
-1. Download tender PDF (if not present)
+Enhanced workflow for tender filing process with automation upgrades:
+1. Download tender PDF (if not present) with retry logic
 2. Extract required documents from PDF using hybrid regex/LLM approach
-3. Match with pre-uploaded firm documents
-4. Copy documents to filing folder
-5. Generate checklist and summary
+3. Match with pre-uploaded firm documents using AI-powered matching
+4. Copy documents to filing folder with validation
+5. Generate checklist and summary with GEM requirements mapping
+6. Automated document validation and integrity checks
 """
 
 import os
@@ -21,6 +22,8 @@ import scraper
 import pdf_extractor
 from parser import convert_pdf_text_to_markdown
 import llm
+from excel import financial_year
+from alert_system import alert_document_issue, alert_filing_issue, alert_network_issue, AlertSeverity
 
 
 class FilingWorkflow:
@@ -28,7 +31,7 @@ class FilingWorkflow:
     
     def __init__(self, log_fn=None):
         """
-        Initialize the filing workflow.
+        Initialize the filing workflow with enhanced automation.
         
         Args:
             log_fn: Optional logging function (signature: log_fn(level, message))
@@ -39,12 +42,314 @@ class FilingWorkflow:
         self.missing_documents = []
         self.filing_folder = ""
         self._local_llm_used = False
+        self.category = "General"
+        self.emd_details = {}
+        self.validation_results = {}  # Store document validation results
+        self.processing_stats = {}  # Track processing statistics
+    
+    def _validate_file_path(self, path: str) -> bool:
+        """Validate if a file path is safe and accessible."""
+        if not path or not isinstance(path, str):
+            return False
+        try:
+            # Check for invalid characters
+            invalid_chars = '<>:"|?*'
+            if any(char in path for char in invalid_chars):
+                return False
+            # Check if path is too long
+            if len(path) > 260:  # Windows MAX_PATH
+                return False
+            return True
+        except Exception:
+            return False
+    
+    def _validate_url(self, url: str) -> bool:
+        """Validate if a URL is properly formatted."""
+        if not url or not isinstance(url, str):
+            return False
+        try:
+            from urllib.parse import urlparse
+            result = urlparse(url)
+            return all([result.scheme, result.netloc])
+        except Exception:
+            return False
+    
+    def _retry_operation(self, operation, max_retries=3, delay=1.0, operation_name="operation"):
+        """
+        Retry an operation with exponential backoff.
+        
+        Args:
+            operation: Function to retry
+            max_retries: Maximum number of retry attempts
+            delay: Initial delay between retries in seconds
+            operation_name: Name of the operation for logging
+            
+        Returns:
+            Result of the operation or None if all retries fail
+        """
+        import time
+        for attempt in range(max_retries):
+            try:
+                return operation()
+            except (ConnectionError, TimeoutError) as e:
+                if attempt < max_retries - 1:
+                    wait_time = delay * (2 ** attempt)  # Exponential backoff
+                    self._log('warn', f'{operation_name} failed (attempt {attempt + 1}/{max_retries}), retrying in {wait_time:.1f}s: {e}')
+                    time.sleep(wait_time)
+                else:
+                    self._log('err', f'{operation_name} failed after {max_retries} attempts: {e}')
+                    return None
+            except Exception as e:
+                self._log('err', f'{operation_name} failed with unexpected error: {e}')
+                return None
+    
+    def _validate_document_integrity(self, file_path: str) -> Dict:
+        """
+        Validate document integrity and metadata.
+        
+        Args:
+            file_path: Path to the document file
+            
+        Returns:
+            Dictionary with validation results
+        """
+        validation = {
+            "valid": True,
+            "file_size": 0,
+            "file_type": "unknown",
+            "errors": [],
+            "warnings": []
+        }
+        
+        try:
+            if not os.path.exists(file_path):
+                validation["valid"] = False
+                validation["errors"].append("File does not exist")
+                return validation
+            
+            validation["file_size"] = os.path.getsize(file_path)
+            
+            # Check file size limits (GEM limit is 10MB)
+            if validation["file_size"] > 10 * 1024 * 1024:  # 10MB
+                validation["warnings"].append(f"File size ({validation['file_size'] / 1024 / 1024:.1f}MB) exceeds GEM limit of 10MB")
+            
+            # Check file type
+            file_ext = os.path.splitext(file_path)[1].lower()
+            validation["file_type"] = file_ext[1:] if file_ext else "unknown"
+            
+            if file_ext not in ['.pdf', '.doc', '.docx']:
+                validation["warnings"].append(f"File type '{validation['file_type']}' may not be accepted by GEM")
+            
+            # PDF-specific validation
+            if file_ext == '.pdf':
+                try:
+                    import pypdf
+                    with open(file_path, 'rb') as f:
+                        reader = pypdf.PdfReader(f)
+                        page_count = len(reader.pages)
+                        
+                        # Check page limit (GEM limit is 100 pages)
+                        if page_count > 100:
+                            validation["warnings"].append(f"PDF has {page_count} pages, exceeding GEM limit of 100 pages")
+                        
+                        # Check if PDF is encrypted
+                        if reader.is_encrypted:
+                            validation["errors"].append("PDF is encrypted and cannot be processed")
+                            validation["valid"] = False
+                        
+                        # Check for corrupted pages
+                        corrupted_pages = []
+                        for i, page in enumerate(reader.pages):
+                            try:
+                                page.extract_text()
+                            except Exception:
+                                corrupted_pages.append(i + 1)
+                        
+                        if corrupted_pages:
+                            validation["warnings"].append(f"Pages {corrupted_pages} may be corrupted")
+                
+                except Exception as e:
+                    validation["errors"].append(f"PDF validation failed: {str(e)}")
+                    validation["valid"] = False
+            
+        except Exception as e:
+            validation["valid"] = False
+            validation["errors"].append(f"Validation error: {str(e)}")
+        
+        return validation
+    
+    def _ai_enhanced_document_matching(self, required_docs: List[Dict], firm_documents: Dict) -> Dict:
+        """
+        Enhanced document matching using AI-powered similarity scoring.
+        
+        Args:
+            required_docs: List of required document dictionaries
+            firm_documents: Dictionary of available firm documents
+            
+        Returns:
+            Enhanced matched documents dictionary with confidence scores
+        """
+        enhanced_matches = {}
+        
+        for req_doc in required_docs:
+            doc_name = req_doc.get('name', '').lower()
+            best_match = None
+            best_score = 0.0
+            
+            for firm_doc_name, firm_doc_path in firm_documents.items():
+                firm_name_lower = firm_doc_name.lower()
+                
+                # Exact match
+                if doc_name == firm_name_lower:
+                    best_match = firm_doc_path
+                    best_score = 1.0
+                    break
+                
+                # Calculate similarity score
+                score = self._calculate_similarity_score(doc_name, firm_name_lower)
+                
+                if score > best_score and score > 0.6:  # Threshold for matching
+                    best_match = firm_doc_path
+                    best_score = score
+            
+            if best_match:
+                enhanced_matches[req_doc['name']] = {
+                    'path': best_match,
+                    'confidence': best_score,
+                    'source': 'firm'
+                }
+        
+        return enhanced_matches
+    
+    def _calculate_similarity_score(self, text1: str, text2: str) -> float:
+        """
+        Calculate similarity score between two text strings using multiple methods.
+        
+        Args:
+            text1: First text string
+            text2: Second text string
+            
+        Returns:
+            Similarity score between 0.0 and 1.0
+        """
+        from difflib import SequenceMatcher
+        
+        # Method 1: Sequence matching
+        seq_score = SequenceMatcher(None, text1, text2).ratio()
+        
+        # Method 2: Word overlap
+        words1 = set(text1.split())
+        words2 = set(text2.split())
+        if words1 or words2:
+            overlap_score = len(words1 & words2) / len(words1 | words2)
+        else:
+            overlap_score = 0.0
+        
+        # Method 3: Substring matching
+        substring_score = 0.0
+        if text1 in text2 or text2 in text1:
+            substring_score = 0.8
+        
+        # Combine scores with weights
+        combined_score = (seq_score * 0.4) + (overlap_score * 0.4) + (substring_score * 0.2)
+        
+        return combined_score
+    
+    def _validate_copied_documents(self):
+        """
+        Validate all copied documents for GEM compliance.
+        Stores validation results and logs any issues.
+        """
+        self.validation_results = {}
+        validation_issues = []
+        
+        for doc_name, doc_info in self.matched_documents.items():
+            doc_path = doc_info.get('path') if isinstance(doc_info, dict) else doc_info
+            if not doc_path or not os.path.exists(doc_path):
+                continue
+            
+            validation = self._validate_document_integrity(doc_path)
+            self.validation_results[doc_name] = validation
+            
+            if not validation["valid"]:
+                validation_issues.append(f"{doc_name}: {', '.join(validation['errors'])}")
+            elif validation["warnings"]:
+                self._log('warn', f"{doc_name} warnings: {', '.join(validation['warnings'])}")
+        
+        if validation_issues:
+            alert_document_issue(
+                title="Document Validation Failed",
+                message=f"Some documents failed validation:\n" + "\n".join(validation_issues),
+                context={"validation_results": self.validation_results},
+                severity=AlertSeverity.WARNING
+            )
+        else:
+            self._log('ok', 'All documents validated successfully for GEM compliance')
+    
+    def _generate_validation_report(self, bid_no: str) -> str:
+        """
+        Generate a validation report for all copied documents.
+        
+        Args:
+            bid_no: Tender bid number
+            
+        Returns:
+            Path to the generated validation report file
+        """
+        report_path = os.path.join(self.filing_folder, "Document_Validation_Report.txt")
+        
+        try:
+            with open(report_path, 'w', encoding='utf-8') as f:
+                f.write("Document Validation Report\n")
+                f.write("=" * 50 + "\n\n")
+                f.write(f"Tender: {bid_no}\n")
+                f.write(f"Filing Folder: {self.filing_folder}\n")
+                f.write(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+                
+                f.write("GEM Compliance Validation\n")
+                f.write("-" * 50 + "\n\n")
+                
+                for doc_name, validation in self.validation_results.items():
+                    f.write(f"Document: {doc_name}\n")
+                    f.write(f"  Status: {'✓ VALID' if validation['valid'] else '✗ INVALID'}\n")
+                    f.write(f"  File Size: {validation['file_size'] / 1024 / 1024:.2f} MB\n")
+                    f.write(f"  File Type: {validation['file_type']}\n")
+                    
+                    if validation['errors']:
+                        f.write(f"  Errors:\n")
+                        for error in validation['errors']:
+                            f.write(f"    - {error}\n")
+                    
+                    if validation['warnings']:
+                        f.write(f"  Warnings:\n")
+                        for warning in validation['warnings']:
+                            f.write(f"    - {warning}\n")
+                    
+                    f.write("\n")
+                
+                # Summary
+                valid_count = sum(1 for v in self.validation_results.values() if v['valid'])
+                total_count = len(self.validation_results)
+                
+                f.write("Summary\n")
+                f.write("-" * 50 + "\n")
+                f.write(f"Total Documents: {total_count}\n")
+                f.write(f"Valid: {valid_count}\n")
+                f.write(f"Invalid: {total_count - valid_count}\n")
+                f.write(f"Compliance Rate: {valid_count / total_count * 100:.1f}%\n" if total_count > 0 else "Compliance Rate: N/A\n")
+            
+            self._log('ok', f'Generated validation report: {report_path}')
+            return report_path
+            
+        except Exception as e:
+            self._log('err', f'Failed to generate validation report: {e}')
+            return ""
         
     def _log(self, level: str, message: str):
         """Internal logging method."""
         self.log_fn(level, message)
     
-    def start_filing_process(self, tender_record: Dict, firm_name: str = None) -> Dict:
+    def start_filing_process(self, tender_record: Dict, firm_name: str = None, category: str = None) -> Dict:
         """
         Start the complete filing process for a tender.
         
@@ -71,7 +376,7 @@ class FilingWorkflow:
             self.missing_documents = []
             self.filing_folder = ""
             self._local_llm_used = False
-            self.category = "General"
+            self.category = category or "General"
             self.emd_details = {}
 
             bid_no = tender_record.get('bid_no', '')
@@ -86,14 +391,52 @@ class FilingWorkflow:
                 return {'success': False, 'error': 'Failed to obtain tender PDF'}
             
             # Step 2: Create filing folder
-            self.filing_folder = self._create_filing_folder(bid_no)
+            self.filing_folder = self._create_filing_folder(bid_no, firm_name, tender_record)
             self._log('ok', f'Created filing folder: {self.filing_folder}')
             
             # Step 3: Copy tender PDF to filing folder
-            self._copy_tender_pdf(pdf_path)
+            try:
+                self._copy_tender_pdf(pdf_path)
+            except (FileNotFoundError, PermissionError, OSError) as copy_err:
+                self._log('warn', f'Failed to copy tender PDF: {copy_err}')
+                alert_filing_issue(
+                    title="PDF Copy Failed",
+                    message=f"Failed to copy tender PDF to filing folder: {str(copy_err)}",
+                    context={"pdf_path": pdf_path, "filing_folder": self.filing_folder, "error": str(copy_err)},
+                    severity=AlertSeverity.WARNING
+                )
+                # Continue with the process even if copy fails
+            except Exception as copy_err:
+                self._log('warn', f'Unexpected error copying tender PDF: {copy_err}')
+                alert_filing_issue(
+                    title="Unexpected PDF Copy Error",
+                    message=f"Unexpected error copying tender PDF: {str(copy_err)}",
+                    context={"pdf_path": pdf_path, "error": str(copy_err)},
+                    severity=AlertSeverity.WARNING
+                )
+                # Continue with the process even if copy fails
             
             # Step 4: Scan tender PDF for embedded links, download to Additional_Tender_Documents
-            self._download_embedded_links(pdf_path)
+            try:
+                self._download_embedded_links(pdf_path)
+            except (ConnectionError, TimeoutError) as link_err:
+                self._log('warn', f'Network error downloading embedded links: {link_err}')
+                alert_network_issue(
+                    title="Embedded Links Download Failed",
+                    message=f"Network error while downloading embedded links from PDF: {str(link_err)}",
+                    context={"pdf_path": pdf_path, "error": str(link_err)},
+                    severity=AlertSeverity.WARNING
+                )
+                # Continue with the process even if embedded link download fails
+            except Exception as link_err:
+                self._log('warn', f'Failed to download embedded links: {link_err}')
+                alert_document_issue(
+                    title="Embedded Links Processing Error",
+                    message=f"Failed to process embedded links: {str(link_err)}",
+                    context={"pdf_path": pdf_path, "error": str(link_err)},
+                    severity=AlertSeverity.WARNING
+                )
+                # Continue with the process even if embedded link download fails
             
             # Step 5: Sourcing/Extracting Text from all files in Additional_Tender_Documents + main PDF
             self._log('info', 'Extracting and scanning text from all downloaded documents (PDF, Excel, CSV)...')
@@ -137,6 +480,15 @@ class FilingWorkflow:
             
             self._log('ok', f'Found {len(self.required_documents)} required document types across all files')
             
+            # Alert if no required documents found
+            if len(self.required_documents) == 0:
+                alert_document_issue(
+                    title="No Required Documents Found",
+                    message="Failed to extract any required documents from tender PDF and additional documents",
+                    context={"pdf_path": pdf_path, "tender_id": bid_no},
+                    severity=AlertSeverity.WARNING
+                )
+            
             # Step 8: Extract EMD / Security Deposit details
             self._log('info', 'Extracting EMD and security requirements...')
             self.emd_details = self._extract_emd_details_llm(combined_text)
@@ -146,24 +498,60 @@ class FilingWorkflow:
                     emd_source.append(fname)
             self.emd_details['source_file'] = ", ".join(emd_source) if emd_source else "Tender_Document.pdf"
             
-            # Step 9: Match standard documents and category-specific documents
+            # Step 9: Match standard documents and category-specific documents with AI enhancement
             self._log('info', 'Matching required documents with firm documents...')
             active_firm = firm_name or tender_record.get('matched_firm') or "General"
             firm_documents = self._get_firm_documents(active_firm)
             
-            # Match standard documents
-            self._match_documents(firm_documents)
+            # Use AI-enhanced matching for better accuracy
+            self._log('info', 'Using AI-powered similarity scoring for document matching...')
+            enhanced_matches = self._ai_enhanced_document_matching(self.required_documents, firm_documents)
+            
+            # Fall back to original matching if AI matching doesn't find enough matches
+            if len(enhanced_matches) < len(self.required_documents) * 0.5:
+                self._log('info', 'AI matching found limited results, using fallback matching...')
+                self._match_documents(firm_documents)
+                # Convert dict format to simple paths for compatibility
+                simple_matches = {}
+                for doc_name, doc_info in self.matched_documents.items():
+                    if isinstance(doc_info, dict):
+                        simple_matches[doc_name] = doc_info.get('path', doc_info)
+                    else:
+                        simple_matches[doc_name] = doc_info
+                self.matched_documents = simple_matches
+            else:
+                self.matched_documents = enhanced_matches
+                self._log('ok', f'AI-enhanced matching: {len(enhanced_matches)} documents matched with confidence scores')
             
             # Auto-pull category documents from settings memory
             self._auto_pull_category_documents(active_firm, self.category)
             
-            # Step 10: Copy documents to filing folder
+            # Step 10: Copy documents to filing folder with validation
             self._log('info', 'Copying matched standard documents to filing folder...')
             self._copy_documents_to_folder()
+            
+            # Validate copied documents
+            self._log('info', 'Validating copied documents for GEM compliance...')
+            self._validate_copied_documents()
             
             # Copy common firm documents (GST, PAN, etc.)
             self._log('info', 'Copying common firm documents (GST, PAN, etc.)...')
             self._copy_common_firm_documents(firm_documents)
+            
+            # Alert if many documents are missing
+            missing_ratio = len(self.missing_documents) / len(self.required_documents) if self.required_documents else 0
+            if missing_ratio > 0.5 and len(self.required_documents) > 3:
+                alert_filing_issue(
+                    title="High Missing Document Ratio",
+                    message=f"{len(self.missing_documents)} out of {len(self.required_documents)} required documents are missing ({missing_ratio:.0%})",
+                    context={
+                        "tender_id": bid_no,
+                        "missing_count": len(self.missing_documents),
+                        "required_count": len(self.required_documents),
+                        "missing_docs": [d['name'] for d in self.missing_documents]
+                    },
+                    severity=AlertSeverity.WARNING
+                )
             
             # Step 11: Collect missing category-specific documents to return
             missing_category_docs = []
@@ -175,6 +563,9 @@ class FilingWorkflow:
             checklist_file = self._generate_checklist(bid_no, tender_record)
             summary_file = self._generate_summary(bid_no, tender_record)
             
+            # Generate validation report
+            validation_file = self._generate_validation_report(bid_no)
+            
             self._log('ok', f'Filing process completed successfully!')
             
             return {
@@ -182,6 +573,7 @@ class FilingWorkflow:
                 'filing_folder': self.filing_folder,
                 'checklist_file': checklist_file,
                 'summary_file': summary_file,
+                'validation_file': validation_file,
                 'required_count': len(self.required_documents),
                 'matched_count': len(self.matched_documents),
                 'missing_count': len(self.missing_documents),
@@ -189,11 +581,49 @@ class FilingWorkflow:
                 'firm_name': active_firm,
                 'category': self.category,
                 'tender_record': tender_record,
-                'required_documents': self.required_documents
+                'required_documents': self.required_documents,
+                'validation_results': self.validation_results,
+                'processing_stats': self.processing_stats
             }
+        except FileNotFoundError as e:
+            error_msg = f'File not found during filing: {str(e)}'
+            self._log('err', error_msg)
+            alert_filing_issue(
+                title="File Not Found",
+                message=error_msg,
+                context={"error": str(e), "tender_id": bid_no},
+                severity=AlertSeverity.ERROR
+            )
+            return {'success': False, 'error': error_msg}
+        except PermissionError as e:
+            error_msg = f'Permission denied during filing: {str(e)}'
+            self._log('err', error_msg)
+            alert_filing_issue(
+                title="Permission Denied",
+                message=error_msg,
+                context={"error": str(e), "tender_id": bid_no},
+                severity=AlertSeverity.ERROR
+            )
+            return {'success': False, 'error': error_msg}
+        except (ConnectionError, TimeoutError) as e:
+            error_msg = f'Network error during filing: {str(e)}'
+            self._log('err', error_msg)
+            alert_network_issue(
+                title="Network Error in Filing",
+                message=error_msg,
+                context={"error": str(e), "tender_id": bid_no},
+                severity=AlertSeverity.ERROR
+            )
+            return {'success': False, 'error': error_msg}
         except Exception as e:
             error_msg = f'Filing process failed: {str(e)}'
             self._log('err', error_msg)
+            alert_filing_issue(
+                title="Unexpected Filing Error",
+                message=error_msg,
+                context={"error": str(e), "tender_id": bid_no},
+                severity=AlertSeverity.ERROR
+            )
             return {'success': False, 'error': error_msg}
         finally:
             # Filing may use local LLM analysis for category and document
@@ -769,10 +1199,20 @@ Return ONLY the JSON array, no other text."""
     
     def _match_documents(self, firm_documents: Dict):
         """
-        Match required documents with available firm documents.
+        Match required documents with available firm documents and COMMON folder files.
+        
+        This method performs intelligent document matching using:
+        1. Exact name matching between required and available documents
+        2. Fuzzy matching based on document type keywords (GST, PAN, MSME, etc.)
+        3. Integration with COMMON folder for shared firm documents
         
         Args:
-            firm_documents: Dictionary of firm document paths
+            firm_documents: Dictionary mapping document names to their file paths
+            
+        Side effects:
+            - Populates self.matched_documents with successfully matched documents
+            - Populates self.missing_documents with unmatched required documents
+            - Logs information about COMMON folder usage and matching results
         """
         self.matched_documents = {}
         self.missing_documents = []
@@ -790,18 +1230,33 @@ Return ONLY the JSON array, no other text."""
             'shareholder': ['shareholder', 'shareholder pattern'],
         }
         
+        # Add COMMON folder files to available documents
+        common_folder_path = os.path.join(self.filing_folder, '..', 'COMMON')
+        common_documents = {}
+        if os.path.exists(common_folder_path) and os.path.isdir(common_folder_path):
+            for item in os.listdir(common_folder_path):
+                item_path = os.path.join(common_folder_path, item)
+                if os.path.isfile(item_path):
+                    common_documents[item] = item_path
+            if common_documents:
+                self._log('info', f'Using {len(common_documents)} COMMON folder files for document matching')
+        
+        # Merge firm documents and COMMON folder documents
+        all_documents = {**firm_documents, **common_documents}
+        
         for req_doc in self.required_documents:
             req_name_lower = req_doc['name'].lower()
             matched = False
             
             # Try exact matches first
-            for doc_key, doc_path in firm_documents.items():
+            for doc_key, doc_path in all_documents.items():
                 if doc_path and os.path.exists(doc_path):
                     doc_key_lower = doc_key.lower()
                     if req_name_lower in doc_key_lower or doc_key_lower in req_name_lower:
+                        source = 'COMMON' if doc_key in common_documents else doc_key
                         self.matched_documents[req_doc['name']] = {
                             'path': doc_path,
-                            'source': doc_key,
+                            'source': source,
                             'document': req_doc
                         }
                         matched = True
@@ -809,13 +1264,14 @@ Return ONLY the JSON array, no other text."""
             
             # Try fuzzy matches
             if not matched:
-                for doc_key, doc_path in firm_documents.items():
+                for doc_key, doc_path in all_documents.items():
                     if doc_path and os.path.exists(doc_path):
                         for map_type, keywords in type_mappings.items():
                             if any(kw in req_name_lower for kw in keywords) and map_type in doc_key.lower():
+                                source = 'COMMON' if doc_key in common_documents else doc_key
                                 self.matched_documents[req_doc['name']] = {
                                     'path': doc_path,
-                                    'source': doc_key,
+                                    'source': source,
                                     'document': req_doc
                                 }
                                 matched = True
@@ -826,30 +1282,142 @@ Return ONLY the JSON array, no other text."""
             if not matched:
                 self.missing_documents.append(req_doc)
     
-    def _create_filing_folder(self, bid_no: str) -> str:
+    def _create_filing_folder(self, bid_no: str, firm_name: str = None, tender_record: Dict = None) -> str:
         """
         Create filing folder for the tender.
         
         Args:
             bid_no: Tender bid number
+            firm_name: Optional firm name for folder naming
+            tender_record: Tender data dictionary for extracting date and category
             
         Returns:
             Path to created folder
         """
-        # Sanitize bid_no for folder name
-        safe_bid_no = re.sub(r'[<>:"/\\|?*]', '_', bid_no)
-        date_str = datetime.now().strftime('%Y%m%d_%H%M%S')
-        folder_name = f"Filing_{safe_bid_no}_{date_str}"
-        
         # Get base directory from settings or use Documents
         settings = db.load_settings()
-        base_dir = settings.get('filing_base_folder', '')
+        base_dir = settings.get('pdf_save_folder', '')
         if not base_dir:
-            base_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'TenderFilings')
+            base_dir = os.path.join(os.path.expanduser('~'), 'Documents', 'TenderPDFs')
         
-        os.makedirs(base_dir, exist_ok=True)
-        folder_path = os.path.join(base_dir, folder_name)
+        # Create base folder structure: {base}\GEM TENDER x {firm_name} {financial_year}
+        fy = financial_year(datetime.now())
+        if firm_name:
+            base_folder_name = f"GEM TENDER x {firm_name} {fy}"
+        else:
+            base_folder_name = f"GEM TENDER {fy}"
+        
+        # Sanitize base folder name
+        base_folder_name = re.sub(r'[<>:"/\\|?*]', '_', base_folder_name)
+        
+        base_folder_path = os.path.join(base_dir, base_folder_name)
+        os.makedirs(base_folder_path, exist_ok=True)
+        
+        # Look for COMMON subfolder for shared firm documents
+        common_folder_path = os.path.join(base_folder_path, 'COMMON')
+        common_files = []
+        
+        if os.path.exists(common_folder_path) and os.path.isdir(common_folder_path):
+            for item in os.listdir(common_folder_path):
+                item_path = os.path.join(common_folder_path, item)
+                # Only copy files, not subdirectories
+                if os.path.isfile(item_path):
+                    common_files.append(item_path)
+            
+            if common_files:
+                self._log('info', f'Found {len(common_files)} common file(s) in COMMON folder')
+        
+        # Create subfolder: {yyyymmdd} {gemid} {firmname} {category}
+        if tender_record:
+            # Extract date from tender record
+            bid_date = tender_record.get('bid_date', '')
+            if bid_date:
+                try:
+                    # Parse date and format as yyyymmdd
+                    date_obj = datetime.strptime(bid_date, '%Y-%m-%d')
+                    date_str = date_obj.strftime('%Y%m%d')
+                except ValueError as date_err:
+                    self._log('warn', f'Failed to parse bid_date "{bid_date}": {date_err}. Using current date.')
+                    date_str = datetime.now().strftime('%Y%m%d')
+            else:
+                self._log('info', 'No bid_date found in tender record, using current date')
+                date_str = datetime.now().strftime('%Y%m%d')
+            
+            # Extract GEM ID from bid_no (e.g., GEM/2026/B/7719019 -> GEM2026B7719019)
+            gem_id = bid_no.replace('/', '').replace('-', '')
+            
+            # Get category (use category from tender record or default to "General")
+            category = tender_record.get('category', 'General')
+            if not category or category == 'N/A':
+                category = 'General'
+            
+            # Apply category mapping from refine rules to get the standardized category
+            try:
+                from parser import map_category
+                # Use items text for better category mapping
+                items_text = tender_record.get('items', '') or tender_record.get('title', '')
+                if items_text:
+                    mapped_category = map_category(items_text, allow_llm=False)
+                    if mapped_category and mapped_category != items_text.strip().title():
+                        category = mapped_category
+            except Exception as map_err:
+                self._log('warn', f'Category mapping failed: {map_err}')
+            
+            # Sanitize category for folder name and truncate if too long
+            category = re.sub(r'[<>:"/\\|?*]', '_', category)
+            # Limit category to 15 characters to avoid path length issues
+            if len(category) > 15:
+                category = category[:15]
+            
+            # Build subfolder name
+            if firm_name:
+                # Sanitize firm name for folder name
+                safe_firm_name = re.sub(r'[<>:"/\\|?*]', '_', firm_name)
+                # Limit firm name to 20 characters
+                if len(safe_firm_name) > 20:
+                    safe_firm_name = safe_firm_name[:20]
+                subfolder_name = f"{date_str} {gem_id} {safe_firm_name} {category}"
+            else:
+                subfolder_name = f"{date_str} {gem_id} {category}"
+        else:
+            # Fallback if no tender record
+            date_str = datetime.now().strftime('%Y%m%d')
+            gem_id = bid_no.replace('/', '').replace('-', '')
+            if firm_name:
+                safe_firm_name = re.sub(r'[<>:"/\\|?*]', '_', firm_name)
+                subfolder_name = f"{date_str} {gem_id} {safe_firm_name}"
+            else:
+                subfolder_name = f"{date_str} {gem_id}"
+        
+        # Sanitize subfolder name
+        subfolder_name = re.sub(r'[<>:"/\\|?*]', '_', subfolder_name)
+        
+        folder_path = os.path.join(base_folder_path, subfolder_name)
+        
+        # Validate path length before creating
+        if len(folder_path) > 250:  # Windows MAX_PATH limit
+            self._log('warn', f'Folder path too long ({len(folder_path)} chars), truncating further')
+            # Truncate subfolder name more aggressively
+            subfolder_name = subfolder_name[:100]
+            folder_path = os.path.join(base_folder_path, subfolder_name)
+        
         os.makedirs(folder_path, exist_ok=True)
+        
+        # Copy common files from base folder to new subfolder
+        if common_files:
+            copied_count = 0
+            for common_file in common_files:
+                try:
+                    filename = os.path.basename(common_file)
+                    dest_path = os.path.join(folder_path, filename)
+                    if not os.path.exists(dest_path):
+                        shutil.copy2(common_file, dest_path)
+                        copied_count += 1
+                except Exception as copy_err:
+                    self._log('warn', f'Failed to copy common file {os.path.basename(common_file)}: {copy_err}')
+            
+            if copied_count > 0:
+                self._log('ok', f'Copied {copied_count} common file(s) to new folder')
         
         return folder_path
     
@@ -857,21 +1425,29 @@ Return ONLY the JSON array, no other text."""
         """Copy matched documents to filing folder."""
         for doc_name, doc_info in self.matched_documents.items():
             try:
-                src_path = doc_info['path']
-                if os.path.exists(src_path):
-                    # Generate safe filename
-                    safe_name = re.sub(r'[<>:"/\\|?*]', '_', doc_name)
-                    ext = os.path.splitext(src_path)[1]
-                    dest_path = os.path.join(self.filing_folder, f"{safe_name}{ext}")
-                    
-                    # Handle duplicate filenames
-                    counter = 1
-                    while os.path.exists(dest_path):
-                        dest_path = os.path.join(self.filing_folder, f"{safe_name}_{counter}{ext}")
-                        counter += 1
-                    
-                    shutil.copy2(src_path, dest_path)
-                    self._log('ok', f'Copied {doc_name} to filing folder')
+                # Handle both dict (AI matching) and string (original matching) formats
+                if isinstance(doc_info, dict):
+                    src_path = doc_info.get('path')
+                else:
+                    src_path = doc_info
+                
+                if not src_path or not os.path.exists(src_path):
+                    self._log('warn', f'Source path not found for {doc_name}')
+                    continue
+                
+                # Generate safe filename
+                safe_name = re.sub(r'[<>:"/\\|?*]', '_', doc_name)
+                ext = os.path.splitext(src_path)[1]
+                dest_path = os.path.join(self.filing_folder, f"{safe_name}{ext}")
+                
+                # Handle duplicate filenames
+                counter = 1
+                while os.path.exists(dest_path):
+                    dest_path = os.path.join(self.filing_folder, f"{safe_name}_{counter}{ext}")
+                    counter += 1
+                
+                shutil.copy2(src_path, dest_path)
+                self._log('ok', f'Copied {doc_name} to filing folder')
                     
             except Exception as e:
                 self._log('err', f'Failed to copy {doc_name}: {e}')

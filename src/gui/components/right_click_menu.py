@@ -24,6 +24,17 @@ class TenderContextMenu:
         self.row_menu.add_command(label="Mark as Don't Want (Ignore)", command=self.table_tab.mark_selected_dont_want)
         self.row_menu.add_command(label="Reset Manual Tag", command=self.table_tab.reset_selected_tag)
         self.row_menu.add_command(label="Manage Tags...", command=self.table_tab.show_tags_dialog)
+        
+        # Batch operations submenu
+        self.batch_menu = tk.Menu(self.row_menu, tearoff=0, bg=PANEL, fg=TEXT,
+                                   activebackground=SEL_BG, activeforeground=TEXT, font=FL)
+        self.batch_menu.add_command(label="Batch Mark as Want", command=lambda: self.table_tab.batch_mark_want())
+        self.batch_menu.add_command(label="Batch Mark as Don't Want", command=lambda: self.table_tab.batch_mark_dont_want())
+        self.batch_menu.add_command(label="Batch Set Status: To Be Filed", command=lambda: self.table_tab.batch_set_status("To Be Filed"))
+        self.batch_menu.add_command(label="Batch Set Status: Evaluating", command=lambda: self.table_tab.batch_set_status("Evaluating"))
+        self.batch_menu.add_command(label="Batch Set Status: Filed", command=lambda: self.table_tab.batch_set_status("Filed"))
+        self.batch_menu.add_command(label="Batch Delete Selected", command=lambda: self.table_tab.batch_delete())
+        self.row_menu.add_cascade(label="Batch Operations", menu=self.batch_menu)
 
         # Submenu for Filing Status
         self.status_menu = tk.Menu(self.row_menu, tearoff=0, bg=PANEL, fg=TEXT,

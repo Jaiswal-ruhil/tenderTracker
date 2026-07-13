@@ -336,14 +336,29 @@ def dict_to_row(d):
             vals.append(str(val) if val is not None else "")
     return tuple(vals)
 
-def load_all_tenders():
-    """Load all tenders from SQLite. Thread-safe."""
+def load_all_tenders(limit=None, offset=0):
+    """
+    Load tenders from SQLite with optional pagination for performance.
+    Thread-safe.
+    
+    Args:
+        limit: Maximum number of records to return (None for all)
+        offset: Number of records to skip (for pagination)
+        
+    Returns:
+        List of tender dictionaries
+    """
     with _lock:
         conn = None
         try:
             conn = get_conn()
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM bids")
+            
+            if limit is not None:
+                cursor.execute("SELECT * FROM bids LIMIT ? OFFSET ?", (limit, offset))
+            else:
+                cursor.execute("SELECT * FROM bids")
+            
             rows = cursor.fetchall()
             return [row_to_dict(r) for r in rows]
         except sqlite3.DatabaseError as e:

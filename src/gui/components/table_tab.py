@@ -667,6 +667,19 @@ class TableTab(tk.Frame):
             except Exception:
                 pass
 
+    # Batch operation wrappers (these methods already support multiple selections)
+    def batch_mark_want(self):
+        self.mark_selected_want()
+    
+    def batch_mark_dont_want(self):
+        self.mark_selected_dont_want()
+    
+    def batch_set_status(self, status):
+        self.set_selected_filing_status(status)
+    
+    def batch_delete(self):
+        self.del_sel()
+
     def copy_table_output(self):
         headers = [c[1] for c in TV_COLS]
         lines = ["\t".join(headers)]
@@ -1057,9 +1070,9 @@ class TableTab(tk.Frame):
         dlg.grab_set()
         
         # Center, position, and size dialog
-        x = self.app.winfo_x() + (self.app.winfo_width() - 550) // 2
-        y = self.app.winfo_y() + (self.app.winfo_height() - 500) // 2
-        dlg.geometry(f"550x500+{max(0, x)}+{max(0, y)}")
+        x = self.app.winfo_x() + (self.app.winfo_width() - 1100) // 2
+        y = self.app.winfo_y() + (self.app.winfo_height() - 1200) // 2
+        dlg.geometry(f"1100x1200+{max(0, x)}+{max(0, y)}")
         
         tk.Label(dlg, text="📁 Start Filing Process", font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT).pack(pady=(16, 12))
         
@@ -1100,6 +1113,27 @@ class TableTab(tk.Frame):
         firm_combo = ttk.Combobox(firm_fr, textvariable=firm_var, values=firm_options, state="readonly", font=FL)
         firm_combo.pack(fill="x", ipady=2)
         
+        # Category selection
+        cat_fr = tk.Frame(dlg, bg=BG)
+        cat_fr.pack(fill="x", padx=20, pady=(15, 10))
+        
+        tk.Label(cat_fr, text="Select Category:", font=("Segoe UI", 9, "bold"), bg=BG, fg=TEXT).pack(anchor="w", pady=(0, 4))
+        
+        category_mappings = settings.get("category_mappings") or []
+        category_options = sorted({m["name"] for m in category_mappings if m.get("name")})
+        current_category = tender_record.get("category", "")
+        
+        if current_category and current_category in category_options:
+            selected_category = current_category
+        elif category_options:
+            selected_category = category_options[0]
+        else:
+            selected_category = "General"
+        
+        category_var = tk.StringVar(value=selected_category)
+        category_combo = ttk.Combobox(cat_fr, textvariable=category_var, values=category_options, state="readonly", font=FL)
+        category_combo.pack(fill="x", ipady=2)
+        
         actions_fr = tk.Frame(dlg, bg=BG)
         actions_fr.pack(fill="x", padx=20, pady=5)
         tk.Label(actions_fr, text="This will:\n1. Download/verify tender PDF\n2. Extract required documents from PDF\n3. Copy matching firm documents to output folder", 
@@ -1108,13 +1142,14 @@ class TableTab(tk.Frame):
         btn_fr = tk.Frame(dlg, bg=BG)
         btn_fr.pack(fill="x", side="bottom", pady=20, padx=20)
         
-        result_holder = {"confirmed": False, "firm_name": None}
+        result_holder = {"confirmed": False, "firm_name": None, "category": None}
         
         def on_start():
             result_holder["confirmed"] = True
             opt = firm_var.get()
             if opt != "Auto-detect matching firm":
                 result_holder["firm_name"] = opt
+            result_holder["category"] = category_var.get()
             dlg.destroy()
             
         self.app._btn(btn_fr, "  Start Process  ", on_start, bg=ACCENT).pack(side="left", fill="x", expand=True, padx=(0, 6))
@@ -1126,12 +1161,13 @@ class TableTab(tk.Frame):
             return
             
         firm_name = result_holder["firm_name"]
+        selected_category = result_holder["category"]
         
         from gui_dialogs import LoadingDialog
         
         def run_filing_task():
             workflow = filing_workflow.FilingWorkflow(log_fn=self.app._log)
-            return workflow.start_filing_process(tender_record, firm_name=firm_name)
+            return workflow.start_filing_process(tender_record, firm_name=firm_name, category=selected_category)
             
         loading_dlg = LoadingDialog(
             self.app,
@@ -1156,20 +1192,7 @@ class TableTab(tk.Frame):
         required = result.get('required_count', 0)
         matched = result.get('matched_count', 0)
         missing = result.get('missing_count', 0)
-        
-        message = f"Filing process completed successfully!\n\n"
-        message += f"Filing Folder: {folder_path}\n\n"
-        message += f"Document Status:\n"
-        message += f"Required: {required}\n"
-        message += f"Matched: {matched}\n"
-        message += f"Missing: {missing}\n\n"
-        
-        if missing > 0:
-            message += f"⚠️ {missing} document(s) are missing. Check Document_Checklist.txt for details.\n\n"
-        
-        message += "Files generated:\n"
-        message += f"- Document_Checklist.txt\n"
-        message += f"- Filing_Summary.txt\n"
+        missing_docs = result.get('missing_category_docs', [])
         
         result_dialog = tk.Toplevel(self.app)
         result_dialog.title("Filing Complete")
@@ -1178,19 +1201,306 @@ class TableTab(tk.Frame):
         result_dialog.transient(self.app)
         result_dialog.grab_set()
         
-        # Center, position, and size result dialog
-        w, h = 550, 480
+        # Center, position, and size result dialog (larger to accommodate missing docs section)
+        w, h = 800, 700
         x = self.app.winfo_x() + (self.app.winfo_width() - w) // 2
         y = self.app.winfo_y() + (self.app.winfo_height() - h) // 2
         result_dialog.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
         
-        title_lbl = tk.Label(result_dialog, text="✅ Filing Process Complete", font=("Segoe UI", 14, "bold"), bg=BG, fg=SUCCESS)
+        # Scrollable content
+        canvas = tk.Canvas(result_dialog, bg=BG)
+        scrollbar = ttk.Scrollbar(result_dialog, orient="vertical", command=canvas.yview)
+        scrollable_frame = tk.Frame(canvas, bg=BG)
+        
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all"))
+        )
+        
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+        
+        # Title
+        title_lbl = tk.Label(scrollable_frame, text="✅ Filing Process Complete", font=("Segoe UI", 14, "bold"), bg=BG, fg=SUCCESS)
         title_lbl.pack(pady=20)
         
-        msg_lbl = tk.Label(result_dialog, text=message, font=("Segoe UI", 10), bg=BG, fg=TEXT, justify="left", wraplength=510)
-        msg_lbl.pack(padx=20, pady=10)
+        # Summary section
+        summary_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
+        summary_frame.pack(fill="x", padx=20, pady=10)
         
-        btn_frame = tk.Frame(result_dialog, bg=BG)
+        tk.Label(summary_frame, text="Filing Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w", pady=5)
+        tk.Label(summary_frame, text=folder_path, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).grid(row=0, column=1, sticky="w", pady=5, padx=(10, 0))
+        
+        tk.Label(summary_frame, text="Document Status:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=1, column=0, sticky="w", pady=5)
+        status_text = f"Required: {required} | Matched: {matched} | Missing: {missing}"
+        tk.Label(summary_frame, text=status_text, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).grid(row=1, column=1, sticky="w", pady=5, padx=(10, 0))
+        
+        # Missing documents section
+        if missing > 0 and missing_docs:
+            tk.Label(scrollable_frame, text="⚠️ Missing Documents", font=("Segoe UI", 12, "bold"), bg=BG, fg=WARN).pack(pady=(20, 10))
+            
+            missing_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
+            missing_frame.pack(fill="x", padx=20, pady=10)
+            
+            for i, doc in enumerate(missing_docs):
+                doc_row = tk.Frame(missing_frame, bg=PANEL)
+                doc_row.pack(fill="x", pady=5)
+                
+                doc_name = doc.get('name', 'Unknown')
+                tk.Label(doc_row, text=f"• {doc_name}", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(side="left")
+                
+                # Browse and link button for each missing document
+                def make_link_button(doc_info=doc):
+                    def browse_and_link():
+                        from tkinter import filedialog
+                        file_paths = filedialog.askopenfilenames(
+                            title=f"Select file(s) for {doc_info.get('name', 'document')}",
+                            filetypes=[("All Files", "*.*"), ("PDF Files", "*.pdf"), ("Documents", "*.doc;*.docx")]
+                        )
+                        if file_paths:
+                            # Copy files to filing folder
+                            import shutil
+                            linked_count = 0
+                            errors = []
+                            for file_path in file_paths:
+                                try:
+                                    filename = os.path.basename(file_path)
+                                    # Handle duplicate filenames
+                                    counter = 1
+                                    dest_path = os.path.join(folder_path, filename)
+                                    while os.path.exists(dest_path):
+                                        name, ext = os.path.splitext(filename)
+                                        dest_path = os.path.join(folder_path, f"{name}_{counter}{ext}")
+                                        counter += 1
+                                    
+                                    shutil.copy2(file_path, dest_path)
+                                    linked_count += 1
+                                except Exception as e:
+                                    errors.append(f"{os.path.basename(file_path)}: {str(e)}")
+                            
+                            if linked_count > 0:
+                                msg = f"Successfully linked {linked_count} file(s):\n\n"
+                                for file_path in file_paths:
+                                    if not any(os.path.basename(file_path) in err for err in errors):
+                                        msg += f"✓ {os.path.basename(file_path)}\n"
+                                if errors:
+                                    msg += f"\nFailed to link:\n" + "\n".join(errors)
+                                messagebox.showinfo("Success", msg, parent=result_dialog)
+                                # Update the button to show linked status
+                                link_btn.config(text=f"✅ Linked ({linked_count})", bg=SUCCESS, state="disabled")
+                            else:
+                                messagebox.showerror("Error", f"Failed to link any files:\n" + "\n".join(errors), parent=result_dialog)
+                    
+                    link_btn = tk.Button(doc_row, text="📎 Link File(s)", command=browse_and_link,
+                                        bg=CARD, fg=TEXT, relief="flat", font=("Segoe UI", 8),
+                                        padx=8, pady=2, cursor="hand2")
+                    link_btn.pack(side="right")
+                    return link_btn
+                
+                link_btn = make_link_button(doc)
+        
+        # Files generated section
+        tk.Label(scrollable_frame, text="📄 Files Generated", font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT).pack(pady=(20, 10))
+        
+        files_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
+        files_frame.pack(fill="x", padx=20, pady=10)
+        
+        tk.Label(files_frame, text="• Document_Checklist.txt", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=3)
+        tk.Label(files_frame, text="• Filing_Summary.txt", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=3)
+        
+        # GEM Portal Document Requirements section
+        tk.Label(scrollable_frame, text="🌐 GEM Portal Document Requirements", font=("Segoe UI", 12, "bold"), bg=BG, fg=ACCENT).pack(pady=(20, 10))
+        
+        gem_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
+        gem_frame.pack(fill="x", padx=20, pady=10)
+        
+        # GEM document requirements
+        gem_requirements = [
+            {"name": "Experience Criteria*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Past Performance*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Bidder Turnover*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Additional Doc 1 (Requested in ATC)*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Additional Doc 2 (Requested in ATC)*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Certificate (Requested in ATC)", "required": False, "note": "Merge all ATC docs into single file", "max_size": "10MB", "max_pages": 100},
+            {"name": "Compliance of BoQ specification*", "required": True, "max_size": "10MB", "max_pages": 100},
+            {"name": "Financial document*", "required": True, "max_size": "10MB", "max_pages": 100},
+        ]
+        
+        gem_mappings = {}  # Store mappings for saving
+        
+        for i, req in enumerate(gem_requirements):
+            req_row = tk.Frame(gem_frame, bg=PANEL)
+            req_row.pack(fill="x", pady=8)
+            
+            # Requirement name with asterisk for required
+            name_text = req["name"]
+            label_color = TEXTSUB
+            if req.get("required"):
+                label_color = ERR
+            tk.Label(req_row, text=name_text, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=label_color).pack(anchor="w")
+            
+            # Note if present
+            if req.get("note"):
+                tk.Label(req_row, text=f"Note: {req['note']}", font=("Segoe UI", 8), bg=PANEL, fg=MUTED).pack(anchor="w")
+            
+            # Constraints
+            constraints = f"Max: {req['max_size']}, {req['max_pages']} pages"
+            tk.Label(req_row, text=constraints, font=("Segoe UI", 8), bg=PANEL, fg=MUTED).pack(anchor="w")
+            
+            # File linking button
+            def make_gem_link_button(req_info=req, idx=i):
+                def browse_and_link():
+                    from tkinter import filedialog
+                    file_paths = filedialog.askopenfilenames(
+                        title=f"Select file(s) for {req_info['name']}",
+                        filetypes=[("PDF Files", "*.pdf"), ("All Files", "*.*")]
+                    )
+                    if file_paths:
+                        import shutil
+                        linked_count = 0
+                        errors = []
+                        linked_files = []
+                        for file_path in file_paths:
+                            try:
+                                filename = os.path.basename(file_path)
+                                # Handle duplicate filenames
+                                counter = 1
+                                dest_path = os.path.join(folder_path, filename)
+                                while os.path.exists(dest_path):
+                                    name, ext = os.path.splitext(filename)
+                                    dest_path = os.path.join(folder_path, f"{name}_{counter}{ext}")
+                                    counter += 1
+                                
+                                shutil.copy2(file_path, dest_path)
+                                linked_count += 1
+                                linked_files.append(filename)
+                            except Exception as e:
+                                errors.append(f"{os.path.basename(file_path)}: {str(e)}")
+                        
+                        if linked_count > 0:
+                            gem_mappings[idx] = linked_files
+                            msg = f"Successfully linked {linked_count} file(s):\n\n"
+                            for fname in linked_files:
+                                msg += f"✓ {fname}\n"
+                            if errors:
+                                msg += f"\nFailed to link:\n" + "\n".join(errors)
+                            messagebox.showinfo("Success", msg, parent=result_dialog)
+                            gem_link_btn.config(text=f"✅ Linked ({linked_count})", bg=SUCCESS, state="disabled")
+                        else:
+                            messagebox.showerror("Error", f"Failed to link any files:\n" + "\n".join(errors), parent=result_dialog)
+                
+                gem_link_btn = tk.Button(req_row, text="📎 Link File(s)", command=browse_and_link,
+                                         bg=CARD, fg=TEXT, relief="flat", font=("Segoe UI", 8),
+                                         padx=8, pady=2, cursor="hand2")
+                gem_link_btn.pack(side="right", pady=5)
+                return gem_link_btn
+            
+            gem_link_btn = make_gem_link_button(req)
+        
+        # GSTIN Selection
+        gstin_frame = tk.Frame(gem_frame, bg=PANEL)
+        gstin_frame.pack(fill="x", pady=15)
+        
+        tk.Label(gstin_frame, text="GSTIN for Annual Milestone Charges*", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=ERR).pack(anchor="w")
+        
+        # Load firm GSTINs from settings
+        settings = db.load_settings()
+        firms = settings.get('firms', [])
+        gstin_options = []
+        if firms:
+            for firm in firms:
+                gstin = firm.get('gstin', '')
+                if gstin:
+                    gstin_options.append(gstin)
+        
+        if not gstin_options:
+            gstin_options = ["No GSTIN configured"]
+        
+        gstin_var = tk.StringVar(value=gstin_options[0] if gstin_options else "")
+        gstin_combo = ttk.Combobox(gstin_frame, textvariable=gstin_var, values=gstin_options,
+                                    state="readonly", font=FL, width=40)
+        gstin_combo.pack(pady=5)
+        
+        # Address Selection
+        address_frame = tk.Frame(gem_frame, bg=PANEL)
+        address_frame.pack(fill="x", pady=15)
+        
+        tk.Label(address_frame, text="Address for Annual Milestone Charge/Transaction Charge Invoice*", 
+                font=("Segoe UI", 9, "bold"), bg=PANEL, fg=ERR).pack(anchor="w")
+        
+        # Load firm addresses from settings
+        address_options = []
+        if firms:
+            for firm in firms:
+                address = firm.get('address', '')
+                if address:
+                    address_options.append(address)
+        
+        if not address_options:
+            address_options = ["No address configured"]
+        
+        address_var = tk.StringVar(value=address_options[0] if address_options else "")
+        address_combo = ttk.Combobox(address_frame, textvariable=address_var, values=address_options,
+                                     state="readonly", font=FL, width=40)
+        address_combo.pack(pady=5)
+        
+        # MSE Manufacturing Question
+        mse_frame = tk.Frame(gem_frame, bg=PANEL)
+        mse_frame.pack(fill="x", pady=15)
+        
+        tk.Label(mse_frame, text="Are you manufacturing MSE for this product?*", 
+                font=("Segoe UI", 9, "bold"), bg=PANEL, fg=ERR).pack(anchor="w")
+        
+        mse_var = tk.StringVar(value="No")
+        mse_frame_radio = tk.Frame(mse_frame, bg=PANEL)
+        mse_frame_radio.pack(pady=5)
+        
+        tk.Radiobutton(mse_frame_radio, text="Yes", variable=mse_var, value="Yes",
+                      bg=PANEL, fg=TEXT, font=FL).pack(side="left", padx=10)
+        tk.Radiobutton(mse_frame_radio, text="No", variable=mse_var, value="No",
+                      bg=PANEL, fg=TEXT, font=FL).pack(side="left", padx=10)
+        
+        # Save GEM mappings button
+        def save_gem_mappings():
+            gem_data = {
+                "gstin": gstin_var.get(),
+                "address": address_var.get(),
+                "mse_manufacturing": mse_var.get(),
+                "document_mappings": gem_mappings
+            }
+            
+            # Save to filing summary
+            try:
+                summary_file = os.path.join(folder_path, "GEM_Requirements_Mapping.txt")
+                with open(summary_file, 'w', encoding='utf-8') as f:
+                    f.write("GEM Portal Document Requirements Mapping\n")
+                    f.write("=" * 50 + "\n\n")
+                    f.write(f"Tender: {result.get('tender_record', {}).get('bid_no', 'N/A')}\n")
+                    f.write(f"Filing Folder: {folder_path}\n\n")
+                    
+                    f.write("GSTIN: " + gem_data["gstin"] + "\n")
+                    f.write("Address: " + gem_data["address"] + "\n")
+                    f.write("MSE Manufacturing: " + gem_data["mse_manufacturing"] + "\n\n")
+                    
+                    f.write("Document Mappings:\n")
+                    for idx, files in gem_data["document_mappings"].items():
+                        req_name = gem_requirements[idx]["name"]
+                        f.write(f"\n{req_name}:\n")
+                        for file in files:
+                            f.write(f"  - {file}\n")
+                
+                messagebox.showinfo("Saved", f"GEM requirements mapping saved to:\n{summary_file}", parent=result_dialog)
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save GEM mapping: {e}", parent=result_dialog)
+        
+        save_gem_btn = self.app._btn(gem_frame, "💾 Save GEM Requirements Mapping", save_gem_mappings, bg=ACCENT2)
+        save_gem_btn.pack(pady=15)
+        
+        # Action buttons
+        btn_frame = tk.Frame(scrollable_frame, bg=BG)
         btn_frame.pack(pady=20)
         
         def open_folder():

@@ -1,0 +1,552 @@
+{
+  "name": "Automated Filing Preparation",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bid-no",
+              "name": "Bid Number",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "firm-name",
+              "name": "Firm Name",
+              "value": "",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "input-parameters",
+      "name": "Input Parameters",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "get_bid",
+        "toolArguments": {
+          "bid_no": "={{ $json.bid_no }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8101/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "catalog-get",
+      "name": "Get Tender Details",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "tender-exists",
+              "leftValue": "={{ $json }}",
+              "rightValue": "",
+              "operator": {
+                "type": "object",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-tender",
+      "name": "Check Tender Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "prepare_filing",
+        "toolArguments": {
+          "bid_no": "={{ $json.bid_no }}",
+          "firm_name": "={{ $json.firm_name }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8103/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "filing-prepare",
+      "name": "Prepare Filing Pack",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "validate_document_integrity",
+        "toolArguments": {
+          "bid_no": "={{ $json.bid_no }}",
+          "firm_name": "={{ $json.firm_name }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8103/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "filing-validate",
+      "name": "Validate Documents",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "get_gem_requirements_mapping",
+        "toolArguments": {
+          "bid_no": "={{ $json.bid_no }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8103/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "filing-mapping",
+      "name": "Get GEM Requirements Mapping",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "validation-pass",
+              "leftValue": "={{ $json.validation_passed }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-validation",
+      "name": "Check Validation Results",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "missing-docs",
+              "name": "Missing Documents",
+              "value": "={{ $json.missing_documents }}",
+              "type": "array"
+            },
+            {
+              "id": "validation-errors",
+              "name": "Validation Errors",
+              "value": "={{ $json.validation_errors }}",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "id": "prepare-errors",
+      "name": "Prepare Error Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1850,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "tendertracker-filing",
+        "text": "=❌ **Filing Validation Failed**\n\n**Bid No:** {{ $json.bid_no }}\n**Firm:** {{ $json.firm_name }}\n\n📋 **Missing Documents:**\n{{ $json.missing_documents.map(doc => `• ${doc}`).join('\\n') }}\n\n⚠️ **Validation Errors:**\n{{ $json.validation_errors.map(err => `• ${err}`).join('\\n') }}\n\nPlease address these issues before filing.",
+        "otherOptions": {}
+      },
+      "id": "slack-error-alert",
+      "name": "Send Error Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2050,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "filing-folder",
+              "name": "Filing Folder",
+              "value": "={{ $json.filing_folder }}",
+              "type": "string"
+            },
+            {
+              "id": "matched-docs",
+              "name": "Matched Documents",
+              "value": "={{ $json.matched_documents }}",
+              "type": "object"
+            },
+            {
+              "id": "checklist",
+              "name": "Filing Checklist",
+              "value": "={{ $json.filing_checklist }}",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "id": "prepare-success",
+      "name": "Prepare Success Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1850,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "tendertracker-filing",
+        "text": "=✅ **Filing Preparation Complete**\n\n**Bid No:** {{ $json.bid_no }}\n**Firm:** {{ $json.firm_name }}\n\n📁 **Filing Folder:** {{ $json.filing_folder }}\n\n📋 **Matched Documents:** {{ Object.keys($json.matched_documents).length }}\n{{ Object.entries($json.matched_documents).map(([key, val]) => `• ${key}: ${val}`).join('\\n') }}\n\n✅ **Filing Checklist:**\n{{ $json.filing_checklist.map(item => `• ${item}`).join('\\n') }}\n\n🎯 **Ready for GeM Portal Submission**",
+        "otherOptions": {}
+      },
+      "id": "slack-success-alert",
+      "name": "Send Success Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2050,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "report-title",
+              "name": "Report Title",
+              "value": "Filing Preparation Report - {{ $json.bid_no }}",
+              "type": "string"
+            },
+            {
+              "id": "report-content",
+              "name": "Report Content",
+              "value": "=**Filing Preparation Report**\n\n**Bid Number:** {{ $json.bid_no }}\n**Firm Name:** {{ $json.firm_name }}\n**Prepared:** {{ $now.toISOString() }}\n\n**Tender Details:**\n- Category: {{ $json.category }}\n- Items: {{ $json.items }}\n- Value: {{ $json.est_value }}\n- Deadline: {{ $json.end_date }}\n\n**Filing Status:** {{ $json.validation_passed ? '✅ VALIDATION PASSED' : '❌ VALIDATION FAILED' }}\n\n**Matched Documents:** {{ Object.keys($json.matched_documents).length }}\n**Missing Documents:** {{ $json.missing_documents.length }}\n\n**GEM Requirements Mapping:** {{ Object.keys($json.gem_requirements_mapping).length }} fields mapped\n\n**Processing Statistics:**\n- Total Documents Processed: {{ $json.processing_stats.total_documents }}\n- Successfully Validated: {{ $json.processing_stats.validated_documents }}\n- AI Matched: {{ $json.processing_stats.ai_matched_documents }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "generate-report",
+      "name": "Generate Report",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toFile",
+        "fileFormat": "txt",
+        "options": {
+          "fileName": "=filing_report_{{ $json.bid_no }}.txt"
+        }
+      },
+      "id": "save-report",
+      "name": "Save Report",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [
+        2450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "subject": "Filing Preparation Report - {{ $json.bid_no }}",
+        "email": "procurement@company.com",
+        "text": "=Filing preparation for tender {{ $json.bid_no }} has been completed.\n\n**Status:** {{ $json.validation_passed ? '✅ Ready for Filing' : '❌ Requires Attention' }}\n\n**Filing Folder:** {{ $json.filing_folder }}\n\nPlease find the detailed report attached.",
+        "attachments": "={{ $json.file_path }}",
+        "options": {}
+      },
+      "id": "email-report",
+      "name": "Email Report",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "tendertracker-filing",
+        "text": "=❌ **Tender Not Found**\n\nThe tender with bid number {{ $json.bid_no }} could not be found in the database.\n\nPlease verify the bid number and try again.",
+        "otherOptions": {}
+      },
+      "id": "slack-not-found",
+      "name": "Send Not Found Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        850,
+        450
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Input Parameters",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Input Parameters": {
+      "main": [
+        [
+          {
+            "node": "Get Tender Details",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Tender Details": {
+      "main": [
+        [
+          {
+            "node": "Check Tender Exists",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Tender Exists": {
+      "main": [
+        [
+          {
+            "node": "Prepare Filing Pack",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send Not Found Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Filing Pack": {
+      "main": [
+        [
+          {
+            "node": "Validate Documents",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Documents": {
+      "main": [
+        [
+          {
+            "node": "Get GEM Requirements Mapping",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get GEM Requirements Mapping": {
+      "main": [
+        [
+          {
+            "node": "Check Validation Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Validation Results": {
+      "main": [
+        [
+          {
+            "node": "Prepare Success Report",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Error Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Error Report": {
+      "main": [
+        [
+          {
+            "node": "Send Error Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Error Alert": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Success Report": {
+      "main": [
+        [
+          {
+            "node": "Send Success Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Success Alert": {
+      "main": [
+        [
+          {
+            "node": "Generate Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Report": {
+      "main": [
+        [
+          {
+            "node": "Save Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save Report": {
+      "main": [
+        [
+          {
+            "node": "Email Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-07-13T06:08:00.000Z",
+  "versionId": "1"
+}

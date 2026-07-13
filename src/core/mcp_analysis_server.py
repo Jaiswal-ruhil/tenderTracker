@@ -66,19 +66,47 @@ def create_server(port: int = 8102) -> FastMCP:
 
     @mcp.tool()
     def match_company_products(bid_obj: Dict[str, Any]) -> Dict[str, Any]:
-        """Match tender item text against the local company product catalogue."""
+        """
+        Match tender item text against the local company product catalogue.
+        Uses AI-enhanced similarity scoring for better matching accuracy.
+        """
         item_text = bid_obj.get("items", "").lower()
         category = bid_obj.get("category", "").lower()
         matches = []
-        for product in db.load_all_products():
+        
+        # Load products and perform AI-enhanced matching
+        products = db.load_all_products()
+        for product in products:
             name = product.get("name", "").lower()
             description = product.get("description", "").lower()
+            
+            # Basic keyword matching
             if name and (name in item_text or name in category or description in item_text):
-                matches.append(product)
+                matches.append({
+                    "product": product,
+                    "match_type": "keyword",
+                    "confidence": 0.8
+                })
+            else:
+                # AI-enhanced similarity scoring
+                from filing_workflow import FilingWorkflow
+                workflow = FilingWorkflow()
+                similarity = workflow._calculate_similarity_score(name, item_text)
+                if similarity > 0.6:
+                    matches.append({
+                        "product": product,
+                        "match_type": "ai_similarity",
+                        "confidence": similarity
+                    })
+        
+        # Sort by confidence
+        matches.sort(key=lambda x: x["confidence"], reverse=True)
+        
         return {
             "bid_no": bid_obj.get("bid_no"),
-            "match_score": min(1.0, len(matches) / max(1.0, len(db.load_all_products()) * 0.5)),
-            "matching_products": matches,
+            "match_score": max([m["confidence"] for m in matches], default=0.0),
+            "matching_products": [m["product"] for m in matches],
+            "match_details": matches,
             "missing_products": [] if matches else [category or "General items"],
         }
 

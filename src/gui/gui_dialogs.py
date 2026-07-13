@@ -82,16 +82,19 @@ class LoadingDialog(tk.Toplevel):
 
 class DialogsMixin:
     def _show_settings(self):
+        window_height = 1300
+        window_width = 1000
         win = tk.Toplevel(self)
         win.grab_set()
         win.transient(self)
         win.title("Settings")
         win.configure(bg=BG)
-        win.resizable(False, False)
+        win.resizable(True, True)
+        win.minsize(1000, 1300)
 
-        x = self.winfo_x() + (self.winfo_width() - 600) // 2
-        y = self.winfo_y() + (self.winfo_height() - 810) // 2
-        win.geometry(f"600x810+{max(0, x)}+{max(0, y)}")
+        x = self.winfo_x() + (self.winfo_width() - window_width) // 2
+        y = self.winfo_y() + (self.winfo_height() - window_height) // 2
+        win.geometry(f"{window_width}x{window_height}+{max(0, x)}+{max(0, y)}")
 
         # Title Label
         tk.Label(win, text="Application Settings", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
@@ -146,9 +149,8 @@ class DialogsMixin:
         default_pdf_folder = os.path.join(os.path.expanduser("~"), "Documents", "TenderPDFs")
         configured_pdf_folder = db.load_settings().get("pdf_save_folder") or default_pdf_folder
         pdf_path_var = tk.StringVar(value=configured_pdf_folder.replace(os.path.expanduser("~"), "~"))
-        tk.Label(pdf_frame, textvariable=pdf_path_var, font=FL, bg=PANEL, fg=TEXTSUB, anchor="w").pack(
-            side="left", fill="x", expand=True, pady=(4, 0)
-        )
+        pdf_lbl = tk.Label(pdf_frame, textvariable=pdf_path_var, font=FL, bg=PANEL, fg=TEXTSUB, anchor="w")
+        pdf_lbl.pack(fill="x", pady=(4, 0))
 
         def run_pdf_folder_change():
             selected_dir = filedialog.askdirectory(
@@ -162,7 +164,7 @@ class DialogsMixin:
                 pdf_path_var.set(resolved_dir.replace(os.path.expanduser("~"), "~"))
                 self._log("ok", f"Tender PDF download folder changed to: {resolved_dir}")
 
-        self._btn(pdf_frame, "Change Folder...", run_pdf_folder_change, bg=CARD).pack(side="right")
+        self._btn(pdf_frame, "Change Folder...", run_pdf_folder_change, bg=CARD).pack(anchor="w", pady=(4, 0))
 
         # Excel Pattern Frame
         pat_frame = tk.Frame(win, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
@@ -919,12 +921,6 @@ class DialogsMixin:
 
         settings_now = db.load_settings()
         mappings_now = settings_now.get("category_mappings") or []
-        if not mappings_now:
-            try:
-                from config import CATEGORY_MAPPING
-                mappings_now = [{"name": v} for _, v in CATEGORY_MAPPING]
-            except Exception:
-                mappings_now = []
         known_cats = sorted({m["name"] for m in mappings_now if m.get("name")})
 
         cat_combo_var = tk.StringVar()
@@ -1565,13 +1561,7 @@ class DialogsMixin:
         exc_kws = [k.strip().lower() for k in exc_raw.split(",") if k.strip()]
 
         # Load category mappings
-        mappings_data = settings.get("category_mappings")
-        if not mappings_data:
-            try:
-                from config import CATEGORY_MAPPING
-                mappings_data = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-            except Exception:
-                mappings_data = []
+        mappings_data = settings.get("category_mappings") or []
 
         def style_mini_btn(btn, normal_bg=CARD, hover_bg="#30363D", fg=TEXT):
             btn.configure(bg=normal_bg, fg=fg, relief="flat", activebackground=hover_bg, activeforeground=TEXT, cursor="hand2", font=FL)
@@ -1820,13 +1810,7 @@ class DialogsMixin:
                 def make_accept(c=cat, ks=kws):
                     def _accept():
                         settings_inner = db.load_settings()
-                        mappings_inner = settings_inner.get("category_mappings")
-                        if not mappings_inner:
-                            try:
-                                from config import CATEGORY_MAPPING
-                                mappings_inner = [{"name": val, "keywords": kws} for kws, val in CATEGORY_MAPPING]
-                            except Exception:
-                                mappings_inner = []
+                        mappings_inner = settings_inner.get("category_mappings") or []
                         # Find or create category entry
                         ent = None
                         for m in mappings_inner:

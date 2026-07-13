@@ -1,0 +1,439 @@
+{
+  "name": "Automated Tender Monitoring",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "hours",
+              "hoursInterval": 2
+            }
+          ]
+        }
+      },
+      "id": "schedule-trigger",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "https://bidplus.gem.gov.in/search",
+        "options": {}
+      },
+      "id": "http-request",
+      "name": "Scrape GeM Portal",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "extract_bid_blocks",
+        "toolArguments": {
+          "text": "={{ $json.body }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-extract",
+      "name": "Extract Bid Blocks",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "tender-batch",
+              "name": "Tender Batch",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "id": "prepare-batch",
+      "name": "Prepare Batch",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split in Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "classify_bid",
+        "toolArguments": {
+          "bid_obj": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-classify",
+      "name": "Classify Bid",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "match_company_products",
+        "toolArguments": {
+          "bid_obj": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-match",
+      "name": "Match Products",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "confidence-filter",
+              "leftValue": "={{ $json.confidence }}",
+              "rightValue": 0.7,
+              "operator": {
+                "type": "number",
+                "operation": "larger"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "filter-confidence",
+      "name": "Filter High Confidence",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1450,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "add_tender_record",
+        "toolArguments": {
+          "tender": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8101/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "catalog-add",
+      "name": "Add Tender Record",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "company-match",
+              "leftValue": "={{ $json.recommended }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-criteria",
+      "name": "Check Company Criteria",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1850,
+        250
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "tendertracker-alerts",
+        "text": "=🚀 **New High-Value Tender Found!**\n\n**Bid No:** {{ $json.bid_no }}\n**Category:** {{ $json.category }}\n**Value:** {{ $json.est_value }}\n**Confidence:** {{ $json.confidence }}\n\n**Items:** {{ $json.items }}\n**Department:** {{ $json.dept }}\n**Deadline:** {{ $json.end_date }}\n\n📊 **AI Analysis:** {{ $json.summary }}",
+        "otherOptions": {}
+      },
+      "id": "slack-alert",
+      "name": "Send Slack Alert",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2050,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "subject": "🚀 New High-Value Tender Alert - {{ $json.bid_no }}",
+        "email": "procurement@company.com",
+        "text": "=A new high-value tender matching your company criteria has been discovered:\n\n**Bid Number:** {{ $json.bid_no }}\n**Category:** {{ $json.category }}\n**Estimated Value:** {{ $json.est_value }}\n**AI Confidence Score:** {{ $json.confidence }}\n\n**Details:**\n- Items: {{ $json.items }}\n- Department: {{ $json.dept }}\n- Location: {{ $json.location }}\n- Deadline: {{ $json.end_date }}\n\n**AI Summary:** {{ $json.summary }}\n\nPlease review this opportunity in TenderTracker.",
+        "options": {}
+      },
+      "id": "email-alert",
+      "name": "Send Email Alert",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [
+        2050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "rebuild_search_index",
+        "toolArguments": {},
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8101/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "rebuild-index",
+      "name": "Rebuild Search Index",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        250
+      ]
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Scrape GeM Portal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Scrape GeM Portal": {
+      "main": [
+        [
+          {
+            "node": "Extract Bid Blocks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Bid Blocks": {
+      "main": [
+        [
+          {
+            "node": "Prepare Batch",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Batch": {
+      "main": [
+        [
+          {
+            "node": "Split in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split in Batches": {
+      "main": [
+        [
+          {
+            "node": "Classify Bid",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Match Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Bid": {
+      "main": [
+        [
+          {
+            "node": "Filter High Confidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Products": {
+      "main": [
+        [
+          {
+            "node": "Filter High Confidence",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter High Confidence": {
+      "main": [
+        [
+          {
+            "node": "Add Tender Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Tender Record": {
+      "main": [
+        [
+          {
+            "node": "Check Company Criteria",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Company Criteria": {
+      "main": [
+        [
+          {
+            "node": "Send Slack Alert",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Send Email Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Slack Alert": {
+      "main": [
+        [
+          {
+            "node": "Rebuild Search Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Email Alert": {
+      "main": [
+        [
+          {
+            "node": "Rebuild Search Index",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-07-13T06:08:00.000Z",
+  "versionId": "1"
+}

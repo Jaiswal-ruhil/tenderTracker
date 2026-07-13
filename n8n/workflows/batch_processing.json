@@ -1,0 +1,498 @@
+{
+  "name": "Batch Tender Processing",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "manual-trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        250,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "upload",
+        "fileFormat": "csv",
+        "options": {}
+      },
+      "id": "file-upload",
+      "name": "Upload Tender Data",
+      "type": "n8n-nodes-base.file",
+      "typeVersion": 1,
+      "position": [
+        450,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "tender-data",
+              "name": "Tender Data",
+              "value": "={{ $json }}",
+              "type": "object"
+            }
+          ]
+        }
+      },
+      "id": "prepare-data",
+      "name": "Prepare Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        650,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "batchSize": 10,
+        "options": {}
+      },
+      "id": "split-batches",
+      "name": "Split in Batches",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        850,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "extract_bid_blocks",
+        "toolArguments": {
+          "text": "={{ $json.raw_text }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-extract",
+      "name": "Extract Bid Blocks",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "classify_bid",
+        "toolArguments": {
+          "bid_obj": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-classify",
+      "name": "Classify Bid",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "generate_quote_requirements",
+        "toolArguments": {
+          "bid_obj": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-requirements",
+      "name": "Generate Requirements",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "match_company_products",
+        "toolArguments": {
+          "bid_obj": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8102/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "analysis-match",
+      "name": "Match Products",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1050,
+        500
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combinationMode": "mergeByPosition",
+        "options": {}
+      },
+      "id": "merge-results",
+      "name": "Merge Analysis Results",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 2.1,
+      "position": [
+        1250,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "mcp-tool",
+        "operation": "call",
+        "toolName": "add_tender_record",
+        "toolArguments": {
+          "tender": "={{ $json }}"
+        },
+        "mcpClient": {
+          "__rl": true,
+          "mode": "sse",
+          "url": "http://127.0.0.1:8101/sse",
+          "authentication": "none"
+        }
+      },
+      "id": "catalog-add",
+      "name": "Add Tender Record",
+      "type": "n8n-nodes-base.mcpClient",
+      "typeVersion": 1,
+      "position": [
+        1450,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "aggregateItems",
+        "fieldsToAggregate": {
+          "fieldToAggregate": [
+            {
+              "fieldName": "bid_no"
+            },
+            {
+              "fieldName": "category"
+            },
+            {
+              "fieldName": "confidence"
+            }
+          ]
+        },
+        "options": {
+          "aggregate": "aggregateAllItemData"
+        }
+      },
+      "id": "aggregate-stats",
+      "name": "Aggregate Statistics",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1650,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "aggregate",
+        "aggregate": "aggregateAllItemData",
+        "options": {}
+      },
+      "id": "compile-stats",
+      "name": "Compile Processing Stats",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1850,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "total-processed",
+              "name": "Total Processed",
+              "value": "={{ $json.length }}",
+              "type": "number"
+            },
+            {
+              "id": "success-rate",
+              "name": "Success Rate",
+              "value": "={{ ($json.filter(item => item.success).length / $json.length * 100).toFixed(2) }}%",
+              "type": "string"
+            },
+            {
+              "id": "avg-confidence",
+              "name": "Average Confidence",
+              "value": "={{ ($json.reduce((sum, item) => sum + (item.confidence || 0), 0) / $json.length).toFixed(2) }}",
+              "type": "number"
+            },
+            {
+              "id": "categories",
+              "name": "Categories",
+              "value": "={{ [...new Set($json.map(item => item.category))].join(', ') }}",
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "id": "calculate-stats",
+      "name": "Calculate Statistics",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2050,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "toFile",
+        "fileFormat": "xlsx",
+        "options": {
+          "sheetName": "Batch Processing Results"
+        }
+      },
+      "id": "excel-export",
+      "name": "Export to Excel",
+      "type": "n8n-nodes-base.spreadsheetFile",
+      "typeVersion": 1,
+      "position": [
+        2250,
+        350
+      ]
+    },
+    {
+      "parameters": {
+        "channel": "tendertracker-operations",
+        "text": "=✅ **Batch Processing Complete**\n\n📊 **Processing Statistics:**\n- Total Tenders Processed: {{ $json.total_processed }}\n- Success Rate: {{ $json.success_rate }}\n- Average Confidence Score: {{ $json.avg_confidence }}\n- Categories: {{ $json.categories }}\n\n📁 **Excel Report Generated**\n\nThe detailed report has been exported and is ready for review.",
+        "otherOptions": {}
+      },
+      "id": "slack-notification",
+      "name": "Send Completion Notification",
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.1,
+      "position": [
+        2450,
+        350
+      ]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [
+          {
+            "node": "Upload Tender Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Upload Tender Data": {
+      "main": [
+        [
+          {
+            "node": "Prepare Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Data": {
+      "main": [
+        [
+          {
+            "node": "Split in Batches",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split in Batches": {
+      "main": [
+        [
+          {
+            "node": "Extract Bid Blocks",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Classify Bid",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Generate Requirements",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Match Products",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Bid Blocks": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Bid": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Requirements": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Match Products": {
+      "main": [
+        [
+          {
+            "node": "Merge Analysis Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Analysis Results": {
+      "main": [
+        [
+          {
+            "node": "Add Tender Record",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Add Tender Record": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Statistics": {
+      "main": [
+        [
+          {
+            "node": "Compile Processing Stats",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Compile Processing Stats": {
+      "main": [
+        [
+          {
+            "node": "Calculate Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calculate Statistics": {
+      "main": [
+        [
+          {
+            "node": "Export to Excel",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Export to Excel": {
+      "main": [
+        [
+          {
+            "node": "Send Completion Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": [],
+  "triggerCount": 1,
+  "updatedAt": "2026-07-13T06:08:00.000Z",
+  "versionId": "1"
+}

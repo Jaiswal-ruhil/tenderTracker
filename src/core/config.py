@@ -53,16 +53,3 @@ TV_COLS = [
     ("matched_firm",  "Matched Firm",      120),
 ]
 TV_IDS = [c[0] for c in TV_COLS]
-
-# Intelligent Category Mapping Configuration
-CATEGORY_MAPPING = [
-    (["screen"], "Ni Screen"),
-    (["motor"], "Motor"),
-    (["cable"], "Cable"),
-    (["oxygen"], "Oxygen"),
-    (["argon"], "Argon"),
-    (["vfd"], "VFD"),
-    (["packing", "jointing"], "Packing Jointing"),
-    (["electrode"], "Electrodes"),
-    (["switch gear", "acb", "mccb"], "ACB/MCCB"),
-]

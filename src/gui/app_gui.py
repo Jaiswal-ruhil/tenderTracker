@@ -39,6 +39,7 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self.configure(bg=BG)
         self.geometry("1600x900")
         self.minsize(900, 600)
+        self.state('zoomed')
 
         self.save_folder = tk.StringVar(
             value=os.path.expanduser("~\\Documents" if os.name=="nt" else "~/Documents"))
@@ -184,6 +185,13 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
             self.log_txt.configure(state="normal")
             self.log_txt.delete("1.0", "end")
             self.log_txt.configure(state="disabled")
+        
+        # Alert button
+        alert_btn = tk.Button(log_hdr, text="🔔 Alerts", command=self._show_alert_viewer,
+                             bg=CARD, fg=TEXTSUB, relief="flat", font=("Segoe UI", 8),
+                             padx=6, pady=0, activebackground=ACCENT2, activeforeground=TEXT,
+                             cursor="hand2")
+        alert_btn.pack(side="right", padx=(0, 6))
                 
         copy_btn = tk.Button(log_hdr, text="📋 Copy", command=copy_log,
                              bg=CARD, fg=TEXTSUB, relief="flat", font=("Segoe UI", 8),
@@ -578,3 +586,10 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         except Exception as e:
             self._log("err", f"Failed to load tenders from database: {e}")
             self._set_status("Database error", ERR)
+    
+    def _show_alert_viewer(self):
+        """Show the alert viewer dialog."""
+        from components.alert_viewer import AlertViewer
+        if not hasattr(self, 'alert_viewer'):
+            self.alert_viewer = AlertViewer(self, self)
+        self.alert_viewer.show()

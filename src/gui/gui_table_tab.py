@@ -97,6 +97,15 @@ class TableTabMixin:
         self.bind("<Control-Alt-s>", lambda e: self._show_settings())
         self.bind("<Delete>", lambda e: self._shortcut_delete_selected())
         self.bind("<Escape>", lambda e: self._cancel_edit())
+        # Additional shortcuts for common actions
+        self.bind("<Control-e>", lambda e: self._shortcut_export_excel())
+        self.bind("<Control-a>", lambda e: self._shortcut_select_all())
+        self.bind("<Control-c>", lambda e: self._shortcut_copy_selected())
+        self.bind("<Control-d>", lambda e: self._shortcut_start_filing())
+        self.bind("<F5>", lambda e: self._reload())
+        self.bind("<Control-1>", lambda e: self._shortcut_switch_tab(0))
+        self.bind("<Control-2>", lambda e: self._shortcut_switch_tab(1))
+        self.bind("<Control-3>", lambda e: self._shortcut_switch_tab(2))
 
     def _shortcut_focus_search(self):
         try:
@@ -126,6 +135,45 @@ class TableTabMixin:
         try:
             if self.notebook.index(self.notebook.select()) == 0:
                 self._del_sel()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_export_excel(self):
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.export_selected()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_select_all(self):
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.table_view.select_all()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_copy_selected(self):
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.copy_table_output()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_start_filing(self):
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.start_filing_process()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_switch_tab(self, tab_index):
+        try:
+            self.notebook.select(tab_index)
         except Exception:
             pass
         return "break"

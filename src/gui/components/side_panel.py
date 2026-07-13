@@ -1,6 +1,9 @@
 import tkinter as tk
 from tkinter import ttk
 import os
+import json
+import threading
+import asyncio
 
 # Local imports
 from config import (
@@ -8,6 +11,7 @@ from config import (
     FL, FT
 )
 import db
+import logger
 
 class TenderDetailPanel(tk.Frame):
     def __init__(self, parent, app, table_tab):
@@ -58,6 +62,19 @@ class TenderDetailPanel(tk.Frame):
         self.btn_detail_fetch.pack(side="right", padx=(6, 0))
         self.btn_detail_filed = self.app._btn(self.detail_actions_fr, "Mark Filed", lambda: self.table_tab.set_selected_filing_status("Filed"), bg=ACCENT2)
         self.btn_detail_filed.pack(side="right", padx=(6, 0))
+
+        # AI Actions Frame
+        self.ai_actions_fr = tk.Frame(self, bg=PANEL)
+        self.ai_actions_fr.pack(fill="x", pady=(0, 10))
+        
+        self.btn_ai_summary = self.app._btn(self.ai_actions_fr, "📝 AI Summary", lambda: self._generate_ai_summary(), bg="#2D333B", fg=ACCENT2)
+        self.btn_ai_summary.pack(side="left", padx=(0, 6))
+        
+        self.btn_ai_risk = self.app._btn(self.ai_actions_fr, "⚠️ AI Risk", lambda: self._assess_ai_risk(), bg="#2D333B", fg=WARN)
+        self.btn_ai_risk.pack(side="left", padx=6)
+        
+        self.btn_ai_recommend = self.app._btn(self.ai_actions_fr, "🎯 AI Recommend", lambda: self._get_ai_recommendation(), bg="#2D333B", fg=SUCCESS)
+        self.btn_ai_recommend.pack(side="left", padx=6)
 
         # Detail Scrollable Text widget
         txt_fr = tk.Frame(self, bg=PANEL)
@@ -320,4 +337,212 @@ class TenderDetailPanel(tk.Frame):
                 self.detail_txt.tag_add("match_search", pos, end)
                 start = end
                 
+        self.detail_txt.configure(state="disabled")
+    
+    def _get_selected_tender(self):
+        """Get the currently selected tender."""
+        sel = self.table_tab.table_view.tv.selection()
+        if not sel:
+            return None
+        bid_no = self.table_tab.table_view.tv.set(sel[0], "bid_no")
+        for r in self.app._records:
+            if r.get("bid_no") == bid_no:
+                return r
+        return None
+    
+    def _generate_ai_summary(self):
+        """Generate AI summary for the selected tender."""
+        tender = self._get_selected_tender()
+        if not tender:
+            return
+        
+        self.btn_ai_summary.configure(state="disabled", text="Generating...")
+        
+        def process():
+            try:
+                import ai_integration
+                ai = ai_integration.get_ai_integration()
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    summary = loop.run_until_complete(ai.generate_tender_summary(tender))
+                    self.after(0, lambda: self._display_ai_summary(summary))
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.log("err", f"AI summary generation failed: {e}")
+                self.after(0, lambda: self._ai_operation_complete("summary", str(e)))
+        
+        thread = threading.Thread(target=process, daemon=True)
+        thread.start()
+    
+    def _assess_ai_risk(self):
+        """Assess AI risk for the selected tender."""
+        tender = self._get_selected_tender()
+        if not tender:
+            return
+        
+        self.btn_ai_risk.configure(state="disabled", text="Assessing...")
+        
+        def process():
+            try:
+                import ai_integration
+                ai = ai_integration.get_ai_integration()
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    risk = loop.run_until_complete(ai.assess_tender_risk(tender))
+                    self.after(0, lambda: self._display_ai_risk(risk))
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.log("err", f"AI risk assessment failed: {e}")
+                self.after(0, lambda: self._ai_operation_complete("risk", str(e)))
+        
+        thread = threading.Thread(target=process, daemon=True)
+        thread.start()
+    
+    def _get_ai_recommendation(self):
+        """Get AI recommendation for the selected tender."""
+        tender = self._get_selected_tender()
+        if not tender:
+            return
+        
+        self.btn_ai_recommend.configure(state="disabled", text="Analyzing...")
+        
+        def process():
+            try:
+                import ai_integration
+                ai = ai_integration.get_ai_integration()
+                
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    recommendation = loop.run_until_complete(ai.generate_bid_recommendation(tender))
+                    self.after(0, lambda: self._display_ai_recommendation(recommendation))
+                finally:
+                    loop.close()
+            except Exception as e:
+                logger.log("err", f"AI recommendation failed: {e}")
+                self.after(0, lambda: self._ai_operation_complete("recommendation", str(e)))
+        
+        thread = threading.Thread(target=process, daemon=True)
+        thread.start()
+    
+    def _display_ai_summary(self, summary):
+        """Display AI summary in the detail panel."""
+        self.btn_ai_summary.configure(state="normal", text="📝 AI Summary")
+        
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        
+        self.detail_txt.insert("end", "■ AI-GENERATED SUMMARY\n", "header")
+        self.detail_txt.insert("end", "─" * 32 + "\n\n", "label")
+        
+        self.detail_txt.insert("end", f"Executive Summary:\n", "label")
+        self.detail_txt.insert("end", f"{summary.executive_summary}\n\n", "value")
+        
+        self.detail_txt.insert("end", f"Key Requirements:\n", "label")
+        for req in summary.key_requirements:
+            self.detail_txt.insert("end", f"• {req}\n", "value")
+        self.detail_txt.insert("end", "\n")
+        
+        self.detail_txt.insert("end", f"Evaluation Criteria:\n", "label")
+        for criteria in summary.evaluation_criteria:
+            self.detail_txt.insert("end", f"• {criteria}\n", "value")
+        self.detail_txt.insert("end", "\n")
+        
+        self.detail_txt.insert("end", f"Timeline: {summary.timeline}\n", "label")
+        self.detail_txt.insert("end", f"Budget Indicators: {summary.budget_indicators}\n", "label")
+        
+        self.detail_txt.configure(state="disabled")
+    
+    def _display_ai_risk(self, risk):
+        """Display AI risk assessment in the detail panel."""
+        self.btn_ai_risk.configure(state="normal", text="⚠️ AI Risk")
+        
+        risk_colors = {
+            "Low": SUCCESS,
+            "Medium": WARN,
+            "High": ERR,
+            "Critical": "#FF0000"
+        }
+        
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        
+        self.detail_txt.insert("end", "■ AI RISK ASSESSMENT\n", "header")
+        self.detail_txt.insert("end", "─" * 32 + "\n\n", "label")
+        
+        self.detail_txt.insert("end", f"Risk Level: ", "label")
+        self.detail_txt.insert("end", f"{risk.risk_level}\n", f"risk_{risk.risk_level}")
+        
+        self.detail_txt.insert("end", f"Risk Score: {risk.risk_score:.2f}\n\n", "label")
+        
+        self.detail_txt.insert("end", f"Risk Factors:\n", "label")
+        for factor in risk.risk_factors:
+            self.detail_txt.insert("end", f"• {factor}\n", "value")
+        self.detail_txt.insert("end", "\n")
+        
+        self.detail_txt.insert("end", f"Mitigation Suggestions:\n", "label")
+        for suggestion in risk.mitigation_suggestions:
+            self.detail_txt.insert("end", f"• {suggestion}\n", "value")
+        
+        for level, color in risk_colors.items():
+            self.detail_txt.tag_configure(f"risk_{level}", foreground=color, font=("Segoe UI", 10, "bold"))
+        
+        self.detail_txt.configure(state="disabled")
+    
+    def _display_ai_recommendation(self, recommendation):
+        """Display AI recommendation in the detail panel."""
+        self.btn_ai_recommend.configure(state="normal", text="🎯 AI Recommend")
+        
+        rec_color = SUCCESS if recommendation.recommend else ERR
+        
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        
+        self.detail_txt.insert("end", "■ AI BID RECOMMENDATION\n", "header")
+        self.detail_txt.insert("end", "─" * 32 + "\n\n", "label")
+        
+        self.detail_txt.insert("end", f"Recommendation: ", "label")
+        rec_text = "BID RECOMMENDED" if recommendation.recommend else "DO NOT BID"
+        self.detail_txt.insert("end", f"{rec_text}\n", "recommendation")
+        
+        self.detail_txt.insert("end", f"Recommendation Score: {recommendation.recommendation_score:.2f}\n\n", "label")
+        
+        self.detail_txt.insert("end", f"Pros:\n", "label")
+        for pro in recommendation.pros:
+            self.detail_txt.insert("end", f"• {pro}\n", "value")
+        self.detail_txt.insert("end", "\n")
+        
+        self.detail_txt.insert("end", f"Cons:\n", "label")
+        for con in recommendation.cons:
+            self.detail_txt.insert("end", f"• {con}\n", "value")
+        self.detail_txt.insert("end", "\n")
+        
+        self.detail_txt.insert("end", f"Strategic Fit: {recommendation.strategic_fit}\n", "label")
+        self.detail_txt.insert("end", f"Competitive Advantage: {recommendation.competitive_advantage}\n", "label")
+        
+        if recommendation.suggested_bid_price:
+            self.detail_txt.insert("end", f"Suggested Bid Price: {recommendation.suggested_bid_price}\n", "label")
+        
+        self.detail_txt.tag_configure("recommendation", foreground=rec_color, font=("Segoe UI", 10, "bold"))
+        
+        self.detail_txt.configure(state="disabled")
+    
+    def _ai_operation_complete(self, operation, error):
+        """Handle AI operation completion with error."""
+        if operation == "summary":
+            self.btn_ai_summary.configure(state="normal", text="📝 AI Summary")
+        elif operation == "risk":
+            self.btn_ai_risk.configure(state="normal", text="⚠️ AI Risk")
+        elif operation == "recommendation":
+            self.btn_ai_recommend.configure(state="normal", text="🎯 AI Recommend")
+        
+        self.detail_txt.configure(state="normal")
+        self.detail_txt.delete("1.0", "end")
+        self.detail_txt.insert("end", f"AI {operation} failed:\n{error}", "value")
         self.detail_txt.configure(state="disabled")

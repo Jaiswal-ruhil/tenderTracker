@@ -31,10 +31,21 @@ def create_server(port: int = 8101) -> FastMCP:
         department: Optional[str] = None,
         end_date: Optional[str] = None,
         product: Optional[str] = None,
+        limit: Optional[int] = None,
+        offset: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
-        """Search stored tenders by keyword, category, department, deadline, or item."""
+        """
+        Search stored tenders by keyword, category, department, deadline, or item.
+        Supports pagination with limit and offset parameters for large datasets.
+        """
+        # Use pagination if limit is specified
+        if limit is not None:
+            tenders = db.load_all_tenders(limit=limit, offset=offset)
+        else:
+            tenders = db.load_all_tenders()
+        
         results = []
-        for tender in db.load_all_tenders():
+        for tender in tenders:
             if keyword and keyword.lower() not in json.dumps(tender).lower():
                 continue
             if category and category.lower() not in tender.get("category", "").lower():

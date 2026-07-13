@@ -256,53 +256,27 @@ def unload_local_models(base_url, api_key=None):
         _loaded_local_models.clear()
         _failed_local_models.clear()
         
-        # 1. LM Studio native unload
-        for root in normalize_local_service_roots(base_url):
-            try:
-                models_url = f"{root.rstrip('/')}/models"
-                req = urllib.request.Request(models_url, headers={"Content-Type": "application/json"}, method="GET")
-                if api_key:
-                    req.add_header("Authorization", f"Bearer {api_key}")
-                with urllib.request.urlopen(req, timeout=5) as response:
-                    res_data = response.read().decode("utf-8")
-                    models_json = json.loads(res_data)
+        # LM Studio v1 unload - use try_local_endpoint to avoid path issues
+        try:
+            for root in normalize_local_service_roots(base_url):
+                try:
+                    # Get models list using proper endpoint
+                    models_response = try_local_endpoint(root, ["v1/models"], api_key, method="GET", timeout=5)
+                    models_json = json.loads(models_response)
                     model_list = models_json.get("data", [])
                     for m in model_list:
                         instance_id = m.get("id")
                         if instance_id:
-                            for unload_path in ["api/v1/models/unload", "v1/models/unload", "models/unload"]:
-                                try:
-                                    unload_url = f"{root.rstrip('/')}/{unload_path}"
-                                    unload_req = urllib.request.Request(
-                                        unload_url,
-                                        headers={"Content-Type": "application/json"},
-                                        data=json.dumps({"instance_id": instance_id}).encode("utf-8"),
-                                        method="POST"
-                                    )
-                                    if api_key:
-                                        unload_req.add_header("Authorization", f"Bearer {api_key}")
-                                    with urllib.request.urlopen(unload_req, timeout=5) as res:
-                                        res.read()
-                                except Exception:
-                                    pass
-            except Exception:
-                pass
-    
-        # 2. Ollama unload (sending model request with keep_alive=0)
-        try:
-            for root in normalize_local_service_roots(base_url):
-                try:
-                    generate_url = f"{root.rstrip('/')}/generate"
-                    unload_req = urllib.request.Request(
-                        generate_url,
-                        headers={"Content-Type": "application/json"},
-                        data=json.dumps({"model": "local-model", "keep_alive": 0}).encode("utf-8"),
-                        method="POST"
-                    )
-                    if api_key:
-                        unload_req.add_header("Authorization", f"Bearer {api_key}")
-                    with urllib.request.urlopen(unload_req, timeout=3) as res:
-                        res.read()
+                            try:
+                                # Unload using proper endpoint
+                                try_local_endpoint(
+                                    root, ["v1/models/unload"], api_key,
+                                    method="POST",
+                                    body=json.dumps({"instance_id": instance_id}).encode("utf-8"),
+                                    timeout=5
+                                )
+                            except Exception:
+                                pass
                 except Exception:
                     pass
         except Exception:
@@ -349,41 +323,35 @@ def _auto_load_local_model_impl(base_url, model, api_key=None):
             name = name.split("/")[-1]
         return name.strip()
 
-    def list_models(url):
+    def list_models(base_url):
         try:
-            req = urllib.request.Request(url, headers={"Content-Type": "application/json"}, method="GET")
-            if api_key:
-                req.add_header("Authorization", f"Bearer {api_key}")
-            with urllib.request.urlopen(req, timeout=5) as response:
-                res_data = response.read().decode("utf-8")
-                models_json = json.loads(res_data)
-                if not isinstance(models_json, dict):
-                    return None
-                # Handle OpenAI /v1/models format
-                if "data" in models_json and isinstance(models_json["data"], list):
-                    return [m.get("id") for m in models_json["data"] if m.get("id")]
-                # Handle LM Studio native /api/v1/models format
-                elif "models" in models_json and isinstance(models_json["models"], list):
-                    return [
-                        m.get("key") or m.get("id")
-                        for m in models_json["models"]
-                        if (m.get("key") or m.get("id")) and len(m.get("loaded_instances", [])) > 0
-                    ]
+            # Use try_local_endpoint to handle path normalization and try both v1/models and models
+            response_text, used_url = try_local_endpoint(base_url, ["v1/models", "models"], api_key, method="GET", timeout=5)
+            models_json = json.loads(response_text)
+            if not isinstance(models_json, dict):
                 return None
+            # Handle OpenAI /v1/models format
+            if "data" in models_json and isinstance(models_json["data"], list):
+                return [m.get("id") for m in models_json["data"] if m.get("id")]
+            # Handle LM Studio native /api/v1/models format
+            elif "models" in models_json and isinstance(models_json["models"], list):
+                return [
+                    m.get("key") or m.get("id")
+                    for m in models_json["models"]
+                    if (m.get("key") or m.get("id")) and len(m.get("loaded_instances", [])) > 0
+                ]
+            return None
         except Exception:
             return None
 
-    for root in normalize_local_service_roots(base_url):
-        models_url = f"{root.rstrip('/')}/models"
-        loaded_models = list_models(models_url)
-        if loaded_models is not None:
-            clean_tgt = clean_model_name(model)
-            cleaned_loaded = [clean_model_name(lm) for lm in loaded_models]
-            if clean_tgt in cleaned_loaded or any(clean_tgt in cl or cl in clean_tgt for cl in cleaned_loaded):
-                logger.log("info", f"Model '{model}' is already available/loaded.")
-                _loaded_local_models.add(cache_key)
-                return
-            break
+    loaded_models = list_models(base_url)
+    if loaded_models is not None:
+        clean_tgt = clean_model_name(model)
+        cleaned_loaded = [clean_model_name(lm) for lm in loaded_models]
+        if clean_tgt in cleaned_loaded or any(clean_tgt in cl or cl in clean_tgt for cl in cleaned_loaded):
+            logger.log("info", f"Model '{model}' is already available/loaded.")
+            _loaded_local_models.add(cache_key)
+            return
 
     # Get maximum parallel slots configuration
     import db
@@ -598,9 +566,10 @@ def _local_chat_request(prompt, base_url, model, api_key, response_json=False, t
                 raise
 
     chat_attempts = [
-        (["api/v1/chat"], "native"),
-        (["v1/chat/completions", "chat/completions", "api/v1/chat/completions"], "openai"),
-        (["chat", "v1/chat", "api/chat"], "openai"),
+        (["v1/chat/completions"], "openai"),  # Primary LM Studio endpoint
+        (["chat/completions"], "openai"),     # Alternative
+        (["api/v1/chat"], "native"),          # Native LM Studio
+        (["chat", "v1/chat", "api/chat"], "openai"),  # Fallbacks
     ]
     last_error = None
     for resources, style in chat_attempts:

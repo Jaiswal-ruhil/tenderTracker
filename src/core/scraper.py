@@ -1,6 +1,7 @@
 import re
 import time
 import logger
+from alert_system import alert_scraping_issue, alert_network_issue, AlertSeverity
 
 # Static import hooks for PyInstaller package scanning
 try:
@@ -108,11 +109,25 @@ def scrape_bid_page(url, log_fn=None, headless=False):
             return extra
         except Exception as e:
             if log_fn: log_fn("err", f"Failed to parse PDF details: {e}")
+            # Raise alert for PDF parsing failure
+            alert_scraping_issue(
+                title="PDF Parsing Failed",
+                message=f"Failed to parse PDF from {url}: {str(e)}",
+                context={"url": url, "error": str(e)},
+                severity=AlertSeverity.WARNING
+            )
             if log_fn: log_fn("info", "Falling back to Selenium page scraping...")
 
     mods = _try_import_selenium()
     if not mods:
         if log_fn: log_fn("err","Selenium not installed. Run: pip install selenium webdriver-manager")
+        # Raise critical alert for missing Selenium
+        alert_scraping_issue(
+            title="Selenium Not Installed",
+            message="Selenium is required for web scraping but is not installed",
+            context={"url": url},
+            severity=AlertSeverity.CRITICAL
+        )
         return {}
 
     webdriver, Options, Service, By, WebDriverWait, EC, ChromeDriverManager = mods
@@ -141,9 +156,19 @@ def scrape_bid_page(url, log_fn=None, headless=False):
 
         driver.get(url)
         # wait for page body
-        WebDriverWait(driver, 20).until(
-            EC.presence_of_element_located((By.TAG_NAME, "body"))
-        )
+        try:
+            WebDriverWait(driver, 20).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except Exception as timeout_err:
+            if log_fn: log_fn("err", f"Page load timeout: {timeout_err}")
+            alert_scraping_issue(
+                title="Page Load Timeout",
+                message=f"Failed to load page within 20 seconds: {url}",
+                context={"url": url, "error": str(timeout_err)},
+                severity=AlertSeverity.ERROR
+            )
+            return {}
         time.sleep(3)   # let JS render
 
         # Diagnostic: log the actual URL navigated to and page length to help
@@ -394,8 +419,44 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
             search_input.clear()
             search_input.send_keys(bid_no_or_url)
             
-            search_btn = driver.find_element(By.ID, "searchBidRA")
-            search_btn.click()
+            # Try to trigger search by pressing Enter key (more reliable than clicking button)
+            try:
+                from selenium.webdriver.common.keys import Keys
+                search_input.send_keys(Keys.RETURN)
+                log_local("info", f"[{log_id}] Search triggered using Enter key")
+            except Exception as enter_err:
+                log_local("warn", f"[{log_id}] Enter key failed, trying button click: {enter_err}")
+                
+                # Fallback to clicking the search button with multiple methods
+                clicked = False
+                for attempt in range(3):
+                    try:
+                        # Wait for button to be both visible and clickable
+                        search_btn = WebDriverWait(driver, 15).until(
+                            EC.and_(
+                                EC.visibility_of_element_located((By.ID, "searchBidRA")),
+                                EC.element_to_be_clickable((By.ID, "searchBidRA"))
+                            )
+                        )
+                        
+                        # Scroll to button to ensure it's in view
+                        driver.execute_script("arguments[0].scrollIntoView({block: 'center'});", search_btn)
+                        time.sleep(1)  # Wait after scroll
+                        
+                        # Try JavaScript click first (most reliable)
+                        driver.execute_script("arguments[0].click();", search_btn)
+                        clicked = True
+                        log_local("info", f"[{log_id}] Search button clicked using JavaScript (attempt {attempt + 1})")
+                        break
+                    except Exception as click_err:
+                        log_local("warn", f"[{log_id}] Click attempt {attempt + 1} failed: {click_err}")
+                        if attempt < 2:
+                            time.sleep(2)  # Wait longer between attempts
+                            continue
+                
+                if not clicked:
+                    log_local("err", f"[{log_id}] All click attempts failed for search button")
+                    return None
             
             # Wait for search results to load and locate the correct link matching the bid number
             log_local("info", f"[{log_id}] Waiting for search results to load bid: {bid_no_or_url}...")
@@ -451,7 +512,7 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
         
         # Poll directory for new PDF file completion
         downloaded_file = None
-        timeout = 45
+        timeout = 90  # Increased timeout for slower downloads
         start_time = time.time()
         
         while time.time() - start_time < timeout:
