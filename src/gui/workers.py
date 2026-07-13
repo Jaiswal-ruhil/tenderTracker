@@ -120,7 +120,7 @@ class WorkersMixin:
             base_url = settings.get("llm_base_url", "")
             model = settings.get("llm_model", "")
             
-            from gui_dialogs import LoadingDialog
+            from dialogs.loading_dialog import LoadingDialog
             def perform_prewarm():
                 return _llm_module.prepare_local_llm(base_url, model, api_key)
                 
@@ -534,7 +534,7 @@ class WorkersMixin:
                                 break
 
             # Pre-evaluate derived want status and matching firm for the parsed record
-            is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+            is_want = self._get_tender_status(rec, inc_kws, exc_kws, settings=settings)
             rec["is_want_derived"] = is_want
 
             if existing_rec:
@@ -548,11 +548,22 @@ class WorkersMixin:
                 for k, v in rec.items():
                     if k in ("is_want_derived", "matched_firm"):
                         continue
-                    if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
-                        existing_rec[k] = v
-                        if existing_iid and k in TV_IDS:
-                            self.tv.set(existing_iid, k, v)
-                        merged_fields.append(k)
+                    if k == "filing_status" and existing_rec.get("filing_status") == "Filed":
+                        continue
+                    if v:
+                        existing_val = existing_rec.get(k, "")
+                        
+                        # Special handling for merging remarks
+                        if k == "remarks":
+                            from parser import merge_remarks
+                            v = merge_remarks(existing_val, v)
+                            
+                        is_diff = str(existing_val).strip() != str(v).strip()
+                        if not str(existing_val).strip() or is_diff:
+                            existing_rec[k] = v
+                            if existing_iid and k in TV_IDS:
+                                self.tv.set(existing_iid, k, v)
+                            merged_fields.append(k)
                 if merged_fields:
                     stats["updated"] += 1
                     if existing_iid:
@@ -630,7 +641,7 @@ class WorkersMixin:
                         break
 
         # Pre-evaluate derived want status and matching firm for the parsed record
-        is_want = self._get_tender_status(rec, inc_kws, exc_kws)
+        is_want = self._get_tender_status(rec, inc_kws, exc_kws, settings=settings)
         rec["is_want_derived"] = is_want
 
         if existing_rec:
@@ -698,7 +709,7 @@ class WorkersMixin:
         start_background_embedding_worker(callback_fn=self._refresh_table_view)
         
         try:
-            if self.notebook.index(self.notebook.select()) == 1:
+            if self.notebook.index(self.notebook.select()) == self.notebook.index(self.tab_calendar):
                 self._update_calendar()
                 self._update_details()
         except Exception:
@@ -901,7 +912,7 @@ class WorkersMixin:
             def fetch_finished():
                 self._set_status(msg, SUCCESS)
                 try:
-                    if self.notebook.index(self.notebook.select()) == 1:
+                    if self.notebook.index(self.notebook.select()) == self.notebook.index(self.tab_calendar):
                         self._update_calendar()
                         self._update_details()
                 except:
@@ -1073,7 +1084,7 @@ class WorkersMixin:
                 self._refresh_table_view()
                 start_background_embedding_worker(callback_fn=self._refresh_table_view)
                 try:
-                    if self.notebook.index(self.notebook.select()) == 1:
+                    if self.notebook.index(self.notebook.select()) == self.notebook.index(self.tab_calendar):
                         self._update_calendar()
                         self._update_details()
                 except Exception:

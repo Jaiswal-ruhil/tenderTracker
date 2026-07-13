@@ -62,7 +62,7 @@ def extract_department_info(pdf_text: str) -> dict:
     m = re.search(r"Ministry[/\w\s]*?(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
     if m: r["ministry"] = m.group(1).strip()
 
-    m = re.search(r"Department\s*(?:Name)?\s*(?:And\s*Address)?\s*[:\n]\s*([\s\S]*?)(?=\n(?:Organisation|Office|Bid|संगठन|\Z))", pdf_text, re.I)
+    m = re.search(r"Department\s*(?:Name)?\s*(?:And\s*Address)?\s*[:\n]\s*([\s\S]*?)(?=\n(?:Organi[sz]ation|Office|Bid|संगठन|\Z))", pdf_text, re.I)
     if m:
         dept_lines = [ln.strip() for ln in m.group(1).splitlines() if ln.strip()]
         if dept_lines: r["dept"] = dept_lines[0]
@@ -70,7 +70,7 @@ def extract_department_info(pdf_text: str) -> dict:
         m = re.search(r"Department\s*(?:Name)?\s*(?:And\s*Address)?\s*[:\n]\s*(.+)", pdf_text, re.I)
         if m: r["dept"] = m.group(1).strip()
 
-    m = re.search(r"Organisation\s*(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
+    m = re.search(r"Organi[sz]ation\s*(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
     if m: r["organisation"] = m.group(1).strip()
 
     m = re.search(r"Office\s*(?:Name)?\s*[:\n]\s*(.+)", pdf_text, re.I)
@@ -174,7 +174,7 @@ def extract_item_details(pdf_text: str) -> dict:
     pos = re.search(r"(?:Item\s*)?Category\s*[:\n]\s*", pdf_text, re.I)
     if pos:
         sub = pdf_text[pos.end(): pos.end() + 500]
-        stop_kws = ["ministry", "department", "organisation", "office", "dated",
+        stop_kws = ["ministry", "department", "organisation", "organization", "office", "dated",
                     "bid end", "estimated", "evaluation", "consignee"]
         lines = []
         for ln in sub.splitlines():
@@ -198,7 +198,7 @@ def extract_item_details(pdf_text: str) -> dict:
     if m_items:
         items_val = m_items.group(1).strip()
         # Drop trailing fields if it grabbed the next header
-        stop_pos = re.search(r"\b(?:Category|Ministry|Department|Organisation|Office|Start Date)\b", items_val, re.I)
+        stop_pos = re.search(r"\b(?:Category|Ministry|Department|Organi[sz]ation|Office|Start Date)\b", items_val, re.I)
         if stop_pos:
             items_val = items_val[:stop_pos.start()].strip().rstrip(",")
         if items_val:

@@ -159,6 +159,7 @@ class CalendarTab(tk.Frame):
         return None
 
     def get_events_for_date(self, target_date, inc_kws=None, exc_kws=None):
+        settings = None
         if inc_kws is None or exc_kws is None:
             settings = db.load_settings()
             inc_raw = settings.get("include_keywords", "")
@@ -169,7 +170,7 @@ class CalendarTab(tk.Frame):
         events = []
         for r in self.app._records:
             # We want to use TableTab's get_tender_status for keyword/firm logic consistency
-            is_want = self.app.table_tab.get_tender_status(r, inc_kws, exc_kws)
+            is_want = self.app.table_tab.get_tender_status(r, inc_kws, exc_kws, settings=settings)
             if not is_want:
                 continue
 

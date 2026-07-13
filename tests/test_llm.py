@@ -63,6 +63,10 @@ class TestLLM(unittest.TestCase):
         # Test cleaning JSON with <think>...</think> reasoning block
         self.assertEqual(llm.clean_json_response('<think>\nI should extract field x.\n{\n "nested": true\n}\n</think>\n{"test": 5}'), '{"test": 5}')
         self.assertEqual(llm.extract_thinking_block('<think>\nI should extract field x.\n</think>\n{"test": 5}'), "I should extract field x.")
+        
+        # Test cleaning JSON arrays
+        self.assertEqual(llm.clean_json_response('[{"test": 6}, {"test": 7}]'), '[{"test": 6}, {"test": 7}]')
+        self.assertEqual(llm.clean_json_response('Here is the array:\n[{"test": 8}]\nHope it helps!'), '[{"test": 8}]')
 
     @patch('urllib.request.urlopen')
     def test_test_llm_connection_gemini_success(self, mock_urlopen):
@@ -431,8 +435,8 @@ class TestLLM(unittest.TestCase):
         self.assertTrue(mock_llm_parse.called)
 
     @patch('llm_client.LMStudioClient.classify_bids_batch')
-    @patch('gui_workers._llm_module.llm_parse_tender')
-    @patch('gui_workers.parse_one')
+    @patch('workers._llm_module.llm_parse_tender')
+    @patch('workers.parse_one')
     def test_do_parse_force_llm_true(self, mock_parse_one, mock_llm_parse, mock_classify):
         mock_classify.return_value = []
         # Setup sync thread execution for target='worker' only
@@ -453,7 +457,7 @@ class TestLLM(unittest.TestCase):
         db.save_setting("llm_use_parsing", False) # disable setting to test force override
         
         # Setup mock app
-        from gui_workers import WorkersMixin
+        from workers import WorkersMixin
         class MockApp(WorkersMixin):
             def __init__(self):
                 self.paste_txt = MagicMock()
@@ -489,8 +493,8 @@ class TestLLM(unittest.TestCase):
         self.assertEqual(app._records[0]["bid_no"], "GEM/2026/B/12345")
 
     @patch('llm_client.LMStudioClient.classify_bids_batch')
-    @patch('gui_workers._llm_module.llm_parse_tender')
-    @patch('gui_workers.parse_one')
+    @patch('workers._llm_module.llm_parse_tender')
+    @patch('workers.parse_one')
     def test_do_parse_force_llm_false(self, mock_parse_one, mock_llm_parse, mock_classify):
         mock_classify.return_value = []
         # Setup sync thread execution for target='worker' only
@@ -511,7 +515,7 @@ class TestLLM(unittest.TestCase):
         db.save_setting("llm_use_parsing", True) # enable setting to test force override
         
         # Setup mock app
-        from gui_workers import WorkersMixin
+        from workers import WorkersMixin
         class MockApp(WorkersMixin):
             def __init__(self):
                 self.paste_txt = MagicMock()

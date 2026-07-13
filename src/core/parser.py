@@ -94,6 +94,18 @@ def split_blocks(text):
     parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
     return [p.strip() for p in parts if p.strip()]
 
+def merge_remarks(existing_remarks, new_remarks):
+    if not existing_remarks:
+        return new_remarks
+    if not new_remarks:
+        return existing_remarks
+    # Strip any existing [GeM: ...] prefix from existing_remarks
+    cleaned_existing = re.sub(r"^\[GeM:\s*[^\]]+\]\s*", "", existing_remarks).strip()
+    if cleaned_existing:
+        return f"{new_remarks} {cleaned_existing}"
+    else:
+        return new_remarks
+
 def clean_raw_text(text: str) -> str:
     """
     Strips navigation, footers, headers, and repetitive GeM UI boilerplate
@@ -196,7 +208,7 @@ def parse_one(text, allow_llm=True):
     # Detailed fields parsing
     m = re.search(r"Ministry\s*:\s*(.+)", text, re.I)
     if m: r["ministry"] = m.group(1).strip()
-    m = re.search(r"Organisation\s*:\s*(.+)", text, re.I)
+    m = re.search(r"Organi[sz]ation\s*:\s*(.+)", text, re.I)
     if m: r["organisation"] = m.group(1).strip()
     m = re.search(r"Office\s*:\s*(.+)", text, re.I)
     if m: r["office"] = m.group(1).strip()
@@ -251,6 +263,44 @@ def parse_one(text, allow_llm=True):
             r["items"] = item_part
     elif "items" in r:
         r["category"] = map_category(r["items"], allow_llm=allow_llm)
+
+    # Parse GeM Status fields
+    m = re.search(r"(?:\b|\B)Status\s*:\s*(.+)", text, re.I)
+    if m:
+        val = m.group(1).strip()
+        val = re.split(r"(?:Bid\s+Doc|BID\s+Document|Participation|\n)", val, flags=re.I)[0].strip()
+        r["gem_status"] = val
+
+    m = re.search(r"Bid/RA\s+Status\s*:\s*(.+)", text, re.I)
+    if m:
+        val = m.group(1).strip()
+        val = re.split(r"(?:Items|Quantity|\n)", val, flags=re.I)[0].strip()
+        r["bid_ra_status"] = val
+
+    m = re.search(r"Technical\s+Status\s*:\s*(.+)", text, re.I)
+    if m:
+        val = m.group(1).strip()
+        val = re.split(r"(?:Department|Start|\n)", val, flags=re.I)[0].strip()
+        r["technical_status"] = val
+
+    m = re.search(r"Financial\s+Status\s*:\s*(.+)", text, re.I)
+    if m:
+        val = m.group(1).strip()
+        val = re.split(r"(?:Department|Start|\n)", val, flags=re.I)[0].strip()
+        r["financial_status"] = val
+
+    # Format GeM status details into remarks
+    status_parts = []
+    if r.get("bid_ra_status"):
+        status_parts.append(r["bid_ra_status"])
+    if r.get("gem_status"):
+        status_parts.append(r["gem_status"])
+    if r.get("technical_status"):
+        status_parts.append(f"Tech: {r['technical_status']}")
+    if r.get("financial_status"):
+        status_parts.append(f"Fin: {r['financial_status']}")
+    if status_parts:
+        r["remarks"] = f"[GeM: {' | '.join(status_parts)}]"
 
     # Apply custom field value mappings
     try:
@@ -327,7 +377,7 @@ def convert_pdf_text_to_markdown(pdf_text):
                 qty = m
 
     # 4. Department
-    dept = re.search(r"Department\s*Name\s*(?::|\n)\s*([\s\S]*?)(?=\n(?:संगठन|Organisation|\Z))", pdf_text, re.I)
+    dept = re.search(r"Department\s*Name\s*(?::|\n)\s*([\s\S]*?)(?=\n(?:संगठन|Organi[sz]ation|\Z))", pdf_text, re.I)
     if not dept:
         dept = re.search(r"Department\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
 
@@ -344,7 +394,7 @@ def convert_pdf_text_to_markdown(pdf_text):
     
     # Extra PDF details
     ministry = re.search(r"Ministry/State\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
-    org = re.search(r"Organisation\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
+    org = re.search(r"Organi[sz]ation\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     office = re.search(r"Office\s*Name\s*(?::|\n)\s*(.+)", pdf_text, re.I)
     
     # Line limited regexes to prevent matching far-away numbers when fields are not present/N/A

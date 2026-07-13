@@ -149,6 +149,99 @@ sequenceDiagram
 
 ---
 
+## n8n Workflow Automation & Integration
+
+TenderTracker integrates with **n8n** to support automated workflows, scheduled monitoring, parallel batch processing, and automated compliance filing. It uses three specialized MCP (Model Context Protocol) servers communicating over SSE (Server-Sent Events) to expose application tools directly to n8n workflows.
+
+### n8n System Architecture
+
+```mermaid
+flowchart TD
+    subgraph n8n Workflows
+        Trigger[Trigger: Schedule / Manual / File Upload] --> Process[n8n Workflow Execution]
+        Process --> Flow1{Which Workflow?}
+        
+        %% Workflow 1
+        Flow1 -->|Tender Monitoring| TM[Automated Tender Monitoring]
+        TM --> TM_Scan[Scrape/Fetch Tenders]
+        TM_Scan --> TM_Ext[Extract Blocks]
+        TM_Ext --> TM_Class[Classify Tenders]
+        TM_Class --> TM_Match[Match Products]
+        TM_Filter{Confidence > 0.7?}
+        TM_Match --> TM_Filter
+        TM_Filter -->|Yes| TM_Store[Save to Catalog & Notify Slack/Email]
+        TM_Filter -->|No| TM_Skip[Skip]
+        
+        %% Workflow 2
+        Flow1 -->|Batch Processing| BP[Batch Processing]
+        BP --> BP_Split[Split into Batches of 10]
+        BP_Split --> BP_Par[Parallel Analysis]
+        BP_Par --> BP_Store[Save to Catalog]
+        BP_Store --> BP_Excel[Export Summary to Excel]
+        
+        %% Workflow 3
+        Flow1 -->|Filing Prep| FP[Automated Filing Preparation]
+        FP --> FP_Retrieve[Retrieve Tender Details]
+        FP_Retrieve --> FP_Prep[Prepare Filing Pack & Match Docs]
+        FP_Prep --> FP_Validate{Validation Passes?}
+        FP_Validate -->|Yes| FP_Checklist[Create Filing Checklist & Folder Structure]
+        FP_Validate -->|No| FP_Alert[Alert Missing Documents]
+    end
+
+    subgraph MCP Servers
+        TM_Ext & BP_Par & FP_Prep -->|SSE http://localhost:8102/sse| AnalysisMCP["Analysis MCP (Port 8102)"]
+        TM_Store & BP_Store & FP_Retrieve -->|SSE http://localhost:8101/sse| CatalogMCP["Catalog MCP (Port 8101)"]
+        FP_Prep & FP_Validate -->|SSE http://localhost:8103/sse| FilingMCP["Filing MCP (Port 8103)"]
+    end
+```
+
+### Core Workflows Available
+
+Detailed workflow definitions are stored inside the [n8n/workflows/](file:///d:/tenderTracker/n8n/workflows) directory:
+
+1. **[Automated Tender Monitoring](file:///d:/tenderTracker/n8n/workflows/automated_tender_monitoring.json)**:
+   * **Trigger**: Runs on a schedule (e.g. every 2 hours).
+   * **Function**: Scrapes new tenders, uses the *Analysis MCP* to parse and classify, matches products with confidence scores, filters out low confidence or irrelevant entries, and saves high-relevance alerts to the SQLite Catalog, while sending notifications to Slack and Email.
+2. **[Batch Processing Workflow](file:///d:/tenderTracker/n8n/workflows/batch_processing.json)**:
+   * **Trigger**: Manual trigger or folder drop.
+   * **Function**: Parallelizes processing of files in batches of 10. Automatically performs AI-driven parsing, classification, document requirement generation, and product matching, then exports a finalized Excel sheet.
+3. **[Automated Filing Preparation](file:///d:/tenderTracker/n8n/workflows/automated_filing.json)**:
+   * **Trigger**: Triggered via a workflow execution specifying a `bid_no` and `firm_name`.
+   * **Function**: Uses the *Filing MCP* to prepare filing folders, matches required bid documents, validates checklist integrity against official GeM rules, and reports any missing files or compliance errors.
+
+### Setting Up & Running n8n Integration
+
+For full configuration guidelines, refer to the [n8n Implementation Guide](file:///d:/tenderTracker/n8n/IMPLEMENTATION_GUIDE.md) and the [Workflow Plan](file:///d:/tenderTracker/n8n/WORKFLOW_PLAN.md).
+
+#### 1. Start the MCP SSE Servers
+Start each server in a separate terminal or background process:
+```powershell
+# Start Catalog MCP
+python mcp_runner.py --server catalog --transport sse
+
+# Start Analysis MCP
+python mcp_runner.py --server analysis --transport sse
+
+# Start Filing MCP
+python mcp_runner.py --server filing --transport sse
+```
+
+#### 2. Start n8n
+Launch n8n via Docker (recommended) or npm:
+```bash
+# Docker (Recommended)
+docker run -it --rm --name n8n -p 5678:5678 -v ~/.n8n:/home/node/.n8n n8nio/n8n
+
+# npm
+npm install n8n -g
+n8n start
+```
+
+#### 3. Import Workflows
+Open n8n at `http://localhost:5678`, select **Workflows** -> **Import from File**, and select the JSON files from the `n8n/workflows` directory.
+
+---
+
 ## Directory Structure
 
 ```text

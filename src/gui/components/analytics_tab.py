@@ -156,7 +156,7 @@ class AnalyticsTab(tk.Frame):
         upcoming_deadlines = []
         
         for r in self.app._records:
-            is_want = self.app.table_tab.get_tender_status(r, inc_kws, exc_kws)
+            is_want = self.app.table_tab.get_tender_status(r, inc_kws, exc_kws, settings=settings)
             if is_want:
                 wants += 1
                 if r.get("filing_status", "Not Filed") == "Not Filed":

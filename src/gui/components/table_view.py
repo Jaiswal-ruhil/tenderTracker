@@ -454,10 +454,10 @@ class TendersTableView(tk.Frame):
             db.save_all_tenders(self.app._records)
             try:
                 selected_tab = self.app.notebook.index(self.app.notebook.select())
-                if selected_tab == 1:
+                if selected_tab == self.app.notebook.index(self.app.tab_calendar):
                     self.app._update_calendar()
                     self.app._update_details()
-                elif selected_tab == 2:
+                elif selected_tab == self.app.notebook.index(self.app.tab_analytics):
                     self.app._update_analytics()
             except:
                 pass

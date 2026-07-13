@@ -25,14 +25,10 @@ from parser import split_blocks, parse_one, convert_pdf_text_to_markdown
 from scraper import scrape_bid_page, _try_import_selenium, download_tender_pdf, scrape_portal_search
 import db
 
-# Mixins for tab structures and dialogs
-from gui_calendar import CalendarTabMixin
-from gui_analytics import AnalyticsTabMixin
-from gui_dialogs import DialogsMixin
-from gui_table_tab import TableTabMixin, DatePickerPopup
-from gui_workers import WorkersMixin
+# Workers mixin
+from workers import WorkersMixin
 
-class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableTabMixin, WorkersMixin):
+class TenderApp(tk.Tk, WorkersMixin):
     def __init__(self):
         super().__init__()
         self.title("GEM Tender Logger  v4")
@@ -125,50 +121,69 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         self._btn(top, "⚙ Settings", self._show_settings, bg=CARD).pack(side="right")
         self._btn(top, "🏢 Manage Firms", self._show_firms_dialog, bg=CARD).pack(side="right", padx=(0, 6))
 
-        # paned: left = paste+log, right = table
-        pane = tk.PanedWindow(self, orient="horizontal", bg=BG,
-                              sashwidth=5, sashrelief="flat", handlesize=0)
-        pane.pack(fill="both", expand=True, padx=10, pady=(4,0))
+        # Notebook for all views (Tenders Table, Ingest, Calendar, Analytics)
+        self.notebook = ttk.Notebook(self)
+        self.notebook.pack(fill="both", expand=True, padx=10, pady=(4,0))
 
-        # ── LEFT ─────────────────────────────────────────────────────────────
-        left = tk.Frame(pane, bg=BG)
-        pane.add(left, minsize=320, width=400)
+        self.tab_table = tk.Frame(self.notebook, bg=BG)
+        self.tab_dashboard = tk.Frame(self.notebook, bg=BG)
+        self.tab_ingest = tk.Frame(self.notebook, bg=BG)
+        self.tab_calendar = tk.Frame(self.notebook, bg=BG)
+        self.tab_analytics = tk.Frame(self.notebook, bg=BG)
+        
+        self.notebook.add(self.tab_table, text="  Tenders Table  ")
+        self.notebook.add(self.tab_dashboard, text="  Dashboard  ")
+        self.notebook.add(self.tab_ingest, text="  Import / Ingest  ")
+        self.notebook.add(self.tab_calendar, text="  Calendar View  ")
+        self.notebook.add(self.tab_analytics, text="  Analytics  ")
 
-        tk.Label(left, text="Paste GEM Tender Block(s)", font=("Segoe UI",9,"bold"),
-                 bg=BG, fg=MUTED).pack(anchor="w", pady=(4,2))
-        self.paste_txt = tk.Text(left, bg=CARD, fg=TEXT, insertbackground=TEXT,
-                                 relief="flat", font=FH, height=12,
+        # ── Import & Ingest Tab Layout ────────────────────────────────────────
+        # Split ingest into left (paste/import options) and right (logs)
+        ingest_pane = tk.PanedWindow(self.tab_ingest, orient="horizontal", bg=BG,
+                                     sashwidth=6, sashrelief="flat", handlesize=0)
+        ingest_pane.pack(fill="both", expand=True, padx=10, pady=10)
+
+        ingest_left = tk.Frame(ingest_pane, bg=BG)
+        ingest_pane.add(ingest_left, minsize=400, stretch="always")
+
+        ingest_right = tk.Frame(ingest_pane, bg=BG)
+        ingest_pane.add(ingest_right, minsize=450, stretch="always")
+
+        tk.Label(ingest_left, text="Paste GEM Tender Block(s)", font=("Segoe UI", 9, "bold"),
+                 bg=BG, fg=MUTED).pack(anchor="w", pady=(4, 2))
+        
+        self.paste_txt = tk.Text(ingest_left, bg=CARD, fg=TEXT, insertbackground=TEXT,
+                                 relief="flat", font=FH, height=15,
                                  highlightthickness=1, highlightbackground="#30363D",
                                  highlightcolor=ACCENT2, wrap="word", undo=True,
                                  padx=8, pady=8)
-        self.paste_txt.pack(fill="x")
-        tk.Label(left, text="Paste tender text, bid numbers, URLs, or local PDF paths. One item per line also works.",
-                 font=("Segoe UI",8), bg=BG, fg=TEXTSUB).pack(anchor="w", pady=(2,4))
+        self.paste_txt.pack(fill="both", expand=True, pady=(0, 4))
+        
+        tk.Label(ingest_left, text="Paste tender text, bid numbers, URLs, or local PDF paths. One item per line also works.",
+                 font=("Segoe UI", 8), bg=BG, fg=TEXTSUB).pack(anchor="w", pady=(2, 4))
 
         # progress
-        self.progress = ttk.Progressbar(left, orient="horizontal",
+        self.progress = ttk.Progressbar(ingest_left, orient="horizontal",
                                         mode="determinate", length=200)
-        self.progress.pack(fill="x", pady=(0,4))
-        self.prog_lbl = tk.Label(left, text="", font=("Segoe UI",8),
+        self.progress.pack(fill="x", pady=(0, 4))
+        self.prog_lbl = tk.Label(ingest_left, text="", font=("Segoe UI", 8),
                                  bg=BG, fg=TEXTSUB)
         self.prog_lbl.pack(anchor="w")
 
         # buttons
-        btn_row = tk.Frame(left, bg=BG)
-        btn_row.pack(fill="x", pady=(4,8))
+        btn_row = tk.Frame(ingest_left, bg=BG)
+        btn_row.pack(fill="x", pady=(4, 8))
         self._btn(btn_row, "Parse", lambda: self._do_parse(force_llm=False),
                   bg=ACCENT2, pad=6).pack(side="left")
         self._btn(btn_row, "Parse with AI", lambda: self._do_parse(force_llm=True),
                   bg=ACCENT, pad=6).pack(side="left", padx=6)
         self._btn(btn_row, "Fetch Details",
                   self._do_fetch_all, bg=CARD, pad=6).pack(side="left")
-        self._btn(btn_row, "Clear Input", lambda: self.paste_txt.delete("1.0","end"),
+        self._btn(btn_row, "Clear Input", lambda: self.paste_txt.delete("1.0", "end"),
                   bg=CARD).pack(side="left", padx=6)
 
-
-
-        # log
-        log_hdr = tk.Frame(left, bg=BG)
+        # log header
+        log_hdr = tk.Frame(ingest_right, bg=BG)
         log_hdr.pack(fill="x", pady=(0, 2))
         tk.Label(log_hdr, text="Log", font=("Segoe UI", 9, "bold"),
                  bg=BG, fg=MUTED).pack(side="left")
@@ -204,36 +219,24 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
                               cursor="hand2")
         clear_btn.pack(side="right", padx=(0, 6))
 
-        log_fr = tk.Frame(left, bg=CARD,
+        log_fr = tk.Frame(ingest_right, bg=CARD,
                           highlightthickness=1, highlightbackground="#30363D")
         log_fr.pack(fill="both", expand=True)
         self.log_txt = tk.Text(log_fr, bg=CARD, fg=TEXTSUB, relief="flat",
-                               font=("Consolas",8), state="disabled", wrap="word",
+                               font=("Consolas", 8), state="disabled", wrap="word",
                                highlightthickness=0, padx=8, pady=8)
         lsb = ttk.Scrollbar(log_fr, orient="vertical", command=self.log_txt.yview)
         self.log_txt.configure(yscrollcommand=lsb.set)
         lsb.pack(side="right", fill="y")
         self.log_txt.pack(fill="both", expand=True, padx=4, pady=4)
-        for tag,col in [("ok",SUCCESS),("warn",WARN),("err",ERR),("info",ACCENT2)]:
+        for tag, col in [("ok", SUCCESS), ("warn", WARN), ("err", ERR), ("info", ACCENT2)]:
             self.log_txt.tag_configure(tag, foreground=col)
 
-        # ── RIGHT ────────────────────────────────────────────────────────────
-        right = tk.Frame(pane, bg=BG)
-        pane.add(right, minsize=500)
-
-        # Notebook for Table and Calendar View
-        self.notebook = ttk.Notebook(right)
-        self.notebook.pack(fill="both", expand=True)
-
-        self.tab_table = tk.Frame(self.notebook, bg=BG)
-        self.tab_calendar = tk.Frame(self.notebook, bg=BG)
-        self.tab_analytics = tk.Frame(self.notebook, bg=BG)
-        
-        self.notebook.add(self.tab_table, text="  Table View  ")
-        self.notebook.add(self.tab_calendar, text="  Calendar View  ")
-        self.notebook.add(self.tab_analytics, text="  Analytics View  ")
         # Build Table tab layouts
         self._build_table_tab()
+
+        # Build Dashboard tab layout
+        self._build_dashboard_tab()
 
         # Build Calendar tab layouts
         self._build_calendar_tab()
@@ -458,14 +461,16 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
 
     def _on_tab_changed(self, event):
         import logger as _logger_mod
-        TAB_NAMES = ["Table View", "Calendar View", "Analytics View"]
+        TAB_NAMES = ["Tenders Table", "Dashboard", "Import / Ingest", "Calendar View", "Analytics"]
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
-            if selected_tab == 1:
+            if selected_tab == self.notebook.index(self.tab_dashboard):
+                self.dashboard_tab.load_data()
+            elif selected_tab == self.notebook.index(self.tab_calendar):
                 self._update_calendar()
                 self._update_details()
-            elif selected_tab == 2:
+            elif selected_tab == self.notebook.index(self.tab_analytics):
                 self._update_analytics()
         except Exception as e:
             self._log("err", f"Tab changed error: {e}")
@@ -599,3 +604,304 @@ class TenderApp(tk.Tk, CalendarTabMixin, AnalyticsTabMixin, DialogsMixin, TableT
         if not hasattr(self, 'alert_viewer'):
             self.alert_viewer = AlertViewer(self, self)
         self.alert_viewer.show()
+
+    # ── Dialog Spawning Methods ───────────────────────────────────────────
+    def _show_settings(self):
+        from dialogs import SettingsDialog
+        SettingsDialog(self)
+        
+    def _show_firms_dialog(self):
+        from dialogs import FirmsDialog
+        FirmsDialog(self)
+        
+    def _show_tags_dialog(self):
+        from dialogs import TagsDialog
+        TagsDialog(self)
+        
+    def _show_comments_dialog(self):
+        from dialogs import CommentsDialog
+        CommentsDialog(self)
+        
+    def _show_filter_rules_dialog(self):
+        from dialogs import FilterRulesDialog
+        FilterRulesDialog(self)
+
+    # ── Table Tab Adapters ────────────────────────────────────────────────
+    def _build_table_tab(self):
+        from components.table_tab import TableTab
+        # Instantiate the TableTab component and pack it
+        self.table_tab = TableTab(self.tab_table, self)
+        self.table_tab.pack(fill="both", expand=True)
+
+        # Expose child widgets/variables on TenderApp namespace for backward compatibility
+        self.search_var = self.table_tab.search_var
+        self.search_ent = self.table_tab.search_ent
+        self.view_var = self.table_tab.view_var
+        self.status_view_var = self.table_tab.status_view_var
+        self.date_filter_preset_var = self.table_tab.date_filter_preset_var
+        self.date_filter_type_var = self.table_tab.date_filter_type_var
+        self.date_from_var = self.table_tab.date_from_var
+        self.date_to_var = self.table_tab.date_to_var
+        self.tv = self.table_tab.tv
+        self.custom_date_frame = self.table_tab.custom_date_frame
+        
+    def _refresh_table_view(self):
+        self.table_tab.refresh_table_view()
+        
+    def _get_tender_status(self, rec, inc_kws, exc_kws, settings=None):
+        return self.table_tab.get_tender_status(rec, inc_kws, exc_kws, settings=settings)
+        
+    def _is_bid_in_dont_wants(self, bid_no_or_id):
+        return self.table_tab.is_bid_in_dont_wants(bid_no_or_id)
+
+    def _show_datepicker(self, button, var):
+        self.table_tab._show_datepicker(button, var)
+
+    def _cancel_edit(self, event=None):
+        self.table_tab.table_view.cancel_edit(event)
+
+    def _open_associated_pdf(self):
+        self.table_tab.open_associated_pdf()
+
+    def _link_associated_pdf(self):
+        self.table_tab.link_associated_pdf()
+
+    def _unlink_associated_pdf(self):
+        self.table_tab.unlink_associated_pdf()
+
+    def _start_filing_process(self):
+        self.table_tab.start_filing_process()
+
+    def _open_tender_url(self):
+        self.table_tab.open_tender_url()
+
+    def _copy_bid_number(self):
+        self.table_tab.copy_bid_number()
+
+    def _save_selected(self):
+        self.table_tab.save_selected()
+
+    def _mark_selected_want(self):
+        self.table_tab.mark_selected_want()
+
+    def _mark_want_and_learn(self):
+        self.table_tab.mark_want_and_learn()
+
+    def _mark_selected_dont_want(self):
+        self.table_tab.mark_selected_dont_want()
+
+    def _reset_selected_tag(self):
+        self.table_tab.reset_selected_tag()
+
+    def _set_selected_filing_status(self, status):
+        self.table_tab.set_selected_filing_status(status)
+
+    def _apply_column_visibility(self):
+        self.table_tab.apply_column_visibility()
+
+    def _show_column_selector(self):
+        self.table_tab.show_column_selector()
+
+    def _copy_table_output(self):
+        self.table_tab.copy_table_output()
+
+    def _tv_insert(self, rec):
+        return self.table_tab.table_view.tv_insert(rec)
+
+    def _refresh_alt(self):
+        self.table_tab.table_view.refresh_alt()
+
+    # ── Keyboard Shortcuts and Helpers ─────────────────────────────────────
+    def _bind_shortcuts(self):
+        self.bind("<Control-f>", lambda e: self._shortcut_focus_search())
+        self.bind("<Control-s>", lambda e: self._shortcut_focus_search())
+        self.bind("<Control-v>", lambda e: self._shortcut_clipboard_parse())
+        self.bind("<Control-r>", lambda e: self._reload())
+        self.bind("<Control-Alt-s>", lambda e: self._show_settings())
+        self.bind("<Delete>", lambda e: self._shortcut_delete_selected())
+        self.bind("<Escape>", lambda e: self._cancel_edit())
+        # Additional shortcuts for common actions
+        self.bind("<Control-e>", lambda e: self._shortcut_export_excel())
+        self.bind("<Control-a>", lambda e: self._shortcut_select_all())
+        self.bind("<Control-c>", lambda e: self._shortcut_copy_selected())
+        self.bind("<Control-d>", lambda e: self._shortcut_start_filing())
+        self.bind("<F5>", lambda e: self._reload())
+        self.bind("<Control-1>", lambda e: self._shortcut_switch_tab(0))
+        self.bind("<Control-2>", lambda e: self._shortcut_switch_tab(1))
+        self.bind("<Control-3>", lambda e: self._shortcut_switch_tab(2))
+        self.bind("<Control-4>", lambda e: self._shortcut_switch_tab(3))
+        self.bind("<Control-5>", lambda e: self._shortcut_switch_tab(4))
+
+    def _shortcut_focus_search(self):
+        try:
+            self.notebook.select(0)
+            self.search_ent.focus_set()
+            self.search_ent.selection_range(0, "end")
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_clipboard_parse(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            clipboard = self.clipboard_get()
+            if clipboard:
+                self.notebook.select(self.tab_ingest)
+                self.paste_txt.delete("1.0", "end")
+                self.paste_txt.insert("1.0", clipboard)
+                self._do_parse()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_delete_selected(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self._del_sel()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_export_excel(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.export_selected()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_select_all(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.table_view.select_all()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_copy_selected(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.copy_table_output()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_start_filing(self):
+        focused = self.focus_get()
+        if isinstance(focused, (tk.Text, tk.Entry, ttk.Entry, ttk.Combobox)):
+            return None
+        try:
+            if self.notebook.index(self.notebook.select()) == 0:
+                self.table_tab.start_filing_process()
+        except Exception:
+            pass
+        return "break"
+
+    def _shortcut_switch_tab(self, tab_index):
+        try:
+            self.notebook.select(tab_index)
+        except Exception:
+            pass
+        return "break"
+
+    def _del_sel(self):
+        self.table_tab.del_sel()
+
+    def _build_dashboard_tab(self):
+        from components.dashboard_tab import DashboardTab
+        self.dashboard_tab = DashboardTab(self.tab_dashboard, self)
+        self.dashboard_tab.pack(fill="both", expand=True)
+
+    # ── Calendar Tab Adapters ─────────────────────────────────────────────
+    def _build_calendar_tab(self):
+        from components.calendar_tab import CalendarTab
+        # Instantiate the CalendarTab component
+        self.calendar_tab = CalendarTab(self.tab_calendar, self)
+        self.calendar_tab.pack(fill="both", expand=True)
+
+        # Expose widgets/variables on TenderApp namespace for backward compatibility
+        self.cal_month_lbl = self.calendar_tab.cal_month_lbl
+        self.cal_sel_date_lbl = self.calendar_tab.cal_sel_date_lbl
+        self.cal_details_fr = self.calendar_tab.cal_details_fr
+
+    def _cal_prev_month(self):
+        self.calendar_tab.cal_prev_month()
+
+    def _cal_next_month(self):
+        self.calendar_tab.cal_next_month()
+
+    def _parse_date_str(self, date_str):
+        return self.calendar_tab._parse_date_str(date_str)
+
+    def _get_events_for_date(self, target_date, inc_kws=None, exc_kws=None):
+        return self.calendar_tab.get_events_for_date(target_date, inc_kws, exc_kws)
+
+    def _update_calendar(self):
+        self.calendar_tab.update_calendar()
+
+    def _select_date(self, target_date):
+        self.calendar_tab.select_date(target_date)
+
+    def _update_details(self):
+        self.calendar_tab.update_details()
+
+    def _locate_in_table(self, bid):
+        self.calendar_tab.locate_in_table(bid)
+
+    # ── Analytics Tab Adapters ────────────────────────────────────────────
+    def _build_analytics_tab(self):
+        from components.analytics_tab import AnalyticsTab
+        # Instantiate the AnalyticsTab component
+        self.analytics_tab = AnalyticsTab(self.tab_analytics, self)
+        self.analytics_tab.pack(fill="both", expand=True)
+
+        # Expose widgets on TenderApp namespace for backward compatibility
+        self.lbl_total_tenders = self.analytics_tab.lbl_total_tenders
+        self.lbl_matching_wants = self.analytics_tab.lbl_matching_wants
+        self.lbl_filtered_dont_wants = self.analytics_tab.lbl_filtered_dont_wants
+        self.lbl_not_filed = self.analytics_tab.lbl_not_filed
+        self.lbl_firm_matched = self.analytics_tab.lbl_firm_matched
+
+    def _update_analytics(self):
+        self.analytics_tab.update_analytics()
+
+    def _redraw_chart(self):
+        self.analytics_tab.redraw_chart()
+
+    def _redraw_firm_chart(self):
+        self.analytics_tab.redraw_firm_chart()
+
+    def _show_all_tenders(self):
+        self.analytics_tab.show_all_tenders()
+
+    def _show_matching_wants(self):
+        self.analytics_tab.show_matching_wants()
+
+    def _show_filtered_dont_wants(self):
+        self.analytics_tab.show_filtered_dont_wants()
+
+    def _show_not_filed_wants(self):
+        self.analytics_tab.show_not_filed_wants()
+
+    def _show_firm_matched(self):
+        self.analytics_tab.show_firm_matched()
+
+    def _filter_by_ministry(self, name):
+        self.analytics_tab._filter_by_ministry(name)
+
+    def _filter_by_firm(self, name):
+        self.analytics_tab._filter_by_firm(name)

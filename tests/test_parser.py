@@ -298,5 +298,24 @@ class TestParser(unittest.TestCase):
             if old_mappings is not None:
                 db.save_setting("category_mappings", old_mappings)
 
+    def test_parse_organization_spelling_variants(self):
+        # 1. Test parsing with "Organisation Name" in PDF text
+        pdf_text_s = "Organisation Name: Sugar Federation"
+        md_s = parser.convert_pdf_text_to_markdown(pdf_text_s)
+        self.assertIn("Organisation: Sugar Federation", md_s)
+        r_s = parser.parse_one(md_s)
+        self.assertEqual(r_s["organisation"], "Sugar Federation")
+        
+        # 2. Test parsing with "Organization Name" in PDF text
+        pdf_text_z = "Organization Name: Sugar Federation"
+        md_z = parser.convert_pdf_text_to_markdown(pdf_text_z)
+        self.assertIn("Organisation: Sugar Federation", md_z)
+        r_z = parser.parse_one(md_z)
+        self.assertEqual(r_z["organisation"], "Sugar Federation")
+        
+        # 3. Test direct parsing with "Organization: Sugar Federation"
+        r_direct = parser.parse_one("Organization: Sugar Federation")
+        self.assertEqual(r_direct["organisation"], "Sugar Federation")
+
 if __name__ == '__main__':
     unittest.main()

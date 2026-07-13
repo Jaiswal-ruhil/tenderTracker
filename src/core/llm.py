@@ -65,7 +65,7 @@ def parse_response_error(response_text):
 
 def clean_json_response(text):
     """
-    Extract the JSON object from the response string, stripping away
+    Extract the JSON object or array from the response string, stripping away
     markdown formatting, reasoning (thinking) process blocks, or conversational filler.
     """
     text = text.strip()
@@ -78,10 +78,18 @@ def clean_json_response(text):
         # Remove closing ```
         text = re.sub(r"\s*```$", "", text)
     
-    start = text.find('{')
-    end = text.rfind('}')
-    if start != -1 and end != -1:
-        return text[start:end+1]
+    start_brace = text.find('{')
+    start_bracket = text.find('[')
+    
+    if start_brace != -1 and (start_bracket == -1 or start_brace < start_bracket):
+        end_brace = text.rfind('}')
+        if end_brace != -1:
+            return text[start_brace:end_brace+1]
+    elif start_bracket != -1:
+        end_bracket = text.rfind(']')
+        if end_bracket != -1:
+            return text[start_bracket:end_bracket+1]
+            
     return text
 
 def normalize_local_service_roots(base_url):

@@ -98,6 +98,12 @@ def init_db_path(custom_path=None):
     if cfg_path and cfg_path.lower().endswith(".json"):
         save_configured_db_path(DB_FILE)
         
+    try:
+        get_conn().close()
+    except Exception:
+        pass
+    seed_dashboard_columns_from_excel()
+        
     return DB_FILE
 
 def migrate_json_to_sqlite(json_path, sqlite_path):
@@ -287,8 +293,48 @@ COLUMNS = [
     "bid_type", "bid_to_ra", "emd", "epbg", "mii", "mse_pref", "mse_relax",
     "startup_relax", "min_turnover", "exp_years", "bid_opening", "start_date", "end_date",
     "is_want", "is_want_derived", "is_saved", "is_fetched", "filing_status", "remarks", "tags", "pdf_path",
-    "embedding", "matched_firm", "comments"
+    "embedding", "matched_firm", "comments", "sugar_mill", "item_category"
 ]
+
+def seed_dashboard_columns_from_excel():
+    """One-time migration to seed sugar_mill and item_category from tests/Tender FY 2026-27.xlsx if present."""
+    xl_path = r"D:\tenderTracker\tests\Tender FY 2026-27.xlsx"
+    if not os.path.exists(xl_path):
+        return
+        
+    try:
+        from openpyxl import load_workbook
+        wb = load_workbook(xl_path, data_only=True)
+        if "Database" not in wb.sheetnames:
+            wb.close()
+            return
+            
+        ws = wb["Database"]
+        mappings = []
+        for row in ws.iter_rows(min_row=2, values_only=True):
+            sugar_mill = row[0]
+            category = row[1]
+            tender_id = row[2]
+            if sugar_mill and category and tender_id:
+                t_id = str(int(float(tender_id))) if isinstance(tender_id, (int, float)) else str(tender_id).strip()
+                mappings.append((sugar_mill.strip().upper(), category.strip(), t_id))
+        wb.close()
+        
+        if mappings:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM bids WHERE sugar_mill IS NOT NULL AND sugar_mill != ''")
+            existing_count = cursor.fetchone()[0]
+            
+            if existing_count == 0:
+                logger.log_info(f"One-time DB Seeding: Populating sugar_mill and item_category for {len(mappings)} bids from Excel reference...")
+                for mill, cat, t_id in mappings:
+                    cursor.execute("UPDATE bids SET sugar_mill = ?, item_category = ? WHERE bid_no LIKE ?", (mill, cat, f"%{t_id}%"))
+                conn.commit()
+                logger.log_ok(f"DB Seeding: Successfully populated {len(mappings)} bids.")
+            conn.close()
+    except Exception as e:
+        logger.log_err(f"Failed to seed dashboard columns from Excel: {e}")
 
 def row_to_dict(row):
     d = {}
@@ -535,6 +581,51 @@ def apply_value_mappings(record):
                     
     return record
 
+def auto_assign_matrix_fields(rec):
+    """Automatically assigns sugar_mill and item_category based on keyword rules if empty."""
+    if not rec.get("sugar_mill"):
+        # Match Sugarmill from location, organisation, comments, remarks, dept, category, items
+        mills = [
+            "NAJIBABAD", "ANOOPSHAHR", "SULTANPUR", "NANPARA", "BELRAYAN", "SAMPURNANAGAR", "RAMALA", 
+            "MORNA", "GHOSI", "NANAUTA", "SEMIKHERA", "SARSAWAN", "MAHMUDABAD", "TILHAR", "BISALPUR", 
+            "POWAYAN", "PURANPUR", "BAGPAT", "GAJRAULLA", "FEDRATION", "CORPORATION", "KAIAMGANJ", 
+            "SATHIAON", "BUDAUN", "BILASPUR"
+        ]
+        matched_mill = None
+        for field in ("location", "organisation", "comments", "remarks", "dept", "category", "items"):
+            val = rec.get(field)
+            if val:
+                val_upper = str(val).upper()
+                found = [m for m in mills if m in val_upper]
+                if found:
+                    matched_mill = found[0]
+                    break
+        if matched_mill:
+            rec["sugar_mill"] = matched_mill
+            
+    if not rec.get("item_category"):
+        # Match item category
+        cat_str = rec.get("category") or ""
+        item_str = rec.get("items") or ""
+        combined = (cat_str + " | " + item_str).lower()
+        
+        if any(k in combined for k in ("nickel", "screen")):
+            rec["item_category"] = "Nickel screen"
+        elif any(k in combined for k in ("packing", "jointing", "gasket", "asbestos", "spitman", "champion", "macer")):
+            rec["item_category"] = "Packing jointing"
+        elif any(k in combined for k in ("light", "led", "flood", "lighting", "fitting")):
+            rec["item_category"] = "Light"
+        elif any(k in combined for k in ("motor", "induction", "cage")):
+            rec["item_category"] = "Motor"
+        elif any(k in combined for k in ("cable", "wire", "armoured", "armourd", "conductor")):
+            rec["item_category"] = "Cable"
+        elif any(k in combined for k in ("gas", "oxygen", "argon", "refilling", "cylinder", "co2", "nitrogen")):
+            rec["item_category"] = "Gas"
+        elif any(k in combined for k in ("vfd", "drive", "frequency")):
+            rec["item_category"] = "VFD"
+        else:
+            rec["item_category"] = "OTHERS"
+
 def upsert_tender(record):
     """Insert or update a single tender record. Thread-safe."""
     with _lock:
@@ -545,6 +636,7 @@ def upsert_tender(record):
         record = apply_value_mappings(record)
         # Unify organization names before upserting
         record = unify_organization_names(record)
+        auto_assign_matrix_fields(record)
             
         def do_upsert():
             conn = get_conn()
@@ -567,6 +659,13 @@ def upsert_tender(record):
                                 # Never overwrite a manually-filed status
                                 if k == "filing_status" and existing.get("filing_status") == "Filed":
                                     continue
+                                
+                                if k == "remarks":
+                                    from parser import merge_remarks
+                                    v = merge_remarks(existing.get("remarks"), v)
+                                    is_diff = (k in existing) and (str(existing[k]).strip() != str(v).strip())
+                                    if not is_diff:
+                                        continue
                                 
                                 if is_diff and k not in ("is_want_derived", "matched_firm"):
                                     updated_fields.append(f"{k}: '{existing.get(k)}' -> '{v}'")
@@ -611,6 +710,7 @@ def upsert_tenders(new_records):
                     record = apply_value_mappings(record)
                     # Unify organization names using existing cursor
                     record = unify_organization_names(record, cursor)
+                    auto_assign_matrix_fields(record)
                     
                     cursor.execute("SELECT * FROM bids WHERE bid_no=?", (bid_no,))
                     row = cursor.fetchone()
@@ -629,6 +729,13 @@ def upsert_tenders(new_records):
                                     # Never overwrite a manually-filed status
                                     if k == "filing_status" and existing.get("filing_status") == "Filed":
                                         continue
+                                    
+                                    if k == "remarks":
+                                        from parser import merge_remarks
+                                        v = merge_remarks(existing.get("remarks"), v)
+                                        is_diff = (k in existing) and (str(existing[k]).strip() != str(v).strip())
+                                        if not is_diff:
+                                            continue
                                     
                                     if is_diff and k not in ("is_want_derived", "matched_firm"):
                                         updated_fields.append(f"{k}: '{existing.get(k)}' -> '{v}'")

@@ -34,6 +34,32 @@ class TenderDetailPanel(tk.Frame):
         )
         self.detail_meta_lbl.pack(fill="x", pady=(0, 8))
 
+        # Dashboard Matrix Mapping Frame
+        self._current_rec = None
+        self.matrix_frame = tk.LabelFrame(self, text="Dashboard Matrix Mapping", font=FL, bg=PANEL, fg=TEXTSUB, labelanchor="n", padx=6, pady=4)
+        self.matrix_frame.pack(fill="x", pady=(0, 8))
+        
+        # Sugar Mill Dropdown
+        tk.Label(self.matrix_frame, text="Sugar Mill:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=0, column=0, sticky="w", padx=(0, 4))
+        self.sugar_mill_var = tk.StringVar()
+        self.sugar_mill_cb = ttk.Combobox(self.matrix_frame, textvariable=self.sugar_mill_var, font=FL, state="readonly", width=18)
+        from components.dashboard_tab import SUGARMILLS
+        self.sugar_mill_cb["values"] = ["None"] + SUGARMILLS
+        self.sugar_mill_cb.grid(row=0, column=1, sticky="ew", padx=(0, 4))
+        
+        # Item Category Dropdown
+        tk.Label(self.matrix_frame, text="Category:", font=FL, bg=PANEL, fg=TEXTSUB).grid(row=1, column=0, sticky="w", padx=(0, 4), pady=(4, 0))
+        self.item_category_var = tk.StringVar()
+        self.item_category_cb = ttk.Combobox(self.matrix_frame, textvariable=self.item_category_var, font=FL, state="readonly", width=18)
+        from components.dashboard_tab import CATEGORIES
+        self.item_category_cb["values"] = ["None"] + CATEGORIES
+        self.item_category_cb.grid(row=1, column=1, sticky="ew", padx=(0, 4), pady=(4, 0))
+        
+        self.matrix_frame.columnconfigure(1, weight=1)
+        
+        self.sugar_mill_cb.bind("<<ComboboxSelected>>", self._on_matrix_changed)
+        self.item_category_cb.bind("<<ComboboxSelected>>", self._on_matrix_changed)
+
         # PDF Control Frame
         self.pdf_frame = tk.Frame(self, bg=PANEL)
         self.pdf_frame.pack(fill="x", pady=(0, 8))
@@ -145,6 +171,11 @@ class TenderDetailPanel(tk.Frame):
             ):
                 if btn:
                     btn.configure(state="disabled")
+        
+        self._current_rec = None
+        if hasattr(self, "sugar_mill_var"):
+            self.sugar_mill_var.set("None")
+            self.item_category_var.set("None")
 
     def on_treeview_select(self, event):
         sel = self.table_tab.table_view.tv.selection()
@@ -162,6 +193,11 @@ class TenderDetailPanel(tk.Frame):
         if not rec:
             self.clear_detail_panel()
             return
+
+        self._current_rec = rec
+        if hasattr(self, "sugar_mill_var"):
+            self.sugar_mill_var.set(rec.get("sugar_mill") or "None")
+            self.item_category_var.set(rec.get("item_category") or "None")
             
         # Update PDF frame widgets
         pdf_path = rec.get("pdf_path", "")
@@ -546,3 +582,32 @@ class TenderDetailPanel(tk.Frame):
         self.detail_txt.delete("1.0", "end")
         self.detail_txt.insert("end", f"AI {operation} failed:\n{error}", "value")
         self.detail_txt.configure(state="disabled")
+
+    def _on_matrix_changed(self, event=None):
+        if not self._current_rec:
+            return
+        mill = self.sugar_mill_var.get()
+        cat = self.item_category_var.get()
+        bid_no = self._current_rec.get("bid_no")
+        if not bid_no:
+            return
+            
+        mill_val = None if mill == "None" else mill
+        cat_val = None if cat == "None" else cat
+        
+        try:
+            conn = db.get_conn()
+            cursor = conn.cursor()
+            cursor.execute("UPDATE bids SET sugar_mill = ?, item_category = ? WHERE bid_no = ?", (mill_val, cat_val, bid_no))
+            conn.commit()
+            conn.close()
+            
+            self._current_rec["sugar_mill"] = mill_val
+            self._current_rec["item_category"] = cat_val
+            
+            # Reload application state to refresh table, calendar, dashboard
+            self.app._reload()
+            
+            logger.log_ok(f"Updated matrix mapping for {bid_no}: Mill={mill_val}, Category={cat_val}")
+        except Exception as e:
+            logger.log_err(f"Failed to update matrix mapping: {e}")

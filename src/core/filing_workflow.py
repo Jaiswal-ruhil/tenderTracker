@@ -1361,19 +1361,82 @@ Return ONLY the JSON array, no other text."""
         
         # Create subfolder: {yyyymmdd} {gemid} {firmname} {category}
         if tender_record:
-            # Extract date from tender record
-            bid_date = tender_record.get('bid_date', '')
-            if bid_date:
+            # Extract date from tender record (only use end_date, do not fall back)
+            raw_date = tender_record.get('end_date') or ''
+            date_str = ''
+            if raw_date:
+                raw_date = str(raw_date).strip()
+                # Parse common formats: dd-mm-yyyy, dd/mm/yyyy, yyyy-mm-dd, etc.
+                for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y %I:%M %p", "%d-%m-%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                    try:
+                        date_obj = datetime.strptime(raw_date, fmt)
+                        date_str = date_obj.strftime('%Y%m%d')
+                        break
+                    except ValueError:
+                        pass
+                
+                # If still not parsed, try parsing first 10 characters (the date portion) with basic formats
+                if not date_str and len(raw_date) >= 10:
+                    for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                        try:
+                            date_obj = datetime.strptime(raw_date[:10], fmt)
+                            date_str = date_obj.strftime('%Y%m%d')
+                            break
+                        except ValueError:
+                            pass
+                
+            if not date_str:
+                # Prompt the user to enter the end date
                 try:
-                    # Parse date and format as yyyymmdd
-                    date_obj = datetime.strptime(bid_date, '%Y-%m-%d')
-                    date_str = date_obj.strftime('%Y%m%d')
-                except ValueError as date_err:
-                    self._log('warn', f'Failed to parse bid_date "{bid_date}": {date_err}. Using current date.')
-                    date_str = datetime.now().strftime('%Y%m%d')
-            else:
-                self._log('info', 'No bid_date found in tender record, using current date')
-                date_str = datetime.now().strftime('%Y%m%d')
+                    import tkinter as tk
+                    from tkinter import simpledialog
+                    
+                    root = tk.Tk()
+                    root.withdraw()
+                    
+                    user_date = simpledialog.askstring(
+                        "End Date Required",
+                        f"The tender '{bid_no}' has no valid end date.\n"
+                        f"Please enter the tender end date (e.g. 14/07/2026 or 14-07-2026):",
+                        parent=root
+                    )
+                    root.destroy()
+                    
+                    if user_date:
+                        user_date = user_date.strip()
+                        for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                            try:
+                                date_obj = datetime.strptime(user_date, fmt)
+                                date_str = date_obj.strftime('%Y%m%d')
+                                tender_record['end_date'] = user_date
+                                db.upsert_tender(tender_record)
+                                break
+                            except ValueError:
+                                pass
+                except Exception:
+                    pass
+                
+                if not date_str:
+                    try:
+                        import sys
+                        # Check if stdin/stdout are terminals
+                        if sys.stdin.isatty() and sys.stdout.isatty():
+                            print(f"\n[PROMPT] End Date not available for tender '{bid_no}'.")
+                            val = input("Please enter the end date (dd/mm/yyyy): ").strip()
+                            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                                try:
+                                    date_obj = datetime.strptime(val, fmt)
+                                    date_str = date_obj.strftime('%Y%m%d')
+                                    tender_record['end_date'] = val
+                                    db.upsert_tender(tender_record)
+                                    break
+                                except ValueError:
+                                    pass
+                    except Exception:
+                        pass
+
+            if not date_str:
+                raise ValueError("Tender end_date is mandatory and not available or valid.")
             
             # Extract GEM ID from bid_no (e.g., GEM/2026/B/7719019 -> GEM2026B7719019)
             gem_id = bid_no.replace('/', '').replace('-', '')
@@ -1710,12 +1773,24 @@ Return ONLY the JSON array, no other text."""
             f.write("-" * 60 + "\n\n")
             
             for doc_name, doc_info in self.matched_documents.items():
+                req_doc = next((d for d in self.required_documents if d['name'] == doc_name), None)
+                doc_category = req_doc.get('category', 'General') if req_doc else 'General'
+                doc_source_file = req_doc.get('source_file', 'Tender_Document.pdf') if req_doc else 'Tender_Document.pdf'
+                doc_desc = req_doc.get('description', '') if req_doc else ''
+                
+                if isinstance(doc_info, dict):
+                    src_path = doc_info.get('path', 'N/A')
+                    source = doc_info.get('source', 'N/A')
+                else:
+                    src_path = doc_info
+                    source = 'N/A'
+                
                 f.write(f"✓ {doc_name}\n")
-                f.write(f"  Source Path: {doc_info['path']}\n")
-                f.write(f"  Firm Association: {doc_info['source']}\n")
-                f.write(f"  Category: {doc_info['document']['category']}\n")
-                f.write(f"  Requested In File: {doc_info['document'].get('source_file', 'Tender_Document.pdf')}\n")
-                f.write(f"  Description: {doc_info['document']['description']}\n\n")
+                f.write(f"  Source Path: {src_path}\n")
+                f.write(f"  Firm Association: {source}\n")
+                f.write(f"  Category: {doc_category}\n")
+                f.write(f"  Requested In File: {doc_source_file}\n")
+                f.write(f"  Description: {doc_desc}\n\n")
             
             f.write("-" * 60 + "\n")
             f.write("MISSING DOCUMENTS (✗)\n")

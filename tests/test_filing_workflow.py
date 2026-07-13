@@ -133,3 +133,57 @@ Bid Number: GEM/2026/B/12345
         # Test Case 3: Empty/None text
         reqs_3 = workflow._extract_gem_requirements("")
         self.assertEqual(reqs_3, [])
+
+    def test_generate_checklist_handles_simple_and_dict_matches(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        workflow.required_documents = [
+            {'name': 'GST Certificate', 'category': 'Financial', 'description': 'GST Certificate desc', 'source_file': 'Tender.pdf', 'required': True},
+            {'name': 'PAN Card', 'category': 'Financial', 'description': 'PAN Card desc', 'source_file': 'Tender.pdf', 'required': True}
+        ]
+        workflow.matched_documents = {
+            'GST Certificate': {
+                'path': 'gst.pdf',
+                'source': 'firm',
+                'document': {'category': 'Financial', 'description': 'GST Certificate desc', 'source_file': 'Tender.pdf'}
+            },
+            'PAN Card': 'pan.pdf'
+        }
+        workflow.missing_documents = []
+        
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workflow.filing_folder = tmpdir
+            checklist_path = workflow._generate_checklist('GEM/2026/B/7718895', {})
+            self.assertTrue(os.path.exists(checklist_path))
+            with open(checklist_path, 'r', encoding='utf-8') as f:
+                content = f.read()
+                self.assertIn('✓ GST Certificate', content)
+                self.assertIn('  Source Path: gst.pdf', content)
+                self.assertIn('  Firm Association: firm', content)
+                self.assertIn('✓ PAN Card', content)
+                self.assertIn('  Source Path: pan.pdf', content)
+                self.assertIn('  Firm Association: N/A', content)
+
+    def test_create_filing_folder_dates(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            settings = {'pdf_save_folder': tmpdir}
+            
+            with patch.object(filing_workflow.db, 'load_settings', return_value=settings), \
+                 patch('tkinter.simpledialog.askstring', return_value=None):
+                # 1. Test dd/mm/yyyy format
+                tender = {'bid_no': 'GEM/2026/B/7721923', 'end_date': '14/7/2026', 'category': 'General'}
+                folder = workflow._create_filing_folder('GEM/2026/B/7721923', 'RK OXYGEN', tender)
+                self.assertTrue(os.path.basename(folder).startswith('20260714'))
+                
+                # 2. Test yyyy-mm-dd format
+                tender2 = {'bid_no': 'GEM/2026/B/7721923', 'end_date': '2026-08-15', 'category': 'General'}
+                folder2 = workflow._create_filing_folder('GEM/2026/B/7721923', 'RK OXYGEN', tender2)
+                self.assertTrue(os.path.basename(folder2).startswith('20260815'))
+                
+                # 3. Test missing end_date raises ValueError
+                tender3 = {'bid_no': 'GEM/2026/B/7721923', 'bid_date': '2026-09-16', 'category': 'General'}
+                with self.assertRaises(ValueError):
+                    workflow._create_filing_folder('GEM/2026/B/7721923', 'RK OXYGEN', tender3)

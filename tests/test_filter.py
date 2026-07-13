@@ -128,16 +128,28 @@ class TestFilterLogic(unittest.TestCase):
         self.assertEqual(events[0][1]["bid_no"], "GEM/2026/B/200")
 
     def test_table_view_date_filtering(self):
+        from unittest.mock import MagicMock
         import tkinter as tk
         from components.table_view import TendersTableView
-        root = tk.Tk()
-        self.app.table_tab.date_filter_type_var = tk.StringVar(value="Start Date")
-        self.app.table_tab.date_from_var = tk.StringVar(value="01-07-2026")
-        self.app.table_tab.date_to_var = tk.StringVar(value="15-07-2026")
-        self.app.table_tab.view_var = tk.StringVar(value="All Tenders")
-        self.app.table_tab.search_var = tk.StringVar(value="")
-        self.app.table_tab.semantic_search_var = tk.BooleanVar(value=False)
-        self.app.table_tab.status_view_var = tk.StringVar(value="All")
+        
+        root = MagicMock()
+        self.app.table_tab.date_filter_type_var = MagicMock()
+        self.app.table_tab.date_filter_type_var.get.return_value = "Start Date"
+        self.app.table_tab.date_from_var = MagicMock()
+        self.app.table_tab.date_from_var.get.return_value = "01-07-2026"
+        self.app.table_tab.date_to_var = MagicMock()
+        self.app.table_tab.date_to_var.get.return_value = "15-07-2026"
+        self.app.table_tab.view_var = MagicMock()
+        self.app.table_tab.view_var.get.return_value = "All Tenders"
+        self.app.table_tab.search_var = MagicMock()
+        self.app.table_tab.search_var.get.return_value = ""
+        self.app.table_tab.semantic_search_var = MagicMock()
+        self.app.table_tab.semantic_search_var.get.return_value = False
+        self.app.table_tab.status_view_var = MagicMock()
+        self.app.table_tab.status_view_var.get.return_value = "All"
+        self.app.notebook = MagicMock()
+        self.app.tab_calendar = MagicMock()
+        self.app.tab_analytics = MagicMock()
         
         class DummyTreeview:
             def __init__(self):
@@ -153,9 +165,9 @@ class TestFilterLogic(unittest.TestCase):
         self.app.table_tab.table_view = object.__new__(TendersTableView)
         self.app.table_tab.table_view.tv = DummyTreeview()
         self.app.table_tab.tv = self.app.table_tab.table_view.tv
-        self.app.table_tab.count_lbl = tk.Label(root)
-        self.app.table_tab.table_summary_lbl = tk.Label(root)
-        self.app.table_tab.custom_date_frame = tk.Frame(root)
+        self.app.table_tab.count_lbl = MagicMock()
+        self.app.table_tab.table_summary_lbl = MagicMock()
+        self.app.table_tab.custom_date_frame = MagicMock()
         
         self.app.table_tab.table_view.tv_insert = lambda rec: self.app.table_tab.table_view.tv.insert()
         self.app.table_tab.table_view.refresh_alt = lambda: None

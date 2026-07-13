@@ -216,7 +216,7 @@ class TableTab(tk.Frame):
                 
         return None
 
-    def get_tender_status(self, rec, inc_kws, exc_kws):
+    def get_tender_status(self, rec, inc_kws, exc_kws, settings=None):
         is_want = rec.get("is_want")
         if is_want is not None:
             return is_want
@@ -289,7 +289,8 @@ class TableTab(tk.Frame):
                 pass
             return False
 
-        settings = db.load_settings()
+        if settings is None:
+            settings = db.load_settings()
         firms = settings.get("firms", [])
         if firms:
             matched_firms = []
@@ -398,7 +399,7 @@ class TableTab(tk.Frame):
                 match = True
                 
             if match:
-                is_want = self.get_tender_status(r, inc_kws, exc_kws)
+                is_want = self.get_tender_status(r, inc_kws, exc_kws, settings=settings)
                 if not is_want:
                     return r
         return None
@@ -447,7 +448,7 @@ class TableTab(tk.Frame):
         visible_not_filed = 0
         visible_firm_matched = 0
         for rec in records_to_render:
-            is_want = self.get_tender_status(rec, inc_kws, exc_kws)
+            is_want = self.get_tender_status(rec, inc_kws, exc_kws, settings=settings)
             rec["is_want_derived"] = is_want
             
             if view_filter == "Wants (Matches)" and not is_want:
@@ -532,7 +533,7 @@ class TableTab(tk.Frame):
                     r["is_want"] = True
                     break
         db.save_all_tenders(self.app._records)
-        self.refresh_table_view()
+        self.app._reload()
         self.app._log("ok", f"Marked {len(sel)} tender(s) as Want.")
 
         items_text = str(rec.get("items", "")).replace("...", "").strip()
@@ -600,7 +601,7 @@ class TableTab(tk.Frame):
                     target_firm["categories"] = cats
                     db.save_setting("firms", firms)
                     self.app._log("ok", f"Learned keyword '{kw}' → added to firm '{target_firm.get('name')}'.")
-                    self.refresh_table_view()
+                    self.app._reload()
                 else:
                     self.app._log("info", f"Keyword '{kw}' already in firm categories.")
             dlg.destroy()
@@ -621,7 +622,7 @@ class TableTab(tk.Frame):
                         r["is_want"] = False
                         break
         db.save_all_tenders(self.app._records)
-        self.refresh_table_view()
+        self.app._reload()
         self.app._log("ok", f"Marked {len(sel)} tender(s) as Don't Want.")
 
     def reset_selected_tag(self):
@@ -635,7 +636,7 @@ class TableTab(tk.Frame):
                         r.pop("is_want", None)
                         break
         db.save_all_tenders(self.app._records)
-        self.refresh_table_view()
+        self.app._reload()
         self.app._log("info", f"Reset manual tag for {len(sel)} tender(s).")
 
     def set_selected_filing_status(self, status):
@@ -656,16 +657,7 @@ class TableTab(tk.Frame):
                 
         if updated_count > 0:
             self.app._log("ok", f"Set filing status to '{status}' for {updated_count} tender(s).")
-            self.refresh_table_view()
-            try:
-                selected_tab = self.app.notebook.index(self.app.notebook.select())
-                if selected_tab == 1:
-                    self.app._update_calendar()
-                    self.app._update_details()
-                elif selected_tab == 2:
-                    self.app._update_analytics()
-            except Exception:
-                pass
+            self.app._reload()
 
     # Batch operation wrappers (these methods already support multiple selections)
     def batch_mark_want(self):
@@ -782,7 +774,7 @@ class TableTab(tk.Frame):
         has_next_3_days = False
 
         for rec in records:
-            is_want = self.get_tender_status(rec, inc_kws, exc_kws)
+            is_want = self.get_tender_status(rec, inc_kws, exc_kws, settings=settings)
             if not is_want:
                 continue
 
@@ -1061,6 +1053,55 @@ class TableTab(tk.Frame):
             messagebox.showerror("Error", "Tender record not found in database.")
             return
         
+        # Ensure end date is present and parseable. If not, prompt the user.
+        from tkinter import simpledialog
+        from datetime import datetime
+        
+        end_date = tender_record.get('end_date', '').strip()
+        parsed_date = None
+        if end_date:
+            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y %I:%M %p", "%d-%m-%Y %H:%M", "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M:%S.%f"):
+                try:
+                    parsed_date = datetime.strptime(end_date, fmt)
+                    break
+                except ValueError:
+                    pass
+            if not parsed_date and len(end_date) >= 10:
+                for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                    try:
+                        parsed_date = datetime.strptime(end_date[:10], fmt)
+                        break
+                    except ValueError:
+                        pass
+        
+        if not parsed_date:
+            user_date = simpledialog.askstring(
+                "End Date Required",
+                f"The tender '{bid_no}' has no valid end date.\n"
+                f"Please enter the tender end date (e.g., 14/07/2026 or 14-07-2026):",
+                parent=self.app
+            )
+            if not user_date:
+                # User cancelled the prompt, abort filing
+                return
+            
+            user_date = user_date.strip()
+            for fmt in ("%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%d"):
+                try:
+                    parsed_date = datetime.strptime(user_date, fmt)
+                    break
+                except ValueError:
+                    pass
+            
+            if not parsed_date:
+                messagebox.showerror("Invalid Date", "Could not parse the date you entered. Process cancelled.")
+                return
+            
+            # Save the date in the format they typed, and update the DB so it persists
+            tender_record['end_date'] = user_date
+            db.upsert_tender(tender_record)
+            self.refresh_table_view()
+        
         # Custom confirmation dialog with firm association dropdown
         dlg = tk.Toplevel(self.app)
         dlg.title("Start Filing Process")
@@ -1163,10 +1204,17 @@ class TableTab(tk.Frame):
         firm_name = result_holder["firm_name"]
         selected_category = result_holder["category"]
         
-        from gui_dialogs import LoadingDialog
+        from dialogs.loading_dialog import LoadingDialog
+        
+        loading_dlg = None
         
         def run_filing_task(progress_cb=None):
-            workflow = filing_workflow.FilingWorkflow(log_fn=self.app._log, progress_cb=progress_cb)
+            def dialog_log(level, message, details=None):
+                self.app._log(level, message, details)
+                if loading_dlg and loading_dlg.winfo_exists():
+                    loading_dlg.append_checklist_item(level, message)
+                    
+            workflow = filing_workflow.FilingWorkflow(log_fn=dialog_log, progress_cb=progress_cb)
             return workflow.start_filing_process(tender_record, firm_name=firm_name, category=selected_category)
             
         loading_dlg = LoadingDialog(
@@ -1588,7 +1636,7 @@ class TableTab(tk.Frame):
         self.app._log("info", f"Deleted {len(sel)} row(s).")
         db.save_all_tenders(self.app._records)
         try:
-            if self.app.notebook.index(self.app.notebook.select()) == 1:
+            if self.app.notebook.index(self.app.notebook.select()) == self.app.notebook.index(self.app.tab_calendar):
                 self.app._update_calendar()
                 self.app._update_details()
         except:
