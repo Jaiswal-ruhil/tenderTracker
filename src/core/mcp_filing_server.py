@@ -86,6 +86,77 @@ def create_server(port: int = 8103) -> FastMCP:
             "gem_requirements": workflow._get_gem_requirements()
         }
 
+    @mcp.tool()
+    def generate_templated_document(
+        bid_no: str,
+        template_type: str = "bidder_undertaking",
+        firm_name: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Generate a pre-filled compliance document (e.g. 'bidder_undertaking') for a specific bid.
+        Returns the path to the generated document and any warnings.
+        """
+        from datetime import datetime
+        import template_generator
+        
+        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        if not tender:
+            return {"success": False, "error": f"Tender not found: {bid_no}"}
+        
+        settings = db.load_settings()
+        firms = settings.get('firms', [])
+        target_firm = None
+        if firm_name:
+            for firm in firms:
+                if firm.get('name') == firm_name:
+                    target_firm = firm
+                    break
+        if not target_firm and firms:
+            # Fall back to matching firm from tender or the first firm
+            matched = tender.get('matched_firm')
+            if matched:
+                for firm in firms:
+                    if firm.get('name') == matched:
+                        target_firm = firm
+                        break
+            if not target_firm:
+                target_firm = firms[0]
+                
+        final_context = {
+            "bid_no": tender.get("bid_no"),
+            "category": tender.get("category") or "General",
+            "department": tender.get("dept") or tender.get("buyer_name") or "Government of India (GeM Portal)",
+            "firm_name": target_firm.get("name") if target_firm else "Unnamed Firm",
+            "firm_address": target_firm.get("locations") if target_firm else "N/A",
+            "date": datetime.now().strftime("%d-%m-%Y")
+        }
+        if context:
+            final_context.update(context)
+            
+        workflow = FilingWorkflow()
+        # Create or fetch filing folder
+        filing_folder = workflow._create_filing_folder(
+            bid_no, 
+            target_firm.get("name") if target_firm else None, 
+            tender
+        )
+        
+        try:
+            success, doc_path, warning = template_generator.generate_document(
+                filing_folder, 
+                template_type, 
+                final_context
+            )
+            return {
+                "success": success,
+                "document_path": doc_path,
+                "warning": warning,
+                "context_used": final_context
+            }
+        except Exception as exc:
+            return {"success": False, "error": f"Template generation failed: {exc}"}
+
     return mcp
 
 
