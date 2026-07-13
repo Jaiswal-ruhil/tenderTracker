@@ -48,6 +48,7 @@ class FilingWorkflow:
         self.emd_details = {}
         self.validation_results = {}  # Store document validation results
         self.processing_stats = {}  # Track processing statistics
+        self.gem_requirements = []
     
     def _validate_file_path(self, path: str) -> bool:
         """Validate if a file path is safe and accessible."""
@@ -380,6 +381,7 @@ class FilingWorkflow:
             self._local_llm_used = False
             self.category = category or "General"
             self.emd_details = {}
+            self.gem_requirements = []
 
             bid_no = tender_record.get('bid_no', '')
             if not bid_no:
@@ -456,6 +458,9 @@ class FilingWorkflow:
             main_pdf_text = self._extract_pdf_text(pdf_path)
             if main_pdf_text:
                 files_text['Tender_Document.pdf'] = main_pdf_text
+                self.gem_requirements = self._extract_gem_requirements(main_pdf_text)
+            else:
+                self.gem_requirements = []
             
             add_folder = os.path.join(self.filing_folder, 'Additional_Tender_Documents')
             add_files_text = self._extract_text_from_additional_files(add_folder)
@@ -606,6 +611,7 @@ class FilingWorkflow:
                 'category': self.category,
                 'tender_record': tender_record,
                 'required_documents': self.required_documents,
+                'gem_requirements': self.gem_requirements,
                 'validation_results': self.validation_results,
                 'processing_stats': self.processing_stats
             }
@@ -1807,3 +1813,54 @@ Return ONLY the JSON array, no other text."""
         
         self._log('ok', f'Generated summary: {summary_path}')
         return summary_path
+
+    def _extract_gem_requirements(self, pdf_text: str) -> List[str]:
+        """
+        Extract required documents specified in the 'Document required from seller' section of GeM bids.
+        """
+        import re
+        if not pdf_text:
+            return []
+            
+        # Try regex first
+        pattern = r'Document\s*required\s*from\s*seller\s*\n\s*([\s\S]+?)(?=\n\s*(?:\*|Bid\s*Number|बड|सं>या|Dated|अितTर^|Additional|Consignee|\Z))'
+        match = re.search(pattern, pdf_text, re.IGNORECASE)
+        if match:
+            raw_list = match.group(1).strip()
+            # Normalize whitespace/newlines
+            normalized = " ".join(raw_list.split())
+            # Split by comma
+            docs = [d.strip() for d in normalized.split(",") if d.strip()]
+            if docs:
+                self._log('ok', f'Extracted {len(docs)} GeM requirements via regex: {docs}')
+                return docs
+
+        # Fallback to LLM if enabled
+        settings = db.load_settings()
+        provider = settings.get('llm_provider', 'Disabled')
+        if provider not in ('', 'Disabled', None):
+            try:
+                self._log('info', 'Attempting LLM extraction of GeM portal requirements...')
+                truncated_text = pdf_text[:12000] if len(pdf_text) > 12000 else pdf_text
+                prompt = f"""Extract the list of required documents specified under the section 'Document required from seller' or 'विक्रेता से मांगे गए दस्तावेज़' in the following GeM tender text.
+Return ONLY a comma-separated list of the document names (e.g. "Experience Criteria, Bidder Turnover, Certificate (Requested in ATC)").
+If not found, return an empty string.
+
+Text:
+{truncated_text}"""
+                response_text = llm.call_llm(prompt, provider, 
+                                            settings.get('llm_api_key', ''),
+                                            settings.get('llm_base_url', ''),
+                                            settings.get('llm_model', ''),
+                                            response_json=False)
+                if response_text and response_text.strip():
+                    docs = [d.strip() for d in response_text.split(",") if d.strip()]
+                    # Filter out non-document text if any
+                    docs = [d for d in docs if len(d) < 80 and not d.startswith("Here")]
+                    if docs:
+                        self._log('ok', f'Extracted {len(docs)} GeM requirements via LLM: {docs}')
+                        return docs
+            except Exception as e:
+                self._log('warn', f'LLM GeM requirements extraction failed: {e}')
+
+        return []

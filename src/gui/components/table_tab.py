@@ -1323,17 +1323,36 @@ class TableTab(tk.Frame):
         gem_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
         gem_frame.pack(fill="x", padx=20, pady=10)
         
-        # GEM document requirements
-        gem_requirements = [
-            {"name": "Experience Criteria*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Past Performance*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Bidder Turnover*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Additional Doc 1 (Requested in ATC)*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Additional Doc 2 (Requested in ATC)*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Certificate (Requested in ATC)", "required": False, "note": "Merge all ATC docs into single file", "max_size": "10MB", "max_pages": 100},
-            {"name": "Compliance of BoQ specification*", "required": True, "max_size": "10MB", "max_pages": 100},
-            {"name": "Financial document*", "required": True, "max_size": "10MB", "max_pages": 100},
-        ]
+        # Get dynamic GeM requirements from result
+        raw_gem_reqs = result.get('gem_requirements', [])
+        if not raw_gem_reqs:
+            # Fallback to defaults
+            raw_gem_reqs = [
+                "Experience Criteria",
+                "Past Performance",
+                "Bidder Turnover",
+                "Additional Doc 1 (Requested in ATC)",
+                "Additional Doc 2 (Requested in ATC)",
+                "Certificate (Requested in ATC)",
+                "Compliance of BoQ specification",
+                "Financial document",
+            ]
+            
+        gem_requirements = []
+        for req_name in raw_gem_reqs:
+            is_required = True
+            # In GeM, "Certificate (Requested in ATC)" is optional/not strictly marked with asterisk
+            if "Certificate (Requested in ATC)" in req_name or "Certificate (requested in ATC)" in req_name:
+                is_required = False
+                
+            clean_name = req_name.replace("*", "").strip()
+            gem_requirements.append({
+                "name": clean_name + ("*" if is_required else ""),
+                "required": is_required,
+                "max_size": "10MB",
+                "max_pages": 100,
+                "note": "Merge all ATC docs into single file" if "Certificate (Requested in ATC)" in clean_name else None
+            })
         
         gem_mappings = {}  # Store mappings for saving
         

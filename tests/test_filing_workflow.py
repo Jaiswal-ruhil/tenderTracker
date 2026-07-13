@@ -107,3 +107,29 @@ class TestFilingWorkflow(unittest.TestCase):
         self.assertEqual(workflow.matched_documents, {})
         self.assertEqual(workflow.missing_documents, [])
         self.assertEqual(workflow.filing_folder, '')
+
+    def test_gem_requirements_extraction(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        
+        # Test Case 1: Simple regex match
+        pdf_text = """
+Some random preamble.
+विक्रेता से मांगे गए दस्तावेज़ /Document required from seller
+Experience Criteria,Certificate (Requested in ATC),Additional Doc 1 (Requested in ATC)
+*In case any bidder is seeking exemption
+        """
+        reqs = workflow._extract_gem_requirements(pdf_text)
+        self.assertEqual(reqs, ['Experience Criteria', 'Certificate (Requested in ATC)', 'Additional Doc 1 (Requested in ATC)'])
+        
+        # Test Case 2: Match with other section lookahead
+        pdf_text_2 = """
+विक्रेता से मांगे गए दस्तावेज़ /Document required from seller
+Experience Criteria,Compliance of BoQ specification,Bidder Turnover
+Bid Number: GEM/2026/B/12345
+        """
+        reqs_2 = workflow._extract_gem_requirements(pdf_text_2)
+        self.assertEqual(reqs_2, ['Experience Criteria', 'Compliance of BoQ specification', 'Bidder Turnover'])
+
+        # Test Case 3: Empty/None text
+        reqs_3 = workflow._extract_gem_requirements("")
+        self.assertEqual(reqs_3, [])
