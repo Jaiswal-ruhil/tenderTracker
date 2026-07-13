@@ -414,7 +414,7 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
             # Need to search portal for doc_url
             driver.get("https://bidplus.gem.gov.in/all-bids")
             search_input = WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.ID, "searchBid"))
+                EC.element_to_be_clickable((By.ID, "searchBid"))
             )
             search_input.clear()
             search_input.send_keys(bid_no_or_url)
@@ -542,13 +542,25 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
             return dest_path
         else:
             log_local("warn", f"[{log_id}] Chrome download timed out or failed. Trying urllib fallback...")
+            
+            # Extract cookies from driver before proceeding
+            cookies_str = ""
+            try:
+                if driver:
+                    cookies = driver.get_cookies()
+                    cookies_str = "; ".join([f"{c['name']}={c['value']}" for c in cookies])
+            except Exception as cookie_err:
+                log_local("warn", f"[{log_id}] Failed to get browser session cookies: {cookie_err}")
+                
             # Fallback to urllib
-            req = urllib.request.Request(
-                doc_url,
-                headers={
-                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-                }
-            )
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            if cookies_str:
+                headers['Cookie'] = cookies_str
+                log_local("info", f"[{log_id}] Attaching browser session cookies to urllib fallback request")
+                
+            req = urllib.request.Request(doc_url, headers=headers)
             context = ssl._create_unverified_context()
             with urllib.request.urlopen(req, timeout=15, context=context) as response:
                 with open(dest_path, 'wb') as out_file:
@@ -613,7 +625,7 @@ def scrape_portal_search(query, max_pages=0, headless=False, log_fn=None, progre
         if query:
             log_local("info", f"Searching portal for query: '{query}'")
             search_input = WebDriverWait(driver, 15).until(
-                EC.presence_of_element_located((By.ID, "searchBid"))
+                EC.element_to_be_clickable((By.ID, "searchBid"))
             )
             search_input.clear()
             search_input.send_keys(query)
