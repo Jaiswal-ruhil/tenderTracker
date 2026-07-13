@@ -157,6 +157,36 @@ def create_server(port: int = 8103) -> FastMCP:
         except Exception as exc:
             return {"success": False, "error": f"Template generation failed: {exc}"}
 
+    @mcp.tool()
+    def verify_compliance_document(
+        file_path: str,
+        doc_type: str,
+        expected_bid_no: Optional[str] = None,
+        expected_firm_name: Optional[str] = None,
+        expected_gstin: Optional[str] = None,
+        expected_pan: Optional[str] = None,
+        min_local_content: int = 50
+    ) -> Dict[str, Any]:
+        """
+        Extract text from a compliance document and verify it against expected values.
+        Supports GST certificates ('gst'), PAN cards ('pan'), MII certificates ('mii_certificate'),
+        and undertakings/affidavits ('undertaking', 'affidavit').
+        """
+        from document_verification_agent import DocumentVerificationAgent
+        agent = DocumentVerificationAgent()
+        try:
+            return agent.verify_compliance_document(
+                file_path=file_path,
+                doc_type=doc_type,
+                expected_bid_no=expected_bid_no,
+                expected_firm_name=expected_firm_name,
+                expected_gstin=expected_gstin,
+                expected_pan=expected_pan,
+                min_local_content=min_local_content
+            )
+        except Exception as exc:
+            return {"valid": False, "errors": [f"Verification failed: {exc}"], "warnings": []}
+
     return mcp
 
 
