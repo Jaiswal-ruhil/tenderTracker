@@ -37,6 +37,81 @@ class TenderApp(tk.Tk, WorkersMixin):
         self.minsize(900, 600)
         self.state('zoomed')
 
+        # UI Path & Breadcrumbs Setup
+        self.ui_path_stack = ["UI/MAIN/TAB/TABLE"]
+        
+        # Monkey patch tk.Toplevel to track UI Paths
+        orig_toplevel_init = tk.Toplevel.__init__
+        app_self = self
+        
+        def new_toplevel_init(toplevel_self, parent=None, *args, **kwargs):
+            p = parent if parent is not None else app_self
+            orig_toplevel_init(toplevel_self, p, *args, **kwargs)
+            
+            try:
+                if not app_self or not app_self.winfo_exists():
+                    return
+                if p != app_self and not str(p).startswith(str(app_self)):
+                    return
+            except Exception:
+                return
+
+            class_name = toplevel_self.__class__.__name__
+            path_map = {
+                "SettingsDialog": "UI/DIALOG/SETTINGS",
+                "FirmsDialog": "UI/DIALOG/FIRMS",
+                "TagsDialog": "UI/DIALOG/TAGS",
+                "CommentsDialog": "UI/DIALOG/COMMENTS",
+                "FilterRulesDialog": "UI/DIALOG/FILTER_RULES",
+                "AlertViewer": "UI/DIALOG/ALERT_VIEWER",
+                "InterventionDialog": "UI/DIALOG/INTERVENTION",
+            }
+            
+            path = path_map.get(class_name)
+            if not path:
+                path = f"UI/DIALOG/{class_name.replace('Dialog', '').upper()}"
+                
+            try:
+                app_self.push_ui_path(path)
+            except Exception:
+                pass
+            
+            orig_title = toplevel_self.title
+            def new_title(new_title_str=None, *args, **kwargs):
+                res = orig_title(new_title_str, *args, **kwargs) if new_title_str is not None else orig_title()
+                if new_title_str:
+                    try:
+                        if not app_self or not app_self.winfo_exists():
+                            return res
+                    except Exception:
+                        return res
+                    cleaned_title = re.sub(r'[^a-zA-Z0-9]', '_', str(new_title_str)).strip('_').upper()
+                    cleaned_title = re.sub(r'_+', '_', cleaned_title)
+                    new_elem = f"UI/DIALOG/{cleaned_title}"
+                    
+                    try:
+                        if len(app_self.ui_path_stack) > 0:
+                            last = app_self.ui_path_stack[-1]
+                            if last.startswith("UI/DIALOG/TOPLEVEL") or last == f"UI/DIALOG/{class_name.upper()}":
+                                app_self.ui_path_stack[-1] = new_elem
+                                app_self._draw_ui_path()
+                    except Exception:
+                        pass
+                return res
+            toplevel_self.title = new_title
+            
+            def on_destroy(event):
+                if event.widget == toplevel_self:
+                    try:
+                        if app_self and app_self.winfo_exists():
+                            app_self.pop_ui_path()
+                    except Exception:
+                        pass
+            toplevel_self.bind("<Destroy>", on_destroy)
+            
+        tk.Toplevel.__init__ = new_toplevel_init
+
+
         self.save_folder = tk.StringVar(
             value=os.path.expanduser("~\\Documents" if os.name=="nt" else "~/Documents"))
         self._records  = []
@@ -116,6 +191,11 @@ class TenderApp(tk.Tk, WorkersMixin):
                        highlightthickness=1, highlightbackground="#30363D")
         top.pack(fill="x")
         tk.Label(top, text="GEM Tender Logger", font=FT, bg=PANEL, fg=TEXT).pack(side="left")
+        self.ui_path_lbl = tk.Label(
+            top, text="[UI/MAIN/TAB/TABLE]", font=("Segoe UI", 9, "bold"),
+            bg=BG, fg=ACCENT, padx=8, pady=3, relief="solid", borderwidth=1
+        )
+        self.ui_path_lbl.pack(side="left", padx=15)
         self.fy_lbl = tk.Label(top, text="", font=FL, bg=ACCENT2, fg=TEXT, padx=10, pady=3)
         self.fy_lbl.pack(side="right", padx=(6,0))
         self._btn(top, "⚙ Settings", self._show_settings, bg=CARD).pack(side="right")
@@ -251,6 +331,10 @@ class TenderApp(tk.Tk, WorkersMixin):
 
         # Bind notebook tab change event to refresh calendar if switched to it
         self.notebook.bind("<<NotebookTabChanged>>", self._on_tab_changed)
+
+        # Bind global focus and click listeners to update UI path breadcrumbs
+        self.bind_all("<FocusIn>", self._on_focus_in)
+        self.bind_all("<Button-1>", self._on_button_click)
 
         # status bar
         self.status = tk.Label(self, text="Ready", font=FL,
@@ -470,6 +554,19 @@ class TenderApp(tk.Tk, WorkersMixin):
         try:
             selected_tab = self.notebook.index(self.notebook.select())
             _logger_mod.log_tab_change(TAB_NAMES[selected_tab] if selected_tab < len(TAB_NAMES) else str(selected_tab))
+            
+            TAB_PATHS = [
+                "UI/MAIN/TAB/TABLE",
+                "UI/MAIN/TAB/DASHBOARD",
+                "UI/MAIN/TAB/INGEST",
+                "UI/MAIN/TAB/CALENDAR",
+                "UI/MAIN/TAB/ANALYTICS",
+                "UI/MAIN/TAB/CHAT"
+            ]
+            if selected_tab < len(TAB_PATHS):
+                self.ui_path_stack[0] = TAB_PATHS[selected_tab]
+                self._draw_ui_path()
+
             if selected_tab == self.notebook.index(self.tab_dashboard):
                 self.dashboard_tab.load_data()
             elif selected_tab == self.notebook.index(self.tab_calendar):
@@ -917,4 +1014,121 @@ class TenderApp(tk.Tk, WorkersMixin):
         from components.chat_tab import ChatTab
         self.chat_tab = ChatTab(self.tab_chat, self)
         self.chat_tab.pack(fill="both", expand=True)
+
+    def push_ui_path(self, path: str):
+        """Push a new path segment to the UI breadcrumbs stack."""
+        if not hasattr(self, 'ui_path_stack'):
+            self.ui_path_stack = ["UI/MAIN/TAB/TABLE"]
+        self.ui_path_stack.append(path)
+        self.current_focus_path = ""
+        self._draw_ui_path()
+        
+    def pop_ui_path(self):
+        """Pop the last path segment from the UI breadcrumbs stack."""
+        if hasattr(self, 'ui_path_stack') and len(self.ui_path_stack) > 1:
+            self.ui_path_stack.pop()
+        self.current_focus_path = ""
+        self._draw_ui_path()
+        
+    def _draw_ui_path(self):
+        """Redraw the UI path label in the top bar."""
+        if hasattr(self, 'ui_path_lbl') and hasattr(self, 'ui_path_stack'):
+            base_stack = " ➔ ".join(self.ui_path_stack)
+            focused_suffix = getattr(self, "current_focus_path", "")
+            if focused_suffix:
+                full_display = f"[{base_stack} ➔ {focused_suffix}]"
+            else:
+                full_display = f"[{base_stack}]"
+            self.ui_path_lbl.configure(text=full_display)
+            self.update_idletasks()
+
+    def _track_dialog_path(self, dialog, path: str):
+        """Manually track a dialog window lifecycle for path tracking."""
+        self.push_ui_path(path)
+        def on_destroy(event):
+            if event.widget == dialog:
+                self.pop_ui_path()
+        dialog.bind("<Destroy>", on_destroy)
+
+    def _on_focus_in(self, event):
+        path = self._resolve_widget_path(event.widget)
+        if path:
+            self.current_focus_path = path
+            self._draw_ui_path()
+
+    def _on_button_click(self, event):
+        path = self._resolve_widget_path(event.widget)
+        if path:
+            self.current_focus_path = path
+            self._draw_ui_path()
+
+    def _resolve_widget_path(self, widget):
+        if not widget:
+            return ""
+        if hasattr(widget, "ui_path"):
+            return widget.ui_path
+            
+        parts = []
+        curr = widget
+        while curr:
+            if curr == self:
+                break
+                
+            name = curr.winfo_name()
+            if isinstance(curr, tk.Toplevel):
+                title_str = ""
+                try:
+                    title_str = curr.title()
+                except:
+                    pass
+                if title_str:
+                    cleaned_title = re.sub(r'[^a-zA-Z0-9]', '_', str(title_str)).strip('_').upper()
+                    cleaned_title = re.sub(r'_+', '_', cleaned_title)
+                    parts.append(f"DIALOG/{cleaned_title}")
+                else:
+                    parts.append(f"DIALOG/{curr.__class__.__name__.upper()}")
+                break
+                
+            part_name = ""
+            if hasattr(curr, "ui_path_name"):
+                part_name = curr.ui_path_name
+            elif isinstance(curr, (tk.Button, ttk.Button)):
+                btn_text = ""
+                try:
+                    btn_text = curr.cget("text")
+                except:
+                    pass
+                if btn_text:
+                    cleaned = re.sub(r'[^a-zA-Z0-9]', '_', str(btn_text)).strip('_').upper()
+                    cleaned = re.sub(r'_+', '_', cleaned)
+                    part_name = f"BTN/{cleaned}"
+                else:
+                    part_name = f"BTN/{name.strip('!').upper()}"
+            elif isinstance(curr, (tk.Entry, ttk.Entry, tk.Text)):
+                part_name = f"INPUT/{name.strip('!').upper()}"
+            elif isinstance(curr, tk.Label):
+                lbl_text = ""
+                try:
+                    lbl_text = curr.cget("text")
+                except:
+                    pass
+                if lbl_text:
+                    cleaned = re.sub(r'[^a-zA-Z0-9]', '_', str(lbl_text)).strip('_').upper()
+                    cleaned = re.sub(r'_+', '_', cleaned)
+                    part_name = f"LBL/{cleaned}"
+                else:
+                    part_name = f"LBL/{name.strip('!').upper()}"
+            elif isinstance(curr, ttk.Notebook):
+                part_name = "NOTEBOOK"
+                
+            if not part_name:
+                part_name = name.strip('!').upper()
+                
+            parts.append(part_name)
+            curr = curr.master
+            
+        parts.reverse()
+        return "/".join(p for p in parts if p)
+
+
 
