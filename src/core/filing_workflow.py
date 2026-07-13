@@ -29,14 +29,16 @@ from alert_system import alert_document_issue, alert_filing_issue, alert_network
 class FilingWorkflow:
     """Handles the complete tender filing workflow."""
     
-    def __init__(self, log_fn=None):
+    def __init__(self, log_fn=None, progress_cb=None):
         """
         Initialize the filing workflow with enhanced automation.
         
         Args:
             log_fn: Optional logging function (signature: log_fn(level, message))
+            progress_cb: Optional progress callback function (signature: progress_cb(percent, message))
         """
         self.log_fn = log_fn or logger.log
+        self.progress_cb = progress_cb
         self.required_documents = []
         self.matched_documents = {}
         self.missing_documents = []
@@ -384,13 +386,19 @@ class FilingWorkflow:
                 return {'success': False, 'error': 'No bid number in tender record'}
             
             self._log('info', f'Starting filing process for {bid_no}')
+            if self.progress_cb:
+                self.progress_cb(5, "Initializing filing process...")
             
             # Step 1: Download tender PDF if not present
+            if self.progress_cb:
+                self.progress_cb(10, "Step 1: Downloading/verifying tender PDF...")
             pdf_path = self._ensure_tender_pdf(tender_record)
             if not pdf_path:
                 return {'success': False, 'error': 'Failed to obtain tender PDF'}
             
             # Step 2: Create filing folder
+            if self.progress_cb:
+                self.progress_cb(20, "Step 2 & 3: Creating folder and copying tender PDF...")
             self.filing_folder = self._create_filing_folder(bid_no, firm_name, tender_record)
             self._log('ok', f'Created filing folder: {self.filing_folder}')
             
@@ -417,6 +425,8 @@ class FilingWorkflow:
                 # Continue with the process even if copy fails
             
             # Step 4: Scan tender PDF for embedded links, download to Additional_Tender_Documents
+            if self.progress_cb:
+                self.progress_cb(35, "Step 4: Scanning PDF for embedded document links...")
             try:
                 self._download_embedded_links(pdf_path)
             except (ConnectionError, TimeoutError) as link_err:
@@ -439,6 +449,8 @@ class FilingWorkflow:
                 # Continue with the process even if embedded link download fails
             
             # Step 5: Sourcing/Extracting Text from all files in Additional_Tender_Documents + main PDF
+            if self.progress_cb:
+                self.progress_cb(45, "Step 5: Extracting and parsing text from all files...")
             self._log('info', 'Extracting and scanning text from all downloaded documents (PDF, Excel, CSV)...')
             files_text = {}
             main_pdf_text = self._extract_pdf_text(pdf_path)
@@ -452,11 +464,15 @@ class FilingWorkflow:
             combined_text = "\n\n".join(files_text.values())
             
             # Step 6: Identify Item Category using LLM
+            if self.progress_cb:
+                self.progress_cb(60, "Step 6: Identifying tender item category...")
             self._log('info', 'Identifying tender item category...')
             self.category = self._identify_category_and_docs(combined_text, tender_record)
             self._log('ok', f"Identified category: {self.category}")
             
             # Step 7: Required Documents Extraction with source file mapping
+            if self.progress_cb:
+                self.progress_cb(72, "Step 7: Extracting required document list...")
             self._log('info', 'Extracting required documents from all documents...')
             raw_documents = []
             for filename, text in files_text.items():
@@ -490,6 +506,8 @@ class FilingWorkflow:
                 )
             
             # Step 8: Extract EMD / Security Deposit details
+            if self.progress_cb:
+                self.progress_cb(80, "Step 8: Extracting EMD and security deposit requirements...")
             self._log('info', 'Extracting EMD and security requirements...')
             self.emd_details = self._extract_emd_details_llm(combined_text)
             emd_source = []
@@ -499,6 +517,8 @@ class FilingWorkflow:
             self.emd_details['source_file'] = ", ".join(emd_source) if emd_source else "Tender_Document.pdf"
             
             # Step 9: Match standard documents and category-specific documents with AI enhancement
+            if self.progress_cb:
+                self.progress_cb(85, "Step 9: Matching required documents with firm documents...")
             self._log('info', 'Matching required documents with firm documents...')
             active_firm = firm_name or tender_record.get('matched_firm') or "General"
             firm_documents = self._get_firm_documents(active_firm)
@@ -527,6 +547,8 @@ class FilingWorkflow:
             self._auto_pull_category_documents(active_firm, self.category)
             
             # Step 10: Copy documents to filing folder with validation
+            if self.progress_cb:
+                self.progress_cb(92, "Step 10: Copying and validating matched documents...")
             self._log('info', 'Copying matched standard documents to filing folder...')
             self._copy_documents_to_folder()
             
@@ -567,6 +589,8 @@ class FilingWorkflow:
             validation_file = self._generate_validation_report(bid_no)
             
             self._log('ok', f'Filing process completed successfully!')
+            if self.progress_cb:
+                self.progress_cb(100, "Filing process completed successfully!")
             
             return {
                 'success': True,

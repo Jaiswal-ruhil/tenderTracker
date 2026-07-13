@@ -23,7 +23,7 @@ class LoadingDialog(tk.Toplevel):
         
         # Center the window relative to parent
         self.update_idletasks()
-        w, h = 420, 200
+        w, h = 440, 240
         x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
@@ -36,13 +36,21 @@ class LoadingDialog(tk.Toplevel):
         frame.pack(fill="both", expand=True, padx=8, pady=8)
         
         # Messages
-        lbl_msg = tk.Label(frame, text=message, font=FL, bg=PANEL, fg=TEXT, wraplength=380, justify="center")
-        lbl_msg.pack(pady=(15, 10))
+        lbl_msg = tk.Label(frame, text=message, font=FL, bg=PANEL, fg=TEXT, wraplength=400, justify="center")
+        lbl_msg.pack(pady=(10, 5))
+        
+        # Progress Bar
+        self.progress = ttk.Progressbar(frame, orient="horizontal", length=380, mode="determinate", style="TProgressbar")
+        self.progress.pack(pady=(10, 5))
+        
+        # Current Step Label
+        self.lbl_step = tk.Label(frame, text="Initializing...", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB, wraplength=400, justify="center")
+        self.lbl_step.pack(pady=(2, 5))
         
         # Loading indicator dots
         self.dots_var = tk.StringVar(value="...")
-        self.lbl_dots = tk.Label(frame, text="...", font=("Segoe UI", 18, "bold"), bg=PANEL, fg=ACCENT2)
-        self.lbl_dots.pack()
+        self.lbl_dots = tk.Label(frame, text="...", font=("Segoe UI", 16, "bold"), bg=PANEL, fg=ACCENT2)
+        self.lbl_dots.pack(pady=(5, 5))
         
         self.task_fn = task_fn
         self.exception = None
@@ -53,6 +61,14 @@ class LoadingDialog(tk.Toplevel):
         if self.task_fn:
             import threading
             threading.Thread(target=self._run_task, daemon=True).start()
+            
+    def update_progress(self, percent, message=None):
+        def _update():
+            if self.winfo_exists():
+                self.progress["value"] = percent
+                if message:
+                    self.lbl_step.configure(text=message)
+        self.after(0, _update)
             
     def _animate_dots(self):
         if not self.winfo_exists():
@@ -72,7 +88,13 @@ class LoadingDialog(tk.Toplevel):
         
     def _run_task(self):
         try:
-            self.result = self.task_fn()
+            import inspect
+            if self.task_fn:
+                sig = inspect.signature(self.task_fn)
+                if len(sig.parameters) > 0:
+                    self.result = self.task_fn(self.update_progress)
+                else:
+                    self.result = self.task_fn()
         except Exception as e:
             self.exception = e
         finally:

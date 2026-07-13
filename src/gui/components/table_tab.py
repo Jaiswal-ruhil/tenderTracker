@@ -1165,8 +1165,8 @@ class TableTab(tk.Frame):
         
         from gui_dialogs import LoadingDialog
         
-        def run_filing_task():
-            workflow = filing_workflow.FilingWorkflow(log_fn=self.app._log)
+        def run_filing_task(progress_cb=None):
+            workflow = filing_workflow.FilingWorkflow(log_fn=self.app._log, progress_cb=progress_cb)
             return workflow.start_filing_process(tender_record, firm_name=firm_name, category=selected_category)
             
         loading_dlg = LoadingDialog(
