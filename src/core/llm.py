@@ -807,26 +807,39 @@ def test_llm_connection(provider, api_key, base_url, model):
 def get_similar_past_examples(text, limit=3):
     """
     RAG Helper: Retrieves similar historically parsed/corrected tenders
-    from the SQLite database using keyword overlap to use as few-shot examples.
+    from the SQLite database using semantic search (falling back to keyword overlap).
     """
     try:
+        import vector_search
         import db
-        all_recs = db.load_all_tenders()
-        valid_recs = [r for r in all_recs if r.get("bid_no") and r.get("items") and r.get("category")]
-        if not valid_recs:
-            return ""
-            
-        words = set(re.findall(r"\b[a-z]{4,}\b", text.lower()))
-        scored = []
-        for r in valid_recs:
-            r_text = f"{r.get('items', '')} {r.get('category', '')} {r.get('organisation', '')} {r.get('dept', '')}".lower()
-            r_words = set(re.findall(r"\b[a-z]{4,}\b", r_text))
-            score = len(words.intersection(r_words))
-            scored.append((score, r))
-            
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top_recs = [item[1] for item in scored[:limit]]
         
+        # Try semantic search first
+        semantic_results = vector_search.semantic_search(text, limit=limit)
+        top_recs = []
+        if semantic_results:
+            for bid_no, _ in semantic_results:
+                r = db.get_tender(bid_no)
+                if r and r.get("items") and r.get("category"):
+                    top_recs.append(r)
+        
+        # If semantic search returned nothing or failed, fall back to keyword overlap
+        if not top_recs:
+            all_recs = db.load_all_tenders()
+            valid_recs = [r for r in all_recs if r.get("bid_no") and r.get("items") and r.get("category")]
+            if not valid_recs:
+                return ""
+                
+            words = set(re.findall(r"\b[a-z]{4,}\b", text.lower()))
+            scored = []
+            for r in valid_recs:
+                r_text = f"{r.get('items', '')} {r.get('category', '')} {r.get('organisation', '')} {r.get('dept', '')}".lower()
+                r_words = set(re.findall(r"\b[a-z]{4,}\b", r_text))
+                score = len(words.intersection(r_words))
+                scored.append((score, r))
+                
+            scored.sort(key=lambda x: x[0], reverse=True)
+            top_recs = [item[1] for item in scored[:limit]]
+            
         example_strs = []
         for idx, r in enumerate(top_recs, 1):
             ex_txt = f"Example {idx} (Reference from past mappings):\n"
@@ -866,34 +879,55 @@ def get_similar_past_examples(text, limit=3):
         logger.log("warn", f"RAG past examples retrieval failed: {e}")
     return ""
 
+
 def get_similar_category_examples(item_name, limit=5):
     """
     RAG Helper: Retrieves historically mapped/corrected item-to-category associations
-    from the SQLite database using keyword overlap.
+    from the SQLite database using semantic search (falling back to keyword overlap).
     """
     try:
+        import vector_search
         import db
-        all_recs = db.load_all_tenders()
-        valid_recs = [r for r in all_recs if r.get("items") and r.get("category")]
-        if not valid_recs:
-            return ""
-            
-        words = set(re.findall(r"\b[a-z]{3,}\b", item_name.lower()))
-        scored = []
-        for r in valid_recs:
-            items_words = set(re.findall(r"\b[a-z]{3,}\b", r["items"].lower()))
-            score = len(words.intersection(items_words))
-            scored.append((score, r["items"], r["category"]))
-            
-        scored.sort(key=lambda x: x[0], reverse=True)
-        seen = set()
+        
+        # Try semantic search first
+        semantic_results = vector_search.semantic_search(item_name, limit=limit * 3)
         top_examples = []
-        for score, items, cat in scored:
-            if cat not in seen:
-                seen.add(cat)
-                top_examples.append(f'- Description: "{items}" -> Mapped Category: "{cat}"')
-                if len(top_examples) >= limit:
-                    break
+        seen = set()
+        
+        if semantic_results:
+            for bid_no, _ in semantic_results:
+                r = db.get_tender(bid_no)
+                if r and r.get("items") and r.get("category"):
+                    items = r["items"]
+                    cat = r["category"]
+                    if cat not in seen:
+                        seen.add(cat)
+                        top_examples.append(f'- Description: "{items}" -> Mapped Category: "{cat}"')
+                        if len(top_examples) >= limit:
+                            break
+                            
+        # If semantic search returned nothing or failed, fall back to keyword overlap
+        if not top_examples:
+            all_recs = db.load_all_tenders()
+            valid_recs = [r for r in all_recs if r.get("items") and r.get("category")]
+            if not valid_recs:
+                return ""
+                
+            words = set(re.findall(r"\b[a-z]{3,}\b", item_name.lower()))
+            scored = []
+            for r in valid_recs:
+                items_words = set(re.findall(r"\b[a-z]{3,}\b", r["items"].lower()))
+                score = len(words.intersection(items_words))
+                scored.append((score, r["items"], r["category"]))
+                
+            scored.sort(key=lambda x: x[0], reverse=True)
+            for score, items, cat in scored:
+                if cat not in seen:
+                    seen.add(cat)
+                    top_examples.append(f'- Description: "{items}" -> Mapped Category: "{cat}"')
+                    if len(top_examples) >= limit:
+                        break
+                        
         if top_examples:
             return "\nHere are some examples of verified category mappings from history:\n" + "\n".join(top_examples)
     except Exception as e:

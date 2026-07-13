@@ -853,3 +853,24 @@ def save_company_profile_data(company_id: str, name: str, profile: dict):
             pass
         finally:
             if conn: conn.close()
+
+
+def get_tender(bid_no):
+    """Retrieve a single tender dictionary by bid_no. Thread-safe."""
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM bids WHERE bid_no=?", (bid_no,))
+            row = cursor.fetchone()
+            return row_to_dict(row) if row else None
+        except sqlite3.DatabaseError as e:
+            handle_db_error(e)
+            return None
+        except Exception:
+            return None
+        finally:
+            if conn:
+                try: conn.close()
+                except Exception: pass
