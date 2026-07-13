@@ -200,6 +200,8 @@ class FilingWorkflow:
             best_score = 0.0
             
             for firm_doc_name, firm_doc_path in firm_documents.items():
+                if not isinstance(firm_doc_path, str):
+                    continue
                 firm_name_lower = firm_doc_name.lower()
                 
                 # Exact match
@@ -1280,7 +1282,7 @@ Return ONLY the JSON array, no other text."""
             
             # Try exact matches first
             for doc_key, doc_path in all_documents.items():
-                if doc_path and os.path.exists(doc_path):
+                if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
                     doc_key_lower = doc_key.lower()
                     if req_name_lower in doc_key_lower or doc_key_lower in req_name_lower:
                         source = 'COMMON' if doc_key in common_documents else doc_key
@@ -1295,7 +1297,7 @@ Return ONLY the JSON array, no other text."""
             # Try fuzzy matches
             if not matched:
                 for doc_key, doc_path in all_documents.items():
-                    if doc_path and os.path.exists(doc_path):
+                    if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
                         for map_type, keywords in type_mappings.items():
                             if any(kw in req_name_lower for kw in keywords) and map_type in doc_key.lower():
                                 source = 'COMMON' if doc_key in common_documents else doc_key
@@ -1502,7 +1504,7 @@ Return ONLY the JSON array, no other text."""
         try:
             os.makedirs(common_folder, exist_ok=True)
             for doc_key, doc_path in firm_documents.items():
-                if doc_path and os.path.exists(doc_path):
+                if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
                     # Mapping from database key to readable name
                     name_mappings = {
                         "gst": "GST_Certificate",
