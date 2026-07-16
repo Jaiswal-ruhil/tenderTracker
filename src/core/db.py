@@ -4,6 +4,10 @@ import sqlite3
 import threading
 import logger
 
+# Pure SQLite implementation.
+# MongoDB routing is handled in main.py via sys.modules['db'] = mongo_db
+# before any other import, so this file is only active when Mongo is not running.
+
 SETTINGS_FILE = os.path.join(os.path.expanduser("~"), ".tendertracker_settings.json")
 DEFAULT_DB_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tenders_db.db")
 DB_FILE = DEFAULT_DB_FILE
@@ -259,7 +263,38 @@ def get_conn():
             )
         """)
         conn.commit()
-        
+
+        # 8. Create bid_results table (outcome tracking)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bid_results (
+                bid_no TEXT PRIMARY KEY,
+                result TEXT,
+                our_rank INTEGER,
+                our_price REAL,
+                l1_price REAL,
+                price_gap REAL,
+                price_gap_pct REAL,
+                notes TEXT,
+                recorded_at TEXT
+            )
+        """)
+        conn.commit()
+
+        # 9. Create bid_competitors table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS bid_competitors (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                bid_no TEXT NOT NULL,
+                rank INTEGER,
+                seller_name TEXT,
+                offered_items TEXT,
+                total_price REAL,
+                mse_category TEXT,
+                is_own_bid INTEGER DEFAULT 0
+            )
+        """)
+        cursor.execute("CREATE INDEX IF NOT EXISTS idx_competitors_bid_no ON bid_competitors(bid_no)")
+        conn.commit()
     except Exception as e:
         try: conn.close()
         except Exception: pass
@@ -1060,3 +1095,172 @@ def apply_active_learning_from_comments():
             if conn:
                 try: conn.close()
                 except Exception: pass
+
+
+# ── Bid Result & Competitor CRUD (SQLite fallback) ────────────────────────────────
+
+def save_bid_result(bid_no: str, result_dict: dict) -> bool:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                INSERT OR REPLACE INTO bid_results
+                    (bid_no, result, our_rank, our_price, l1_price, price_gap, price_gap_pct, notes, recorded_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                bid_no,
+                result_dict.get("result"),
+                result_dict.get("our_rank"),
+                result_dict.get("our_price"),
+                result_dict.get("l1_price"),
+                result_dict.get("price_gap"),
+                result_dict.get("price_gap_pct"),
+                result_dict.get("notes"),
+                result_dict.get("recorded_at"),
+            ))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.log_err(f"save_bid_result error for {bid_no}: {e}")
+            return False
+        finally:
+            if conn: conn.close()
+
+
+def get_bid_result(bid_no: str):
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT bid_no, result, our_rank, our_price, l1_price, price_gap, price_gap_pct, notes, recorded_at "
+                "FROM bid_results WHERE bid_no=?", (bid_no,)
+            )
+            row = cursor.fetchone()
+            if row:
+                return {"bid_no": row[0], "result": row[1], "our_rank": row[2],
+                        "our_price": row[3], "l1_price": row[4], "price_gap": row[5],
+                        "price_gap_pct": row[6], "notes": row[7], "recorded_at": row[8]}
+        except Exception:
+            pass
+        finally:
+            if conn: conn.close()
+        return None
+
+
+def get_all_bid_results() -> dict:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT bid_no, result, our_rank, our_price, l1_price, price_gap, price_gap_pct, notes, recorded_at "
+                "FROM bid_results"
+            )
+            return {row[0]: {"bid_no": row[0], "result": row[1], "our_rank": row[2],
+                             "our_price": row[3], "l1_price": row[4], "price_gap": row[5],
+                             "price_gap_pct": row[6], "notes": row[7], "recorded_at": row[8]}
+                    for row in cursor.fetchall()}
+        except Exception:
+            return {}
+        finally:
+            if conn: conn.close()
+
+
+def save_bid_competitors(bid_no: str, competitors: list) -> bool:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM bid_competitors WHERE bid_no=?", (bid_no,))
+            for comp in competitors:
+                cursor.execute("""
+                    INSERT INTO bid_competitors (bid_no, rank, seller_name, offered_items, total_price, mse_category, is_own_bid)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (bid_no, comp.get("rank"), comp.get("seller_name"), comp.get("offered_items"),
+                       comp.get("total_price"), comp.get("mse_category"), 1 if comp.get("is_own_bid") else 0))
+            conn.commit()
+            return True
+        except Exception as e:
+            logger.log_err(f"save_bid_competitors error for {bid_no}: {e}")
+            return False
+        finally:
+            if conn: conn.close()
+
+
+def get_bid_competitors(bid_no: str) -> list:
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT rank, seller_name, offered_items, total_price, mse_category, is_own_bid
+                FROM bid_competitors WHERE bid_no=? ORDER BY rank ASC
+            """, (bid_no,))
+            return [{"rank": r[0], "seller_name": r[1], "offered_items": r[2],
+                     "total_price": r[3], "mse_category": r[4], "is_own_bid": bool(r[5])}
+                    for r in cursor.fetchall()]
+        except Exception:
+            return []
+        finally:
+            if conn: conn.close()
+
+
+def set_extra_field(bid_no: str, key: str, value) -> bool:
+    """Store an arbitrary extra field. In SQLite this goes into the comments/JSON blob."""
+    return upsert_tender_field(bid_no, "comments",
+        json.dumps({key: value}) if not isinstance(value, str) else value)
+
+
+def get_extra_fields(bid_no: str) -> dict:
+    """Stub for SQLite — extra fields not natively supported."""
+    return {}
+
+
+def get_result_analytics() -> dict:
+    """Aggregate bid result stats from SQLite."""
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            cursor.execute("SELECT result, COUNT(*), AVG(price_gap_pct) FROM bid_results GROUP BY result")
+            rows = cursor.fetchall()
+            stats = {"total_with_result": 0, "won": 0, "lost": 0, "pending": 0, "avg_price_gap_pct": 0.0}
+            for row in rows:
+                rtype = (row[0] or "Pending").lower()
+                stats[rtype] = row[1]
+                stats["total_with_result"] += row[1]
+                if rtype == "lost":
+                    stats["avg_price_gap_pct"] = round(row[2] or 0, 2)
+            return stats
+        except Exception:
+            return {}
+        finally:
+            if conn: conn.close()
+
+
+def text_search_tenders(query: str, limit: int = 50) -> list:
+    """Fallback text search using SQLite LIKE."""
+    with _lock:
+        conn = None
+        try:
+            conn = get_conn()
+            cursor = conn.cursor()
+            pattern = f"%{query}%"
+            cursor.execute("""
+                SELECT * FROM bids
+                WHERE items LIKE ? OR category LIKE ? OR dept LIKE ? OR organisation LIKE ?
+                LIMIT ?
+            """, (pattern, pattern, pattern, pattern, limit))
+            return [row_to_dict(r) for r in cursor.fetchall()]
+        except Exception:
+            return []
+        finally:
+            if conn: conn.close()
