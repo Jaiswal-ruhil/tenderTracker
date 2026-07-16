@@ -102,6 +102,21 @@ class TenderDetailPanel(tk.Frame):
         self.btn_ai_recommend = self.app._btn(self.ai_actions_fr, "🎯 AI Recommend", lambda: self._get_ai_recommendation(), bg="#2D333B", fg=SUCCESS)
         self.btn_ai_recommend.pack(side="left", padx=6)
 
+        # Bid Result Button
+        self.result_actions_fr = tk.Frame(self, bg=PANEL)
+        self.result_actions_fr.pack(fill="x", pady=(0, 8))
+        self.btn_record_result = self.app._btn(
+            self.result_actions_fr, "📊 Record Result",
+            lambda: self._open_bid_result_dialog(),
+            bg="#1A2D1A", fg=SUCCESS
+        )
+        self.btn_record_result.pack(side="left", padx=(0, 6))
+        self._result_badge = tk.Label(
+            self.result_actions_fr, text="",
+            font=("Segoe UI", 8, "bold"), bg=PANEL, fg=MUTED
+        )
+        self._result_badge.pack(side="left", padx=4)
+
         # Detail Scrollable Text widget
         txt_fr = tk.Frame(self, bg=PANEL)
         txt_fr.pack(fill="both", expand=True)
@@ -176,6 +191,10 @@ class TenderDetailPanel(tk.Frame):
         if hasattr(self, "sugar_mill_var"):
             self.sugar_mill_var.set("None")
             self.item_category_var.set("None")
+        if hasattr(self, "btn_record_result"):
+            self.btn_record_result.configure(state="disabled")
+        if hasattr(self, "_result_badge"):
+            self._result_badge.configure(text="")
 
     def on_treeview_select(self, event):
         sel = self.table_tab.table_view.tv.selection()
@@ -219,9 +238,22 @@ class TenderDetailPanel(tk.Frame):
             getattr(self, "btn_detail_reset", None),
             getattr(self, "btn_detail_fetch", None),
             getattr(self, "btn_detail_filed", None),
+            getattr(self, "btn_record_result", None),
         ):
             if btn:
                 btn.configure(state="normal")
+
+        # Update result badge
+        bid_result = db.get_bid_result(rec.get("bid_no", ""))
+        if bid_result and bid_result.get("result"):
+            result_val = bid_result["result"]
+            badge_color = SUCCESS if result_val == "Won" else (ERR if result_val == "Lost" else WARN)
+            self._result_badge.configure(
+                text=f"● {result_val}  |  Rank: L{bid_result.get('our_rank', '?')}  |  ₹{bid_result.get('our_price', 0):,.0f}",
+                fg=badge_color
+            )
+        else:
+            self._result_badge.configure(text="No result recorded", fg=MUTED)
 
         status_bits = []
         if rec.get("matched_firm", "").strip():
@@ -372,7 +404,67 @@ class TenderDetailPanel(tk.Frame):
                 end = f"{pos} + {len(search_query)}c"
                 self.detail_txt.tag_add("match_search", pos, end)
                 start = end
-                
+
+        # ── Bid Result Section ────────────────────────────────────────────────
+        bid_no = rec.get("bid_no", "")
+        bid_result = db.get_bid_result(bid_no)
+        competitors = db.get_bid_competitors(bid_no)
+
+        self.detail_txt.insert("end", "\n\n")
+        self.detail_txt.insert("end", "■ Bid Result & Competitor Analysis\n", "header")
+        self.detail_txt.insert("end", "─" * 32 + "\n", "label")
+
+        if bid_result:
+            result_val = bid_result.get("result", "Pending")
+            result_color = SUCCESS if result_val == "Won" else (ERR if result_val == "Lost" else WARN)
+            self.detail_txt.tag_configure("result_tag", foreground=result_color, font=("Segoe UI", 10, "bold"))
+
+            self.detail_txt.insert("end", "Outcome: ", "label")
+            self.detail_txt.insert("end", f"{result_val}\n", "result_tag")
+
+            if bid_result.get("our_rank") is not None:
+                self.detail_txt.insert("end", "Our Rank: ", "label")
+                self.detail_txt.insert("end", f"L{bid_result['our_rank']}\n", "value")
+            if bid_result.get("our_price") is not None:
+                self.detail_txt.insert("end", "Our Price: ", "label")
+                self.detail_txt.insert("end", f"₹ {bid_result['our_price']:,.2f}\n", "value")
+            if bid_result.get("l1_price") is not None:
+                self.detail_txt.insert("end", "L1 Price:  ", "label")
+                self.detail_txt.insert("end", f"₹ {bid_result['l1_price']:,.2f}\n", "value")
+            if bid_result.get("price_gap") is not None:
+                gap = bid_result["price_gap"]
+                pct = bid_result.get("price_gap_pct", 0) or 0
+                sign = "+" if gap >= 0 else ""
+                gap_color = ERR if gap > 0 else SUCCESS
+                self.detail_txt.tag_configure("gap_tag", foreground=gap_color, font=("Segoe UI", 9, "bold"))
+                self.detail_txt.insert("end", "Price Gap: ", "label")
+                self.detail_txt.insert("end", f"{sign}₹ {gap:,.2f}  ({sign}{pct:.2f}%)\n", "gap_tag")
+            if bid_result.get("recorded_at"):
+                self.detail_txt.insert("end", f"Recorded:  {bid_result['recorded_at']}\n", "label")
+            if bid_result.get("notes"):
+                self.detail_txt.insert("end", "\nLessons Learned:\n", "label")
+                self.detail_txt.insert("end", f"{bid_result['notes']}\n", "value")
+        else:
+            self.detail_txt.insert("end", "No result recorded yet. Click 'Record Result' to add.\n", "value")
+
+        # Competitor table
+        if competitors:
+            self.detail_txt.insert("end", "\nCompetitor Evaluation:\n", "label")
+            # Header
+            self.detail_txt.insert("end",
+                f"  {'Rank':<6} {'Seller Name':<36} {'Price':>14}  {'MSE':^10}\n", "label")
+            self.detail_txt.insert("end", "  " + "─" * 68 + "\n", "label")
+            for comp in competitors:
+                rank_str = f"L{comp.get('rank', '?')}"
+                name = (comp.get("seller_name") or "")[:34]
+                price = comp.get("total_price")
+                price_str = f"₹ {price:>12,.2f}" if price is not None else f"{'—':>14}"
+                mse = (comp.get("mse_category") or "")[:10]
+                own_marker = " ★" if comp.get("is_own_bid") else ""
+                line = f"  {rank_str:<6} {name:<36} {price_str}  {mse:^10}{own_marker}\n"
+                tag = "match_inc" if comp.get("is_own_bid") else "value"
+                self.detail_txt.insert("end", line, tag)
+
         self.detail_txt.configure(state="disabled")
     
     def _get_selected_tender(self):
@@ -385,6 +477,22 @@ class TenderDetailPanel(tk.Frame):
             if r.get("bid_no") == bid_no:
                 return r
         return None
+    
+    def _open_bid_result_dialog(self):
+        """Open the BidResultDialog for the currently selected tender."""
+        tender = self._get_selected_tender()
+        if not tender:
+            return
+        bid_no = tender.get("bid_no", "")
+        if not bid_no:
+            return
+        from dialogs.bid_result_dialog import BidResultDialog
+
+        def on_save(saved_bid_no):
+            # Refresh the side panel to show the newly saved result
+            self.on_treeview_select(None)
+
+        BidResultDialog(self, self.app, bid_no, on_save=on_save)
     
     def _generate_ai_summary(self):
         """Generate AI summary for the selected tender."""
