@@ -222,11 +222,26 @@ def _find_chat_url(base_url: str, headers: dict) -> str | None:
                 "messages": [{"role": "user", "content": "hi"}],
                 "max_tokens": 1
             }
-            _post_json(url, probe, headers, timeout=5)
+            res_text = _post_json(url, probe, headers, timeout=5)
+            # Filter out responses that indicate unexpected/invalid endpoint
+            low = res_text.lower()
+            if "unexpected endpoint" in low or "unexpected method" in low or "unexpected endpoint or method" in low:
+                continue
+            try:
+                json.loads(res_text)
+            except Exception:
+                continue
             return url
         except urllib.error.HTTPError as e:
             # 400 = endpoint exists but request is malformed — still valid
             if e.code == 400:
+                try:
+                    error_body = e.read().decode("utf-8")
+                    low = error_body.lower()
+                    if "unexpected endpoint" in low or "unexpected method" in low or "unexpected endpoint or method" in low:
+                        continue
+                except Exception:
+                    pass
                 return url
             continue
         except Exception:

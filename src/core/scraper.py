@@ -482,21 +482,9 @@ def download_tender_pdf(bid_no_or_url, download_dir, log_fn=None, headless=True)
                 time.sleep(1)
                 
             if not doc_url:
-                log_local("warn", f"[{log_id}] Bid number text not found in card containers. Trying suffix link fallback...")
-                suffix = bid_no_or_url.split('/')[-1] if '/' in bid_no_or_url else bid_no_or_url
-                links = driver.find_elements(By.XPATH, f"//a[contains(@href, 'showbidDocument') and contains(@href, '{suffix}')]")
-                if links:
-                    doc_url = links[0].get_attribute("href")
-                else:
-                    # Final fallback: check if bid number is on the page before using the first link
-                    body_text = driver.find_element(By.TAG_NAME, "body").text
-                    if bid_no_or_url.lower() in body_text.lower():
-                        links = driver.find_elements(By.XPATH, "//a[contains(@href, 'showbidDocument')]")
-                        if links:
-                            doc_url = links[0].get_attribute("href")
-                            
-            if not doc_url:
-                log_local("err", f"[{log_id}] PDF document link not found on portal search results.")
+                log_local("err", f"[{log_id}] Exact bid number match not found in search results. Cannot proceed with download.")
+                log_local("info", f"[{log_id}] Searched for: {bid_no_or_url}")
+                log_local("info", f"[{log_id}] Found {len(links)} showbidDocument links, but none matched the exact bid number.")
                 return None
                 
             # Check if resolved URL PDF already exists

@@ -157,10 +157,14 @@ class WorkersMixin:
                 
                 # Process each block from split_blocks:
                 # If it starts with a BID NO label, process it as a single block.
-                # Otherwise, split it by lines (handling lists of PDF paths, URLs, or raw bid numbers).
+                # Otherwise, check if it starts with a bid number pattern and group subsequent lines,
+                # or split it by lines (handling lists of PDF paths, URLs, or raw bid numbers).
                 blocks_to_process = []
                 for blk in initial_blocks:
                     if re.match(r"^\s*BID\s*(?:NO|Number)(?:\.|\b)\s*:", blk, re.I):
+                        blocks_to_process.append(blk)
+                    elif re.match(r"^\s*(GEM/\d{4}/[A-Z0-9]+/[\dXx]+)", blk, re.I):
+                        # Block starts with a bid number without label - keep as single block
                         blocks_to_process.append(blk)
                     else:
                         for line in blk.splitlines():

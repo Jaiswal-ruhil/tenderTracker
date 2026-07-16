@@ -92,6 +92,41 @@ def clean_json_response(text):
             
     return text
 
+
+def repair_truncated_json_array(text):
+    """
+    Attempt to salvage a valid JSON array from a truncated LLM response.
+    Thinking models (e.g. Gemma, DeepSeek-R1) often run out of tokens mid-JSON.
+    Strategy: find the last fully-closed '}}' object inside '[...]' and close
+    the array after it so json.loads can parse the partial result.
+    Returns the repaired string, or the original text if repair is not possible.
+    """
+    text = text.strip()
+    start = text.find('[')
+    if start == -1:
+        return text
+    # Walk backwards from the end to find the last complete JSON object
+    # i.e. the last occurrence of '}' before any incomplete trailing content
+    end = len(text) - 1
+    while end >= start:
+        candidate = text[start:end + 1]
+        # Try closing the array if it is not already closed
+        trial = candidate.rstrip()
+        if not trial.endswith(']'):
+            trial = trial.rstrip(',').rstrip() + ']'
+        try:
+            import json as _j
+            _j.loads(trial)
+            return trial
+        except Exception:
+            pass
+        # Move backwards to the previous '}'
+        end = text.rfind('}', start, end)
+        if end == -1:
+            break
+    return text
+
+
 def normalize_local_service_roots(base_url):
     """Return candidate local service roots for LM Studio / Ollama endpoints."""
     base_url = (base_url or "http://localhost:1234").strip().rstrip("/")
@@ -115,11 +150,11 @@ def normalize_local_service_roots(base_url):
         candidates.append(f"{base_url}/api")
 
     res = [c for c in dict.fromkeys(candidates) if c]
-    # Prioritize /api/v1 and /api roots over /v1 and raw base URL
+    # Prioritize /v1 root (most common OpenAI compatible local LLM root like LM Studio) over /api/v1 and /api
     res.sort(key=lambda x: (
-        0 if x.endswith("/api/v1") else
-        1 if x.endswith("/api") else
-        2 if x.endswith("/v1") else
+        0 if x.endswith("/v1") else
+        1 if x.endswith("/api/v1") else
+        2 if x.endswith("/api") else
         3
     ))
     return res
@@ -754,7 +789,9 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
     
     elif provider == "Local LLM (LM Studio / Ollama)":
         p_lower = prompt.lower()
-        if "category" in p_lower or "keyword" in p_lower:
+        if "extract" in p_lower or "document" in p_lower:
+            max_toks = 4096
+        elif "category" in p_lower or "keyword" in p_lower:
             max_toks = 128
         else:
             max_toks = 1024

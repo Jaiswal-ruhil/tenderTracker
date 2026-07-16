@@ -1052,7 +1052,13 @@ class TenderApp(tk.Tk, WorkersMixin):
         """Manually track a dialog window lifecycle for path tracking."""
         self.push_ui_path(path)
         def on_destroy(event):
-            if event.widget == dialog:
+            widget = event.widget
+            if isinstance(widget, str):
+                try:
+                    widget = self.nametowidget(widget)
+                except KeyError:
+                    pass
+            if widget == dialog:
                 self.pop_ui_path()
         dialog.bind("<Destroy>", on_destroy)
 
@@ -1071,6 +1077,12 @@ class TenderApp(tk.Tk, WorkersMixin):
     def _resolve_widget_path(self, widget):
         if not widget:
             return ""
+        if isinstance(widget, str):
+            try:
+                widget = self.nametowidget(widget)
+            except KeyError:
+                return ""
+                
         if hasattr(widget, "ui_path"):
             return widget.ui_path
             
@@ -1080,6 +1092,12 @@ class TenderApp(tk.Tk, WorkersMixin):
             if curr == self:
                 break
                 
+            if isinstance(curr, str):
+                try:
+                    curr = self.nametowidget(curr)
+                except KeyError:
+                    break
+                    
             name = curr.winfo_name()
             if isinstance(curr, tk.Toplevel):
                 title_str = ""

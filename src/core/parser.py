@@ -91,7 +91,8 @@ def assign_tender_status(record):
 
 
 def split_blocks(text):
-    parts = re.split(r'(?=BID\s*(?:NO|Number)(?:\.|\b)\s*:)', text, flags=re.IGNORECASE)
+    # Split on BID NO labels OR bid number patterns at the start of lines
+    parts = re.split(r'(?=^\s*(?:BID\s*(?:NO|Number)(?:\.|\b)\s*:|GEM/\d{4}/[A-Z0-9]+/[\dXx]+))', text, flags=re.IGNORECASE | re.MULTILINE)
     return [p.strip() for p in parts if p.strip()]
 
 def merge_remarks(existing_remarks, new_remarks):
@@ -167,6 +168,10 @@ def parse_one(text, allow_llm=True):
         bid_no_match = re.search(r"(GEM/\d{4}/[A-Z0-9]+/[\dXx]+)", text, re.I)
         if bid_no_match:
             r["bid_no"] = bid_no_match.group(1).strip().upper()
+        else:
+            # Log warning when bid number cannot be extracted
+            import logger
+            logger.log_warn(f"Failed to extract bid number from text. First 200 chars: {text[:200]}")
 
     # Try to find a URL in the text if it wasn't matched above,
     # or construct it from the bid number ID.
@@ -183,6 +188,14 @@ def parse_one(text, allow_llm=True):
     if m: r["items"]=m.group(1).strip()
     m=re.search(r"Quantit[yi]\w*\s*:\s*(\S+)", text, re.I)
     if m: r["quantity"]=m.group(1).strip()
+    
+    # Log if critical fields are missing
+    if "bid_no" not in r:
+        import logger
+        logger.log_warn(f"Parsing result missing bid_no. Text preview: {text[:150]}")
+    if "items" not in r:
+        import logger
+        logger.log_warn(f"Parsing result missing items. Text preview: {text[:150]}")
 
     # Department parsing (handles both single-line and multi-line values)
     m = re.search(r"Department\s*(?:Name\s*(?:And\s*Address)?)?\s*:\s*(.+)", text, re.I)
