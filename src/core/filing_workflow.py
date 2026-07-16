@@ -865,6 +865,26 @@ Return ONLY a JSON object (no markdown, no backticks, no thinking block) with th
         self._generate_checklist(bid_no, tender_record)
         self._generate_summary(bid_no, tender_record)
         
+    def _verify_pdf_bid_no(self, pdf_path: str, expected_bid_no: str) -> bool:
+        """Verifies that the PDF file actually contains the expected bid number."""
+        if not pdf_path or not os.path.exists(pdf_path):
+            return False
+        try:
+            with open(pdf_path, 'rb') as f:
+                text = pdf_extractor.extract_text(f.read())
+            if not text:
+                return False
+            clean_text = " ".join(text.split()).lower()
+            clean_bid = expected_bid_no.strip().lower()
+            normalized_bid = clean_bid.replace("/", "").replace("_", "")
+            normalized_text = clean_text.replace("/", "").replace("_", "")
+            if clean_bid in clean_text or normalized_bid in normalized_text:
+                return True
+            return False
+        except Exception:
+            # Fallback to True to avoid false negatives on unreadable PDFs
+            return True
+
     def _ensure_tender_pdf(self, tender_record: Dict) -> Optional[str]:
         """
         Ensure tender PDF is available locally.
@@ -882,8 +902,15 @@ Return ONLY a JSON object (no markdown, no backticks, no thinking block) with th
         
         # Check if PDF already exists locally
         if existing_pdf and os.path.exists(existing_pdf):
-            self._log('info', f'Using existing PDF: {existing_pdf}')
-            return existing_pdf
+            if self._verify_pdf_bid_no(existing_pdf, bid_no):
+                self._log('info', f'Using existing PDF: {existing_pdf}')
+                return existing_pdf
+            else:
+                self._log('warn', f'Existing PDF {existing_pdf} does not match expected bid {bid_no}. Deleting and re-downloading.')
+                try:
+                    os.remove(existing_pdf)
+                except Exception:
+                    pass
         
         # Download PDF
         self._log('info', f'Downloading PDF for {bid_no}...')
@@ -899,19 +926,38 @@ Return ONLY a JSON object (no markdown, no backticks, no thinking block) with th
         try:
             # Try to download using bid_url first
             if bid_url:
-                pdf_path = scraper.download_tender_pdf(
-                    bid_url, 
-                    download_dir, 
-                    log_fn=self._log, 
-                    headless=True
-                )
-                if pdf_path:
-                    # Update tender record with PDF path
-                    db.upsert_tender_field(bid_no, 'pdf_path', pdf_path)
-                    return pdf_path
+                # Bypass constructed fallback URL
+                is_fallback_url = False
+                id_m = re.search(r"([\dXx]+)$", bid_no)
+                if id_m:
+                    suffix = id_m.group(1)
+                    if bid_url.rstrip("/").endswith(f"showbidDocument/{suffix}"):
+                        is_fallback_url = True
+                
+                if is_fallback_url:
+                    self._log('info', f'Bypassing constructed fallback URL for {bid_no}')
+                else:
+                    self._log('info', f'Attempting download using URL: {bid_url}')
+                    pdf_path = scraper.download_tender_pdf(
+                        bid_url, 
+                        download_dir, 
+                        log_fn=self._log, 
+                        headless=True
+                    )
+                    if pdf_path:
+                        if self._verify_pdf_bid_no(pdf_path, bid_no):
+                            db.upsert_tender_field(bid_no, 'pdf_path', pdf_path)
+                            return pdf_path
+                        else:
+                            self._log('warn', f'Downloaded PDF from URL does not match {bid_no}. Deleting and trying search fallback.')
+                            try:
+                                os.remove(pdf_path)
+                            except Exception:
+                                pass
             
-            # Fallback to bid_no
+            # Fallback to bid_no search
             if bid_no:
+                self._log('info', f'Attempting search download for {bid_no}...')
                 pdf_path = scraper.download_tender_pdf(
                     bid_no, 
                     download_dir, 
@@ -919,8 +965,15 @@ Return ONLY a JSON object (no markdown, no backticks, no thinking block) with th
                     headless=True
                 )
                 if pdf_path:
-                    db.upsert_tender_field(bid_no, 'pdf_path', pdf_path)
-                    return pdf_path
+                    if self._verify_pdf_bid_no(pdf_path, bid_no):
+                        db.upsert_tender_field(bid_no, 'pdf_path', pdf_path)
+                        return pdf_path
+                    else:
+                        self._log('err', f'Downloaded PDF from search does not match {bid_no}. Deleting.')
+                        try:
+                            os.remove(pdf_path)
+                        except Exception:
+                            pass
                     
         except Exception as e:
             self._log('err', f'PDF download failed: {e}')
@@ -1152,11 +1205,13 @@ Return ONLY a JSON object (no markdown, no backticks, no thinking block) with th
             if provider == 'Local LLM (LM Studio / Ollama)':
                 self._local_llm_used = True
             
-            # Truncate text if too long
-            truncated_text = pdf_text[:10000] if len(pdf_text) > 10000 else pdf_text
+            # Keep input small — thinking models need tokens for reasoning + output.
+            # 4000 chars is enough to capture eligibility/document clauses near the
+            # top of the tender text without exhausting the token budget.
+            truncated_text = pdf_text[:4000] if len(pdf_text) > 4000 else pdf_text
             
             prompt = f"""Extract all document requirements from this tender document.
-Capture explicit documents and evidence implied by eligibility clauses. For example, if the tender requires a specified number of years of experience, turnover for specified financial years, or an identity/tax registration, return the supporting proof as a separate required document even if the clause does not use the word "certificate".
+Capture explicit documents and evidence implied by eligibility clauses. For example, if the tender requires experience, turnover, or a tax registration, return the supporting proof as a required document.
 
 Tender text:
 {truncated_text}
@@ -1165,7 +1220,7 @@ Return a JSON array of documents with this exact format:
 [
   {{
     "name": "Document Name",
-    "description": "Brief description of what is required",
+    "description": "Brief description",
     "category": "Financial|Legal|Technical",
     "required": true
   }}
@@ -1179,8 +1234,18 @@ Return ONLY the JSON array, no other text."""
                                         settings.get('llm_model', ''),
                                         response_json=True)
             
+            # Strip thinking/reasoning block if present before any JSON cleaning
+            if '</think>' in response_text:
+                response_text = response_text.split('</think>')[-1].strip()
+            
             cleaned_json = llm.clean_json_response(response_text)
-            parsed_docs = json.loads(cleaned_json)
+            
+            # Try normal parse first; fall back to partial-repair for truncated output
+            try:
+                parsed_docs = json.loads(cleaned_json)
+            except json.JSONDecodeError:
+                repaired = llm.repair_truncated_json_array(cleaned_json)
+                parsed_docs = json.loads(repaired)
             
             documents = []
             for doc in parsed_docs:
@@ -1199,6 +1264,7 @@ Return ONLY the JSON array, no other text."""
         except Exception as e:
             self._log('err', f'LLM document extraction failed: {e}')
             return []
+
     
     def _get_firm_documents(self, firm_name: str = None) -> Dict:
         """
@@ -1231,12 +1297,14 @@ Return ONLY the JSON array, no other text."""
     
     def _match_documents(self, firm_documents: Dict):
         """
-        Match required documents with available firm documents and COMMON folder files.
+        Match required documents with available firm documents, COMMON folder files,
+        and category-specific folder files.
         
         This method performs intelligent document matching using:
         1. Exact name matching between required and available documents
         2. Fuzzy matching based on document type keywords (GST, PAN, MSME, etc.)
         3. Integration with COMMON folder for shared firm documents
+        4. Integration with Category-specific folder under the firm base folder
         
         Args:
             firm_documents: Dictionary mapping document names to their file paths
@@ -1244,7 +1312,7 @@ Return ONLY the JSON array, no other text."""
         Side effects:
             - Populates self.matched_documents with successfully matched documents
             - Populates self.missing_documents with unmatched required documents
-            - Logs information about COMMON folder usage and matching results
+            - Logs information about COMMON and Category folder usage
         """
         self.matched_documents = {}
         self.missing_documents = []
@@ -1273,8 +1341,28 @@ Return ONLY the JSON array, no other text."""
             if common_documents:
                 self._log('info', f'Using {len(common_documents)} COMMON folder files for document matching')
         
-        # Merge firm documents and COMMON folder documents
-        all_documents = {**firm_documents, **common_documents}
+        # Add Category subfolder files to available documents
+        category_documents = {}
+        category = getattr(self, 'category', '')
+        if category and category != 'General':
+            base_folder = os.path.join(self.filing_folder, '..')
+            category_folder_path = ""
+            if os.path.exists(base_folder) and os.path.isdir(base_folder):
+                for item in os.listdir(base_folder):
+                    item_path = os.path.join(base_folder, item)
+                    if os.path.isdir(item_path) and item.lower() == category.lower():
+                        category_folder_path = item_path
+                        break
+            if category_folder_path and os.path.exists(category_folder_path) and os.path.isdir(category_folder_path):
+                for item in os.listdir(category_folder_path):
+                    item_path = os.path.join(category_folder_path, item)
+                    if os.path.isfile(item_path):
+                        category_documents[item] = item_path
+                if category_documents:
+                    self._log('info', f"Using {len(category_documents)} category-specific files from '{os.path.basename(category_folder_path)}' folder")
+        
+        # Merge firm documents, COMMON folder documents, and Category folder documents
+        all_documents = {**firm_documents, **common_documents, **category_documents}
         
         for req_doc in self.required_documents:
             req_name_lower = req_doc['name'].lower()
@@ -1285,7 +1373,12 @@ Return ONLY the JSON array, no other text."""
                 if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
                     doc_key_lower = doc_key.lower()
                     if req_name_lower in doc_key_lower or doc_key_lower in req_name_lower:
-                        source = 'COMMON' if doc_key in common_documents else doc_key
+                        if doc_key in common_documents:
+                            source = 'COMMON'
+                        elif doc_key in category_documents:
+                            source = f'Category ({category})'
+                        else:
+                            source = doc_key
                         self.matched_documents[req_doc['name']] = {
                             'path': doc_path,
                             'source': source,
@@ -1300,7 +1393,12 @@ Return ONLY the JSON array, no other text."""
                     if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
                         for map_type, keywords in type_mappings.items():
                             if any(kw in req_name_lower for kw in keywords) and map_type in doc_key.lower():
-                                source = 'COMMON' if doc_key in common_documents else doc_key
+                                if doc_key in common_documents:
+                                    source = 'COMMON'
+                                elif doc_key in category_documents:
+                                    source = f'Category ({category})'
+                                else:
+                                    source = doc_key
                                 self.matched_documents[req_doc['name']] = {
                                     'path': doc_path,
                                     'source': source,
