@@ -1204,32 +1204,53 @@ class TableTab(tk.Frame):
         firm_name = result_holder["firm_name"]
         selected_category = result_holder["category"]
         
+        # Persist selected category to the database
+        if selected_category:
+            tender_record["category"] = selected_category
+            db.upsert_tender_field(bid_no, "category", selected_category)
+            self.refresh_table_view()
+        
         from dialogs.loading_dialog import LoadingDialog
         
-        loading_dlg = None
+        def _on_filing_done(result, exception):
+            if exception:
+                messagebox.showerror("Filing Error", f"Filing process failed:\n{str(exception)}", parent=self.app)
+            elif result:
+                self.show_filing_result(result)
+
+        # Use a list cell so run_filing_task can reference loading_dlg before it is bound
+        dlg_ref = [None]
         
         def run_filing_task(progress_cb=None):
             def dialog_log(level, message, details=None):
                 self.app._log(level, message, details)
-                if loading_dlg and loading_dlg.winfo_exists():
-                    loading_dlg.append_checklist_item(level, message)
-                    
+                dlg = dlg_ref[0]
+                if dlg and dlg.winfo_exists():
+                    dlg.append_checklist_item(level, message)
             workflow = filing_workflow.FilingWorkflow(log_fn=dialog_log, progress_cb=progress_cb)
             return workflow.start_filing_process(tender_record, firm_name=firm_name, category=selected_category)
-            
+
         loading_dlg = LoadingDialog(
             self.app,
             title="Processing Filing",
             message=f"Running filing process for {bid_no}...\n(Downloading PDF, extracting required docs, copying firm files)",
-            task_fn=run_filing_task
+            task_fn=run_filing_task,
+            on_done=_on_filing_done,
+            steps=[
+                "Initialize filing process",
+                "Download & verify tender PDF",
+                "Setup folders & copy tender PDF",
+                "Scan PDF for embedded links",
+                "Extract & parse document text",
+                "Identify tender item category",
+                "Analyze required document list",
+                "Extract EMD & security requirements",
+                "Match required docs with firm records",
+                "Copy & validate matched documents",
+                "Generate reports & complete filing"
+            ]
         )
-        
-        self.app.wait_window(loading_dlg)
-        
-        if loading_dlg.exception:
-            messagebox.showerror("Filing Error", f"Filing process failed:\n{str(loading_dlg.exception)}", parent=self.app)
-        elif loading_dlg.result:
-            self.show_filing_result(loading_dlg.result)
+        dlg_ref[0] = loading_dlg
 
     def show_filing_result(self, result):
         if not result.get('success'):
