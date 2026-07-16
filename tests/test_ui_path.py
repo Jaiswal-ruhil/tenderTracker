@@ -70,3 +70,7 @@ class TestUIPathTracker(unittest.TestCase):
         child_btn = tk.Button(parent_frame, text="Submit")
         path = self.root._resolve_widget_path(child_btn)
         self.assertEqual(path, "TABLE_FRAME/BTN/SUBMIT")
+        
+        # 5. Test string widget path resolution (simulating event.widget as a string)
+        string_path = self.root._resolve_widget_path(str(child_btn))
+        self.assertEqual(string_path, "TABLE_FRAME/BTN/SUBMIT")

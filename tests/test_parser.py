@@ -47,6 +47,21 @@ class TestParser(unittest.TestCase):
         self.assertTrue(blocks[0].startswith("BID NO: GEM/2026/B/7526729"))
         self.assertTrue(blocks[1].startswith("Bid Number: GEM/2026/B/7490294"))
 
+    def test_split_blocks_with_bid_number_at_start(self):
+        # Test splitting when bid numbers appear at start without BID NO label
+        text = """
+GEM/2026/B/7690922  View Corrigendum/Representation
+Items: TEFCSquirl Cage Inductionmotor
+Quantity: 6
+Department Name And Address: 
+Cane Development (Ganna Vikas Vibhag) Department Uttar Pradesh
+Start Date: 24-06-2026 9:49 AM
+End Date:   16-07-2026 10:00 AM
+        """
+        blocks = parser.split_blocks(text)
+        self.assertEqual(len(blocks), 1)
+        self.assertTrue(blocks[0].startswith("GEM/2026/B/7690922"))
+
     def test_split_blocks_with_preface(self):
         text = """
         C:/Users/pc/Downloads/GeM-Bidding-7593328.pdf
@@ -316,6 +331,26 @@ class TestParser(unittest.TestCase):
         # 3. Test direct parsing with "Organization: Sugar Federation"
         r_direct = parser.parse_one("Organization: Sugar Federation")
         self.assertEqual(r_direct["organisation"], "Sugar Federation")
+
+    def test_parse_bid_number_at_start_without_label(self):
+        # Test parsing bid number that appears at start of text without "BID NO:" label
+        # This reproduces the issue with GEM/2026/B/7690922
+        text = """
+GEM/2026/B/7690922  View Corrigendum/Representation
+Items: TEFCSquirl Cage Inductionmotor
+Quantity: 6
+Department Name And Address: 
+Cane Development (Ganna Vikas Vibhag) Department Uttar Pradesh
+Start Date: 24-06-2026 9:49 AM
+End Date:   16-07-2026 10:00 AM
+        """
+        r = parser.parse_one(text)
+        self.assertEqual(r["bid_no"], "GEM/2026/B/7690922")
+        self.assertEqual(r["items"], "TEFCSquirl Cage Inductionmotor")
+        self.assertEqual(r["quantity"], "6")
+        self.assertTrue(r["dept"].startswith("Cane Development"))
+        self.assertEqual(r["start_date"], "24-06-2026 9:49 AM")
+        self.assertEqual(r["end_date"], "16-07-2026 10:00 AM")
 
 if __name__ == '__main__':
     unittest.main()

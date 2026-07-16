@@ -187,3 +187,72 @@ Bid Number: GEM/2026/B/12345
                 tender3 = {'bid_no': 'GEM/2026/B/7721923', 'bid_date': '2026-09-16', 'category': 'General'}
                 with self.assertRaises(ValueError):
                     workflow._create_filing_folder('GEM/2026/B/7721923', 'RK OXYGEN', tender3)
+
+    def test_ensure_tender_pdf_verifies_content_and_skips_fallback_url(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        
+        settings = {'pdf_save_folder': 'dummy_dir'}
+        tender = {
+            'bid_no': 'GEM/2026/B/7716157',
+            'bid_url': 'https://bidplus.gem.gov.in/showbidDocument/7716157',
+            'pdf_path': 'existing_wrong.pdf'
+        }
+        
+        with patch.object(filing_workflow.db, 'load_settings', return_value=settings), \
+             patch.object(filing_workflow.os, 'makedirs'), \
+             patch.object(filing_workflow.os.path, 'exists', side_effect=lambda p: p == 'existing_wrong.pdf' or p == 'downloaded.pdf'), \
+             patch.object(filing_workflow.os, 'remove') as mock_remove, \
+             patch.object(workflow, '_verify_pdf_bid_no', side_effect=lambda path, bid_no: path == 'downloaded.pdf'), \
+             patch.object(filing_workflow.scraper, 'download_tender_pdf', return_value='downloaded.pdf') as mock_download:
+             
+             path = workflow._ensure_tender_pdf(tender)
+             
+             # Verify it deleted the existing mismatched PDF
+             mock_remove.assert_any_call('existing_wrong.pdf')
+             
+             # Verify it bypassed the constructed fallback URL and searched by bid_no
+             mock_download.assert_called_once_with('GEM/2026/B/7716157', 'dummy_dir', log_fn=workflow._log, headless=True)
+             
+             self.assertEqual(path, 'downloaded.pdf')
+
+    def test_match_documents_includes_category_folder(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        workflow.category = "motor"
+        workflow.filing_folder = os.path.join("dummy_base", "filing_folder")
+        workflow.required_documents = [
+            {'name': 'Comparison Chart', 'category': 'Technical', 'required': True}
+        ]
+        
+        firm_docs = {
+            'gst': 'gst.pdf'
+        }
+        
+        expected_cat_folder = os.path.normpath(os.path.join("dummy_base", "MOTOR"))
+        expected_common_folder = os.path.normpath(os.path.join("dummy_base", "COMMON"))
+        
+        def mock_exists(p):
+            p_norm = os.path.normpath(p)
+            return p_norm in [os.path.normpath("dummy_base"), expected_cat_folder, expected_common_folder, 
+                              os.path.normpath(os.path.join(expected_cat_folder, 'Comparison chart MACER.pdf')),
+                              'gst.pdf']
+                              
+        def mock_listdir(p):
+            p_norm = os.path.normpath(p)
+            # Check for the case-insensitive item inside dummy_base
+            if p_norm == os.path.normpath("dummy_base"):
+                return ['MOTOR', 'COMMON']
+            if p_norm == expected_cat_folder:
+                return ['Comparison chart MACER.pdf']
+            return []
+            
+        with patch.object(filing_workflow.os.path, 'exists', side_effect=mock_exists), \
+             patch.object(filing_workflow.os.path, 'isdir', return_value=True), \
+             patch.object(filing_workflow.os, 'listdir', side_effect=mock_listdir), \
+             patch.object(filing_workflow.os.path, 'isfile', return_value=True):
+             
+             workflow._match_documents(firm_docs)
+             
+             self.assertIn('Comparison Chart', workflow.matched_documents)
+             matched_info = workflow.matched_documents['Comparison Chart']
+             self.assertEqual(matched_info['source'], 'Category (motor)')
+             self.assertEqual(os.path.normpath(matched_info['path']), os.path.normpath(os.path.join(expected_cat_folder, 'Comparison chart MACER.pdf')))

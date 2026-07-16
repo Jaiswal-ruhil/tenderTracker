@@ -91,5 +91,58 @@ class TestLLMAgent(unittest.TestCase):
         self.assertEqual(res.get("items"), "Slipring Motor")
         self.assertTrue(mock_exec_tool.called)
 
+    @patch("llm_agent._post_json")
+    def test_find_chat_url_skips_unexpected_endpoint_body(self, mock_post):
+        # First candidate (/v1/chat/completions) returns "Unexpected endpoint or method."
+        # Second candidate (/api/v1/chat/completions) returns "Unexpected endpoint."
+        # Third candidate (/chat/completions) succeeds with valid JSON
+        mock_post.side_effect = [
+            "Unexpected endpoint or method. (POST /v1/chat/completions)",
+            "Unexpected endpoint. (POST /api/v1/chat/completions)",
+            '{"choices": []}'
+        ]
+        url = llm_agent._find_chat_url("http://localhost:1234", {})
+        self.assertEqual(url, "http://localhost:1234/chat/completions")
+
+    @patch("llm._local_chat_request")
+    def test_call_llm_token_limits(self, mock_local_chat):
+        import llm
+        
+        # 1. Test document extraction prompt gets 2048 tokens
+        llm.call_llm(
+            prompt="Extract document requirements from this tender text...",
+            provider="Local LLM (LM Studio / Ollama)",
+            api_key="",
+            base_url="http://localhost:1234",
+            model="test-model"
+        )
+        mock_local_chat.assert_called_with(
+            "Extract document requirements from this tender text...",
+            "http://localhost:1234",
+            "test-model",
+            "",
+            False,
+            timeout=600,
+            max_tokens=4096
+        )
+        
+        # 2. Test category prompt gets 128 tokens
+        llm.call_llm(
+            prompt="Suggest keywords for item category...",
+            provider="Local LLM (LM Studio / Ollama)",
+            api_key="",
+            base_url="http://localhost:1234",
+            model="test-model"
+        )
+        mock_local_chat.assert_called_with(
+            "Suggest keywords for item category...",
+            "http://localhost:1234",
+            "test-model",
+            "",
+            False,
+            timeout=600,
+            max_tokens=128
+        )
+
 if __name__ == '__main__':
     unittest.main()
