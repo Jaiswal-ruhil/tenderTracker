@@ -87,3 +87,4 @@ setuptools==82.0.1
 
 # Testing
 pytest==9.1.1
+mongomock>=4.1.0

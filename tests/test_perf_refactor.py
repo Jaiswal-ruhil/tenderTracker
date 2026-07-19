@@ -16,31 +16,11 @@ import mcp_server
 
 class TestPerfRefactor(unittest.TestCase):
     def setUp(self):
-        # Setup temporary test database
-        self.old_db = db.DB_FILE
-        self.old_settings = db.SETTINGS_FILE
-        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_perf_refactor.db")
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_perf_refactor_settings.json")
-        
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-            
-        # Initialize test tables
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
         db.init_db_connection()
 
     def tearDown(self):
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.DB_FILE = self.old_db
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_clean_raw_text(self):
         raw_text = (

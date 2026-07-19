@@ -9,30 +9,18 @@ import parser
 
 class TestParser(unittest.TestCase):
     def setUp(self):
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
+        # Load test category mappings into MongoDB settings
         import db
-        import shutil
-        self.old_db = db.DB_FILE
-        self.old_settings = db.SETTINGS_FILE
-        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_parser_tenders_db.db")
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_parser_settings.json")
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        shutil.copy(os.path.join(os.path.dirname(__file__), "test_settings.json"), db.SETTINGS_FILE)
+        import json
+        settings_path = os.path.join(os.path.dirname(__file__), "test_settings.json")
+        with open(settings_path, "r", encoding="utf-8") as f:
+            test_settings = json.load(f)
+        for key, val in test_settings.items():
+            db.save_setting(key, val)
 
     def tearDown(self):
-        import db
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.DB_FILE = self.old_db
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_split_blocks(self):
         text = """

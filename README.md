@@ -7,7 +7,7 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 ### Key Features
 
 * **Sleek Custom Desktop UI**: Modern dark-themed dashboard with HSL panels, interactive data tables (Treeview), styled progress meters, and dynamic action logs (featuring Table, Calendar, Analytics, and Kanban Board Views).
-* **Hybrid SQL + Vector DB Search**: SQLite metadata combined with an in-memory FAISS vector index, allowing real-time semantic query searches across tenders (e.g., finding relevant bids based on conceptual descriptions). Also powers the **Semantic RAG (Retrieval-Augmented Generation) engine** to retrieve and supply the LLM with highly relevant, historically verified few-shot examples during parsing and category mapping.
+* **Hybrid DB + Vector DB Search**: MongoDB metadata combined with an in-memory FAISS vector index, allowing real-time semantic query searches across tenders (e.g., finding relevant bids based on conceptual descriptions). Also powers the **Semantic RAG (Retrieval-Augmented Generation) engine** to retrieve and supply the LLM with highly relevant, historically verified few-shot examples during parsing and category mapping.
 * **Interactive Human Comments & RAG Feedback Loop**: Allows users to attach custom notes/guidelines to any tender. Comments are automatically appended to the tender's semantic embedding text (to improve vector query matching) and supplied in few-shot LLM examples, enabling the AI to learn directly from past human corrections. Additionally, the app features an **Active Learning Subsystem** that scans comments (e.g. `this should map organization to X`), automatically updates database fields, and registers global keyword-to-value mapping rules to settings.
 * **Automated Filing Process Progress Bar**: Displays a beautiful step-by-step progress bar and real-time status message in the loading dialog as it runs through the 10 stages of the tender filing workflow (PDF downloading, text parsing, AI document matching, copy validation, etc.).
 * **Dynamic GeM Portal Requirements Extraction**: Automatically extracts the list of expected bidder documents directly from the "Document required from seller" section of the main tender PDF (using regex and local LLM fallbacks), replacing the hardcoded requirements list in the filing complete dialog.
@@ -15,8 +15,8 @@ A modular, high-performance desktop application built in Python (Tkinter) to par
 * **Local LLM Auto-Loading & Async Reasoning**: Auto-loads local models on-demand in LM Studio (`/api/v1/models/load`) or pulls models in Ollama (`/api/pull`) when needed, running asynchronous evaluations using pooled HTTP connections.
 * **Deterministic Parsing & Cleaning Layer**: Removed all LLM fallbacks from the extraction phase. A strictly Python-based regex and string cleaning layer strips page headers, footers, navigation, and GeM boilerplate to maximize parsing speed and accuracy.
 * **Structured JSON Output & Pydantic Validation**: All LLM reasoning and classification outputs are forced to match a strict JSON schema and validated in-app using Pydantic models.
-* **Zero-Duplicate LLM Response Caching**: Computes a stable SHA-256 hash of each tender metadata object. Cached classifications are retrieved instantly from the SQLite cache table, preventing redundant local LLM calls.
-* **SQLite Database Backend**: Self-healing SQLite3 database (`tenders_db.db`) using the optimized `"bids"` table, classifications metadata, products lists, and profile tables with indices on unique fields (`bid_no`, `dept`, `category`, `end_date`).
+* **Zero-Duplicate LLM Response Caching**: Computes a stable SHA-256 hash of each tender metadata object. Cached classifications are retrieved instantly from the MongoDB cache collection, preventing redundant local LLM calls.
+* **MongoDB Database Backend**: Resilient MongoDB database using the optimized `"bids"` collection, classifications metadata, products lists, and profile settings with indexes on unique fields (`bid_no`, `dept`, `category`, `end_date`).
 * **Concurrent Ingestion Engine**: Parallel pipelines using `ThreadPoolExecutor` and async task batching (max 10 bids concurrently using `asyncio.gather`) to optimize performance on local AMD/Intel/Radeon hardware.
 * **Advanced Logical Rules Filter**: Advanced boolean matching (`AND`, `OR`, `NOT` grouping with parentheses) and regular expressions prefixed with `rx:` to refine "Want" alerts.
 * **Custom Toast Alerts**: Border-accented bottom-right notifications that fade out smoothly via alpha blending when new matching tenders are parsed or when crawls complete.
@@ -45,7 +45,7 @@ Returns structured markdown string"]
     end
 
     subgraph Database Check & Caching
-        F_Check{Is in SQLite Don't Wants?}
+        F_Check{Is in MongoDB Don't Wants?}
         F_Check -->|Yes| G[Skip / Ignore]
         F_Check -->|No| H{Has full details?}
         H -->|Yes| I[Use parsed details]
@@ -65,7 +65,7 @@ Returns structured markdown string"]
     end
 
     subgraph Storage & Filtering
-        N & Q --> R[Upsert to SQLite Database]
+        N & Q --> R[Upsert to MongoDB Database]
         R --> S[Apply Advanced Filter Rules]
         S --> T{Matches 'Wants'?}
         T -->|Yes| U[Trigger Custom Match Toast Notification]
@@ -101,7 +101,7 @@ sequenceDiagram
     participant Parser as parser.py
     participant LLM as llm.py (HTTP client)
     participant LMS as LM Studio REST API
-    participant DB as SQLite (tenders_db.db)
+    participant DB as MongoDB
 
     UI->>FS: Scan Downloads + PDF folder for un-evaluated PDFs
     FS-->>UI: List of PDF files
@@ -140,7 +140,7 @@ sequenceDiagram
 | 4. Deterministic parse | `parser.parse_one()` | Regex patterns extract `bid_no`, `est_value`, `end_date`, etc. without any LLM call |
 | 5. LLM fallback (if needed) | `llm.llm_parse_tender()` | Only invoked when regex fails to find a valid Bid Number. Sends the markdown text as a chat message directly to LM Studio via `HTTP POST /v1/chat/completions` |
 | 6. Model auto-load | `llm._auto_load_local_model_impl()` | Before the first call, checks `/v1/models`; if not loaded, tries `POST /api/v1/models/load` with up to 3 body variants (400 errors are caught and retried) |
-| 7. Upsert to DB | `db.upsert_tender()` | Fuzzy org-name unification, value-mapping rules applied, then saved to SQLite |
+| 7. Upsert to DB | `db.upsert_tender()` | Fuzzy org-name unification, value-mapping rules applied, then saved to MongoDB |
 | 8. UI refresh | `gui_table_tab.py` | Treeview reloaded; toast shown if tender matches Want rules |
 
 > **Note:** LM Studio is called by the app's own `llm.py` HTTP client, **not** via the MCP server.
@@ -201,7 +201,7 @@ Detailed workflow definitions are stored inside the [n8n/workflows/](file:///d:/
 
 1. **[Automated Tender Monitoring](file:///d:/tenderTracker/n8n/workflows/automated_tender_monitoring.json)**:
    * **Trigger**: Runs on a schedule (e.g. every 2 hours).
-   * **Function**: Scrapes new tenders, uses the *Analysis MCP* to parse and classify, matches products with confidence scores, filters out low confidence or irrelevant entries, and saves high-relevance alerts to the SQLite Catalog, while sending notifications to Slack and Email.
+   * **Function**: Scrapes new tenders, uses the *Analysis MCP* to parse and classify, matches products with confidence scores, filters out low confidence or irrelevant entries, and saves high-relevance alerts to the MongoDB Catalog, while sending notifications to Slack and Email.
 2. **[Batch Processing Workflow](file:///d:/tenderTracker/n8n/workflows/batch_processing.json)**:
    * **Trigger**: Manual trigger or folder drop.
    * **Function**: Parallelizes processing of files in batches of 10. Automatically performs AI-driven parsing, classification, document requirement generation, and product matching, then exports a finalized Excel sheet.
@@ -253,7 +253,8 @@ tenderTracker/
 ├── src/                        # Application source modules
 │   ├── core/                   # Core business logic and database models
 │   │   ├── config.py           # Theme styles, fonts, and Treeview layout
-│   │   ├── db.py               # SQLite database mapping and settings management
+│   │   ├── db.py               # MongoDB database shim
+│   │   ├── mongo_db.py         # MongoDB database mapping and settings management
 │   │   ├── excel.py            # Financial year and Excel workbook helpers
 │   │   ├── geocode.py          # Location lookup helpers
 │   │   ├── llm.py              # LLM connectivity, auto-loading, and RAG logic

@@ -80,6 +80,8 @@ def elapsed_since(start: float) -> str:
 # ── File logger setup ─────────────────────────────────────────────────────────
 def get_log_file_path(db_path):
     """Derive log file path from database path."""
+    if db_path.startswith("mongodb://") or db_path.startswith("mongodb+srv://"):
+        return "tenders_db.log"
     if db_path.lower().endswith(".db"):
         return db_path[:-3] + ".log"
     return db_path + ".log"

@@ -8,19 +8,9 @@ import unittest
 import db
 import parser
 
-TEST_DB_FILE = os.path.join(os.path.dirname(__file__), "test_tenders_db.db")
-TEST_SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "temp_test_settings_val.json")
-
 class TestValueMappings(unittest.TestCase):
     def setUp(self):
-        # Override the database file path and settings file to test files
-        db.DB_FILE = TEST_DB_FILE
-        db.SETTINGS_FILE = TEST_SETTINGS_FILE
-        if os.path.exists(TEST_DB_FILE):
-            os.remove(TEST_DB_FILE)
-        if os.path.exists(TEST_SETTINGS_FILE):
-            os.remove(TEST_SETTINGS_FILE)
-            
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
         # Configure sample mappings
         self.sample_mappings = [
             {
@@ -42,10 +32,7 @@ class TestValueMappings(unittest.TestCase):
         db.save_setting("value_mappings", self.sample_mappings)
 
     def tearDown(self):
-        if os.path.exists(TEST_DB_FILE):
-            os.remove(TEST_DB_FILE)
-        if os.path.exists(TEST_SETTINGS_FILE):
-            os.remove(TEST_SETTINGS_FILE)
+        pass
 
     def test_apply_value_mappings_direct(self):
         # 1. Test Location mapping with tilhar

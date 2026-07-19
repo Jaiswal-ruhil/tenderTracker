@@ -19,6 +19,10 @@ if os.path.exists(venv_python):
 # Add src and src/core to sys.path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "core"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "mcp"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "core", "parsers"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "core", "ai"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src", "core", "workflow"))
 
 SERVER_MODULES = {
     "legacy": "mcp_server",

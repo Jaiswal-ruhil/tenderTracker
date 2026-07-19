@@ -457,7 +457,7 @@ class WorkersMixin:
                     for r in recs:
                         self.after(0, lambda r_item=r: self._add_single_row_immediate(r_item, stats))
 
-                # Step 4: Save final structured data to SQLite database
+                # Step 4: Save final structured data to MongoDB database
                 if recs:
                     try:
                         db.upsert_tenders(recs)

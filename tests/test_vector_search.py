@@ -13,26 +13,11 @@ import vector_search
 
 class TestVectorSearch(unittest.TestCase):
     def setUp(self):
-        self.old_db = db.DB_FILE
-        self.old_settings = db.SETTINGS_FILE
-        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_vector_tenders_db.db")
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_vector_settings.json")
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
+        pass
 
     def tearDown(self):
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.DB_FILE = self.old_db
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_get_tender_embedding_text(self):
         rec = {

@@ -14,7 +14,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 a = Analysis(
     ['main.py'],
-    pathex=['src', 'src/core', 'src/gui'],
+    pathex=['src', 'src/core', 'src/gui', 'src/core/parsers', 'src/core/ai', 'src/core/workflow', 'src/mcp'],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,

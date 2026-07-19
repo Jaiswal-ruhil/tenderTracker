@@ -1,46 +1,53 @@
 """
 GEM Tender Logger — Desktop UI Launcher (v4)
---------------------------------------
-This file serves as the main entry point to run the GEM Tender Logger application.
-The application has been modularized into config, parser, scraper, excel, and gui modules.
+--------------------------------------------
+MongoDB (Docker) is the only supported data backend.
 
-Requirements:
-    pip install openpyxl selenium webdriver-manager
-    Google Chrome must be installed
+Start MongoDB:
+    docker compose up -d
 
-Run:
+Run the app:
     python main.py
 """
 
 import os
 import sys
+import tkinter as tk
+from tkinter import messagebox
 
-# Ensure src and its subdirectories are in python path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core'))
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'parsers'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'ai'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'workflow'))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'mcp'))
 
-# ─── MongoDB Backend Injection ──────────────────────────────────────────────────
-# If MongoDB (Docker) is reachable, register mongo_db as the 'db' module
-# so every `import db` anywhere in the codebase gets MongoDB functions.
-# Falls back to SQLite silently if Docker is not running.
-# To force SQLite: set TENDERTRACKER_USE_SQLITE=1 in environment.
-# ─────────────────────────────────────────────────────────────────────────────
-if not os.environ.get('TENDERTRACKER_USE_SQLITE'):
-    try:
-        import mongo_db as _mongo_db_mod
-        if _mongo_db_mod.is_mongo_available():
-            sys.modules['db'] = _mongo_db_mod
-            print("[TenderTracker] MongoDB backend active (docker compose up -d)")
-        else:
-            print("[TenderTracker] MongoDB not reachable — using SQLite. Start with: docker compose up -d")
-    except Exception as _e:
-        print(f"[TenderTracker] MongoDB unavailable ({_e}) — using SQLite.")
+# ─── MongoDB connectivity check ────────────────────────────────────────────────
+# db.py is now a pure MongoDB shim — no SQLite fallback.
+# If MongoDB is unreachable we show an error dialog and exit cleanly.
+# ──────────────────────────────────────────────────────────────────────────────
+import db  # noqa: E402  (path must be set first)
 
-from app_gui import TenderApp
+if not db.is_mongo_available():
+    _root = tk.Tk()
+    _root.withdraw()
+    messagebox.showerror(
+        "MongoDB Not Available",
+        "TenderTracker requires MongoDB (Docker).\n\n"
+        "Start the container and try again:\n\n"
+        "    docker compose up -d\n\n"
+        "Then relaunch the application.",
+    )
+    _root.destroy()
+    sys.exit(1)
+
+print("[TenderTracker] MongoDB backend active.")
+
+from app_gui import TenderApp  # noqa: E402
 
 if __name__ == "__main__":
-    # Enable high-DPI awareness on Windows for a crisper UI and more screen real estate
+    # Enable high-DPI awareness on Windows for a crisper UI
     try:
         import ctypes
         ctypes.windll.shcore.SetProcessDpiAwareness(1)

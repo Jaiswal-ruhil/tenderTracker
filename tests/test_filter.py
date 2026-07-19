@@ -19,19 +19,10 @@ class TestFilterLogic(unittest.TestCase):
         from components.calendar_tab import CalendarTab
         self.app.calendar_tab = object.__new__(CalendarTab)
         self.app.calendar_tab.app = self.app
-        import db
-        self.old_settings = db.SETTINGS_FILE
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_filter_settings.json")
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
 
     def tearDown(self):
-        import db
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_filter_wants_empty_rules(self):
         # When rules are empty, all tenders should be Wants (True)

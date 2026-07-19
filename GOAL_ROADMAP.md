@@ -54,7 +54,7 @@ graph TD
 - **2.2 PDF Parsing and Information Extraction**
   - Extract structured parameters (consignee details, technical criteria, standard terms) from downloaded PDFs using advanced text parsing and LLM chunk analysis.
 - **2.3 Database Enrichment**
-  - Automatically save all extracted data to the SQLite database and update the vector index for semantic search.
+  - Automatically save all extracted data to the MongoDB database and update the vector index for semantic search.
 
 ### 📁 Phase 3: Tender-Specific Document Accumulation (Current Phase)
 *Given a target tender, extract the required compliance documents list and organize files.*

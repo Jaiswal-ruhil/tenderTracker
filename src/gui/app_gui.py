@@ -2,9 +2,14 @@ import os
 import sys
 
 # Ensure core and gui folders are in python path for direct execution
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "core"))
-sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "gui"))
+src_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, src_dir)
+sys.path.insert(0, os.path.join(src_dir, "core"))
+sys.path.insert(0, os.path.join(src_dir, "gui"))
+sys.path.insert(0, os.path.join(src_dir, "core", "parsers"))
+sys.path.insert(0, os.path.join(src_dir, "core", "ai"))
+sys.path.insert(0, os.path.join(src_dir, "core", "workflow"))
+sys.path.insert(0, os.path.join(src_dir, "mcp"))
 
 import time
 import threading
@@ -1063,12 +1068,25 @@ class TenderApp(tk.Tk, WorkersMixin):
         dialog.bind("<Destroy>", on_destroy)
 
     def _on_focus_in(self, event):
+        # Dialog internals (frames, canvases, scrollbars, etc.) are not useful
+        # navigation destinations.  Tracking them exposes Tkinter widget names
+        # in the main-window breadcrumb instead of a meaningful user location.
+        try:
+            if event.widget.winfo_toplevel() is not self:
+                return
+        except (AttributeError, tk.TclError):
+            return
         path = self._resolve_widget_path(event.widget)
         if path:
             self.current_focus_path = path
             self._draw_ui_path()
 
     def _on_button_click(self, event):
+        try:
+            if event.widget.winfo_toplevel() is not self:
+                return
+        except (AttributeError, tk.TclError):
+            return
         path = self._resolve_widget_path(event.widget)
         if path:
             self.current_focus_path = path
@@ -1153,6 +1171,5 @@ class TenderApp(tk.Tk, WorkersMixin):
             
         parts.reverse()
         return "/".join(p for p in parts if p)
-
 
 

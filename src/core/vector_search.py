@@ -28,6 +28,9 @@ _faiss_index = None
 _bid_nos = []
 _dimension = None
 
+_embedder_running = False
+_embedder_running_lock = threading.Lock()
+
 def get_tender_embedding_text(rec):
     """
     Constructs a unified text description of a tender to generate its vector embedding.
@@ -63,7 +66,7 @@ def rebuild_vector_index():
                 _bid_nos = []
                 _dimension = None
                 return False
-            tenders = db.load_all_tenders()
+            tenders = db.load_all_tenders(include_embeddings=True)
             # Filter for tenders that have a valid embedding float list
             embedded_tenders = [t for t in tenders if t.get("embedding") and isinstance(t["embedding"], list)]
             
@@ -171,12 +174,26 @@ def start_background_embedding_worker(callback_fn=None):
     Spawns a background thread to generate embeddings for all tenders in SQLite
     that lack them, caching the results to SQLite. Rebuilds index when done.
     """
+    global _embedder_running
+    with _embedder_running_lock:
+        if _embedder_running:
+            logger.log("info", "Background Embedder: Worker thread is already active. Skipping duplicate spawn.")
+            return
+        
+        # 1. Early exit if no vector backend is available to save resources
+        if not _has_faiss and not _has_annoy:
+            logger.log("info", "Background Embedder: No vector backend (FAISS or Annoy) available. Early exit.")
+            return
+
+        _embedder_running = True
+
     def worker():
+        global _embedder_running
         try:
-            # 1. Initial index build from already cached embeddings
+            # 2. Initial index build from already cached embeddings
             rebuild_vector_index()
             
-            # 2. Check if LLM is enabled
+            # 3. Check if LLM is enabled
             settings = db.load_settings()
             provider = settings.get("llm_provider", "Disabled")
             embed_model = settings.get("llm_embedding_model", "nomic-embed-text")
@@ -187,8 +204,8 @@ def start_background_embedding_worker(callback_fn=None):
             base_url = settings.get("llm_base_url", "")
             model = settings.get("llm_model", "")
             
-            # 3. Find tenders missing embeddings
-            tenders = db.load_all_tenders()
+            # 4. Find tenders missing embeddings (use include_embeddings=True to check cached ones)
+            tenders = db.load_all_tenders(include_embeddings=True)
             missing = [t for t in tenders if not t.get("embedding")]
             if not missing:
                 return
@@ -245,5 +262,8 @@ def start_background_embedding_worker(callback_fn=None):
                     callback_fn()
         except Exception as e:
             logger.log("err", f"Background Embedder worker failed: {e}")
+        finally:
+            with _embedder_running_lock:
+                _embedder_running = False
             
     threading.Thread(target=worker, daemon=True).start()

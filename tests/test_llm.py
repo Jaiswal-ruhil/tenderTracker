@@ -15,22 +15,14 @@ import db
 
 class TestLLM(unittest.TestCase):
     def setUp(self):
-        # Save old DB/settings paths to restore after tests
-        self.old_db = db.DB_FILE
-        self.old_settings = db.SETTINGS_FILE
-        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_llm_tenders_db.db")
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_llm_settings.json")
-        
-        # Clear any existing test settings/db files
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-            
-        import shutil
-        shutil.copy(os.path.join(os.path.dirname(__file__), "test_settings.json"), db.SETTINGS_FILE)
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
+        # Load test category mappings into MongoDB settings
+        import json
+        settings_path = os.path.join(os.path.dirname(__file__), "test_settings.json")
+        with open(settings_path, "r", encoding="utf-8") as f:
+            test_settings = json.load(f)
+        for key, val in test_settings.items():
+            db.save_setting(key, val)
 
         # Reset LLM module cache state for isolated tests
         llm._loaded_local_models.clear()
@@ -40,14 +32,7 @@ class TestLLM(unittest.TestCase):
             llm._failed_local_embedding_services.clear()
 
     def tearDown(self):
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.DB_FILE = self.old_db
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_clean_json_response(self):
         # Test cleaning clean JSON

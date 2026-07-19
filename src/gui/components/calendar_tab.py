@@ -218,6 +218,25 @@ class CalendarTab(tk.Frame):
             self.app._log("err", f"Calendar generation error: {e}")
             return
 
+        # Precompute wants status and pre-parse dates for all records to eliminate O(Days * Tenders) slow-down
+        wants_records = []
+        for r in self.app._records:
+            if self.app.table_tab.get_tender_status(r, inc_kws, exc_kws, settings=settings):
+                sd = self._parse_date_str(r.get("start_date", ""))
+                ed = self._parse_date_str(r.get("end_date", ""))
+                op = self._parse_date_str(r.get("bid_opening", ""))
+                wants_records.append((r, sd, ed, op))
+
+        # Map dates to their events
+        date_events_map = {}
+        for r, sd, ed, op in wants_records:
+            if sd:
+                date_events_map.setdefault(sd, []).append(("start", r))
+            if ed:
+                date_events_map.setdefault(ed, []).append(("end", r))
+            if op:
+                date_events_map.setdefault(op, []).append(("opening", r))
+
         for r_idx, week in enumerate(weeks, 1):
             for c_idx, dt in enumerate(week):
                 is_curr = (dt.month == self.app.cal_month and dt.year == self.app.cal_year)
@@ -239,7 +258,7 @@ class CalendarTab(tk.Frame):
                                    bg=card_bg, fg=text_color)
                 num_lbl.pack(anchor="ne", padx=6, pady=3)
                 
-                events = self.get_events_for_date(dt, inc_kws, exc_kws)
+                events = date_events_map.get(dt, [])
                 
                 for evt in events[:2]:
                     evt_type, r = evt

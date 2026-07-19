@@ -45,7 +45,7 @@ class DashboardTab(tk.Frame):
         tk.Label(top_bar, text="Sugarmill Tender Status Matrix", font=("Segoe UI", 12, "bold"), bg=PANEL, fg=TEXT).pack(side="left")
         
         # Info text
-        info_lbl = tk.Label(top_bar, text=" (SQLite Database Live Feed) ", font=("Segoe UI", 9, "italic"), bg=PANEL, fg=MUTED)
+        info_lbl = tk.Label(top_bar, text=" (MongoDB Live Feed) ", font=("Segoe UI", 9, "italic"), bg=PANEL, fg=MUTED)
         info_lbl.pack(side="left", padx=10)
         
         # Refresh Button
@@ -112,7 +112,7 @@ class DashboardTab(tk.Frame):
         self.canvas.bind("<Leave>", _unbind_mw)
         
     def load_data(self):
-        self.app._set_status("Loading dashboard from SQLite...", ACCENT2)
+        self.app._set_status("Loading dashboard from MongoDB...", ACCENT2)
         try:
             records = self.app._records
             
@@ -169,7 +169,7 @@ class DashboardTab(tk.Frame):
                 
             self.matrix_data = matrix_data
             self._render_grid()
-            self.app._set_status("Dashboard loaded from SQLite", SUCCESS)
+            self.app._set_status("Dashboard loaded from MongoDB", SUCCESS)
         except Exception as e:
             self._render_empty_grid(f"Error loading dashboard: {e}")
             self.app._log("err", f"Dashboard load failed: {e}")

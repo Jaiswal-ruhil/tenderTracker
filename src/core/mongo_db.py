@@ -156,6 +156,8 @@ def _doc_to_dict(doc: dict) -> dict:
     if doc is None:
         return {}
     d = {k: v for k, v in doc.items() if k != "_id"}
+    if "bid_no" not in d and "_id" in doc:
+        d["bid_no"] = doc["_id"]
     # Deserialize tags if somehow stored as string
     if isinstance(d.get("tags"), str):
         try:
@@ -178,11 +180,12 @@ def _dict_to_doc(d: dict) -> dict:
     return doc
 
 
-def load_all_tenders(limit=None, offset=0) -> list:
+def load_all_tenders(limit=None, offset=0, include_embeddings=False) -> list:
     """Load tenders from MongoDB with optional pagination."""
     try:
         _, mdb = get_mongo_client()
-        cursor = mdb["bids"].find({}, {"embedding": 0})  # exclude heavy embedding
+        projection = {} if include_embeddings else {"embedding": 0}
+        cursor = mdb["bids"].find({}, projection)
         cursor = cursor.skip(offset)
         if limit is not None:
             cursor = cursor.limit(limit)
@@ -194,13 +197,26 @@ def load_all_tenders(limit=None, offset=0) -> list:
 
 
 def save_all_tenders(records: list) -> bool:
-    """Replace ALL tender documents (used for bulk import)."""
+    """Replace ALL tender documents while preserving un-rendered fields like embeddings."""
     try:
         _, mdb = get_mongo_client()
         col = mdb["bids"]
-        col.delete_many({})
-        if records:
-            col.insert_many([_dict_to_doc(r) for r in records], ordered=False)
+        
+        # Get all new bid_nos to identify deleted ones
+        new_bid_nos = [r.get("bid_no") for r in records if r.get("bid_no")]
+        
+        # Delete any tenders that are no longer in the records list
+        col.delete_many({"_id": {"$nin": new_bid_nos}})
+        
+        for r in records:
+            bid_no = r.get("bid_no")
+            if not bid_no:
+                continue
+            doc = _dict_to_doc(r)
+            # Remove _id so we don't try to change it in $set
+            doc.pop("_id", None)
+            col.update_one({"_id": bid_no}, {"$set": doc}, upsert=True)
+            
         return True
     except Exception as e:
         import logger
@@ -214,6 +230,8 @@ def upsert_tender(record: dict) -> list:
     if not bid_no:
         return load_all_tenders()
     try:
+        record = unify_organization_names(record)
+        record = apply_value_mappings(record)
         _, mdb = get_mongo_client()
         col = mdb["bids"]
         existing = col.find_one({"_id": bid_no})
@@ -248,6 +266,8 @@ def upsert_tenders(new_records: list) -> list:
             bid_no = record.get("bid_no")
             if not bid_no:
                 continue
+            record = unify_organization_names(record)
+            record = apply_value_mappings(record)
             existing = col.find_one({"_id": bid_no}, {"filing_status": 1})
             update_fields = {}
             for k, v in record.items():
@@ -405,6 +425,46 @@ def get_bid_competitors(bid_no: str) -> list:
         return []
 
 
+# ─── Products ─────────────────────────────────────────────────────────────────
+
+def _product_doc_to_dict(d: dict) -> dict:
+    if not d:
+        return {}
+    d = dict(d)
+    if "_id" in d:
+        d["product_id"] = d.pop("_id")
+    return d
+
+
+def load_all_products() -> list:
+    """Load all company products from MongoDB."""
+    try:
+        _, mdb = get_mongo_client()
+        cursor = mdb["products"].find({})
+        return [_product_doc_to_dict(doc) for doc in cursor]
+    except Exception as e:
+        import logger
+        logger.log_err(f"mongo load_all_products error: {e}")
+        return []
+
+
+def save_product(prod: dict) -> bool:
+    """Insert or replace a company product in MongoDB."""
+    product_id = prod.get("product_id")
+    if not product_id:
+        return False
+    try:
+        _, mdb = get_mongo_client()
+        doc = dict(prod)
+        doc["_id"] = product_id
+        mdb["products"].replace_one({"_id": product_id}, doc, upsert=True)
+        return True
+    except Exception as e:
+        import logger
+        logger.log_err(f"mongo save_product error for {product_id}: {e}")
+        return False
+
+
 # ─── Cache ────────────────────────────────────────────────────────────────────
 
 def get_cached_classification(cache_key: str) -> Optional[dict]:
@@ -467,8 +527,8 @@ def text_search_tenders(query: str, limit: int = 50) -> list:
                 {"score": {"$meta": "textScore"}, "embedding": 0},
             ).sort([("score", {"$meta": "textScore"})]).limit(limit)
             return [_doc_to_dict(doc) for doc in cursor]
-        except PyMongoError:
-            # Fallback: simple regex
+        except Exception:
+            # Fallback: simple regex (e.g. under mongomock or if text index is missing)
             pattern = {"$regex": query, "$options": "i"}
             cursor = mdb["bids"].find(
                 {"$or": [
@@ -548,9 +608,204 @@ def init_db_connection():
         pass
 
 
+def apply_value_mappings(record: dict) -> dict:
+    """
+    Applies custom user field mapping rules (e.g. mapping phrases to keys for specific headers)
+    to a tender record.
+    """
+    settings = load_settings()
+    mappings = settings.get("value_mappings", [])
+    if not mappings:
+        return record
+
+    def normalize_whitespace(s):
+        if not s:
+            return ""
+        return " ".join(str(s).split()).lower()
+
+    for rule in mappings:
+        field = rule.get("field")
+        phrase = rule.get("phrase")
+        key = rule.get("key")
+        
+        if field and phrase and key and field in record:
+            val = record[field]
+            if val and str(val).strip():
+                if normalize_whitespace(phrase) in normalize_whitespace(val):
+                    record[field] = key
+                    
+    return record
+
+
 def apply_active_learning_from_comments():
-    """No-op stub — active learning is handled at parse time."""
-    pass
+    """
+    Scans all tender records in the database for comment instructions
+    (e.g., 'this should map organization to X') and automatically
+    updates the record and adds global value mapping rules to settings.
+    """
+    import re
+    import logger
+    try:
+        _, mdb = get_mongo_client()
+        col = mdb["bids"]
+        # Find all bids with a non-empty comments field
+        cursor = col.find({"comments": {"$exists": True, "$ne": ""}})
+        
+        settings_changed = False
+        settings = load_settings()
+        mappings = settings.get("value_mappings", [])
+        
+        for doc in cursor:
+            bid_no = doc.get("_id")
+            comment = doc.get("comments", "")
+            dept = doc.get("dept", "")
+            organisation = doc.get("organisation", "")
+            category = doc.get("category", "")
+            
+            match = re.search(
+                r'(?:thi[s]?\s+)?shoud?\s+map\s+(organisation|organization|dept|department|category|location|office|ministry)\s+(?:to\s+)?(.+)',
+                comment,
+                re.IGNORECASE
+            )
+            if match:
+                field_type = match.group(1).lower()
+                target_value = match.group(2).strip()
+                
+                field = "organisation" if field_type in ("organisation", "organization") else "dept" if field_type in ("dept", "department") else field_type
+                
+                # Check if database already matches the target value
+                if doc.get(field) != target_value:
+                    col.update_one(
+                        {"_id": bid_no},
+                        {"$set": {field: target_value}, "$unset": {"embedding": ""}}
+                    )
+                    logger.log_ok(f"Active Learning: Updated bid {bid_no} field {field} to '{target_value}' based on comment.")
+                
+                # Extract trigger phrase from comment
+                phrase = None
+                for line in comment.split("\n"):
+                    line_clean = line.strip()
+                    if "Sahkari Chini" in line_clean or "Mills Ltd" in line_clean or "Mill" in line_clean:
+                        for kw in ["Sahkari Chini Mills Ltd.", "Sahkari Chini Mills Ltd", "Sahkari Chini Mills", "Kisan Sahkari Chini Mills"]:
+                            if kw.lower() in line_clean.lower():
+                                phrase = kw
+                                break
+                        if not phrase:
+                            phrase = line_clean
+                            phrase = re.sub(r'^[0-9\s,]+', '', phrase).strip()
+                        break
+                if not phrase:
+                    phrase = dept or organisation or category
+                
+                if phrase:
+                    # Add mapping rule if not present
+                    exists = False
+                    for rule in mappings:
+                        if rule.get("field") == field and rule.get("phrase") == phrase and rule.get("key") == target_value:
+                            exists = True
+                            break
+                    if not exists:
+                        mappings.append({
+                            "field": field,
+                            "phrase": phrase,
+                            "key": target_value
+                        })
+                        settings_changed = True
+                        logger.log_ok(f"Active Learning: Extracted keyword mapping '{phrase}' -> '{target_value}' for field '{field}' from comments.")
+                        
+        if settings_changed:
+            save_setting("value_mappings", mappings)
+            
+    except Exception as e:
+        import logger
+        logger.log_err(f"Active learning from comments failed: {e}")
+
+
+def get_distinctive_keywords(s):
+    import re
+    if not s:
+        return set()
+    words = re.findall(r'\b[a-z]{4,}\b', s.lower())
+    NOISE = {
+        'ltd', 'limited', 'cooperative', 'sahkari', 'chini', 'mill', 'mills',
+        'factory', 'corporation', 'state', 'unit', 'district', 'distt',
+        'ganna', 'vikas', 'nigam', 'sahakari', 'sahakaree', 'cheeni', 'kissan',
+        'kisan', 'operative', 'sugar', 'factories', 'federation', 'private',
+        'pvt', 'gases', 'solutions', 'flux', 'weld', 'welding', 'alloys',
+        'systems', 'technologies', 'india', 'officer', 'consignee', 'reporting',
+        'address', 'delivery'
+    }
+    return {w for w in words if w not in NOISE}
+
+
+def unify_value(val, existing_list):
+    import difflib
+    if not val or not str(val).strip():
+        return val
+        
+    val_clean = str(val).strip()
+    
+    # 1. Direct close matches (high threshold)
+    matches = difflib.get_close_matches(val_clean, existing_list, n=1, cutoff=0.75)
+    if matches:
+        return matches[0]
+        
+    # 2. Distinctive keyword overlap matching
+    kw_val = get_distinctive_keywords(val_clean)
+    if not kw_val:
+        return val_clean
+        
+    best_match = None
+    best_ratio = 0.0
+    for exist_val in existing_list:
+        kw_exist = get_distinctive_keywords(exist_val)
+        if kw_val.intersection(kw_exist):
+            ratio = difflib.SequenceMatcher(None, val_clean.lower(), exist_val.lower()).ratio()
+            if ratio > best_ratio:
+                best_ratio = ratio
+                best_match = exist_val
+                
+    if best_match and best_ratio >= 0.4:
+        return best_match
+        
+    return val_clean
+
+
+def unify_organization_names(record: dict) -> dict:
+    """
+    Fuzzy standardizes organization, department, and ministry fields of the record
+    against already existing entries in the database.
+    """
+    try:
+        _, mdb = get_mongo_client()
+        col = mdb["bids"]
+        
+        # Unify Ministry
+        val_min = record.get("ministry")
+        if val_min and str(val_min).strip():
+            existing_mins = [m for m in col.distinct("ministry") if m and m != val_min]
+            record["ministry"] = unify_value(val_min, existing_mins)
+                
+        # Unify Dept
+        val_dept = record.get("dept")
+        if val_dept and str(val_dept).strip():
+            existing_depts = [d for d in col.distinct("dept") if d and d != val_dept]
+            record["dept"] = unify_value(val_dept, existing_depts)
+
+        # Unify Organisation
+        val_org = record.get("organisation")
+        if val_org and str(val_org).strip():
+            existing_orgs = [o for o in col.distinct("organisation") if o and o != val_org]
+            record["organisation"] = unify_value(val_org, existing_orgs)
+
+        # Unify Location
+        val_loc = record.get("location")
+        if val_loc and str(val_loc).strip():
+            existing_locs = [l for l in col.distinct("location") if l and l != val_loc]
+            record["location"] = unify_value(val_loc, existing_locs)
+    except Exception:
+        pass
+    return record
 
 
 def auto_assign_matrix_fields(rec: dict):

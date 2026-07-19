@@ -11,32 +11,11 @@ import suitability
 
 class TestSuitability(unittest.TestCase):
     def setUp(self):
-        # Save old settings
-        self.old_db = db.DB_FILE
-        self.old_settings = db.SETTINGS_FILE
-        db.DB_FILE = os.path.join(os.path.dirname(__file__), "test_suitability_tenders_db.db")
-        db.SETTINGS_FILE = os.path.join(os.path.dirname(__file__), "test_suitability_settings.json")
-        
-        # Clear files
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-
-        db.init_db_path()
+        # Isolation is handled by conftest.py (mongomock fresh instance per test)
         db.init_db_connection()
 
     def tearDown(self):
-        if os.path.exists(db.DB_FILE):
-            try: os.remove(db.DB_FILE)
-            except: pass
-        if os.path.exists(db.SETTINGS_FILE):
-            try: os.remove(db.SETTINGS_FILE)
-            except: pass
-        db.DB_FILE = self.old_db
-        db.SETTINGS_FILE = self.old_settings
+        pass
 
     def test_default_profile(self):
         profile = db.get_company_profile()

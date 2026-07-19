@@ -11,32 +11,28 @@ def run_tests():
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core'))
     sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'gui'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'parsers'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'ai'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'core', 'workflow'))
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src', 'mcp'))
     
-    loader = unittest.TestLoader()
-    suite = loader.discover(start_dir='tests')
-    
-    # Skip tests that require selenium/scraper as they can hang during build
-    # Also skip known failing parser tests
-    from unittest import TestSuite
-    filtered_suite = TestSuite()
-    for test_group in suite:
-        for test in test_group:
-            test_name = str(test)
-            # Skip selenium-dependent tests that can hang
-            if 'scrape_bid_page' in test_name or 'selenium' in test_name.lower():
-                print(f"  [SKIP] Skipping potentially hanging test: {test_name}")
-                continue
-            # Skip known failing parser tests (category mapping differences)
-            if 'test_additional_categories' in test_name or 'test_category_mapping_and_splitting' in test_name:
-                print(f"  [SKIP] Skipping known failing test: {test_name}")
-                continue
-            filtered_suite.addTest(test)
-    
-    runner = unittest.TextTestRunner(verbosity=2)
-    result = runner.run(filtered_suite)
-    
-    if not result.wasSuccessful():
-        print("\n[FAIL] UNIT TESTS FAILED. Aborting build.")
+    # Check if pytest is available
+    try:
+        import pytest
+    except ImportError:
+        print("[FAIL] pytest is required to run tests. Please install it first.")
+        sys.exit(1)
+        
+    filter_expr = "not scrape_bid_page and not selenium and not test_additional_categories and not test_category_mapping_and_splitting"
+    print(f"Running pytest with filter: {filter_expr}")
+    try:
+        subprocess.run([
+            sys.executable, "-m", "pytest",
+            "-k", filter_expr,
+            "tests/"
+        ], check=True)
+    except subprocess.CalledProcessError as e:
+        print(f"\n[FAIL] UNIT TESTS FAILED: {e}. Aborting build.")
         sys.exit(1)
     print("\n[SUCCESS] All unit tests passed successfully!")
 
@@ -44,7 +40,7 @@ def check_imports():
     print("\n=========================================")
     print("CHECKING DEPENDENCIES...")
     print("=========================================")
-    required_mods = ["openpyxl", "selenium", "webdriver_manager", "pypdf", "sqlite3", "faiss", "numpy"]
+    required_mods = ["openpyxl", "selenium", "webdriver_manager", "pypdf", "pymongo", "faiss", "numpy"]
     missing = []
     for mod in required_mods:
         try:
