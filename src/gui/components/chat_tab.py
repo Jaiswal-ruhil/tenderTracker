@@ -19,7 +19,9 @@ import llm
 SYSTEM_PROMPT = (
     "You are Ruhil, a helpful, intelligent agentic AI assistant for the GeM Tender Tracker application. "
     "You help users analyze government tenders, understand compliance requirements, suggest categories, draft document templates, "
-    "and answer questions about bids in their database. Be concise, professional, and friendly. Always refer to yourself as Ruhil."
+    "and answer questions about bids in their database. Be concise, professional, and friendly. Always refer to yourself as Ruhil. "
+    "If the user asks to see your thinking process, what you are doing, or how you arrive at an answer, you MUST start your response "
+    "by explaining your step-by-step reasoning inside a `<think>` block (e.g. `<think>\n[your reasoning step-by-step here]\n</think>\n[your final answer here]`)."
 )
 
 class ChatTab(tk.Frame):
@@ -243,6 +245,7 @@ class ChatTab(tk.Frame):
                 # Update UI in main thread
                 self.after(0, lambda: self._add_message("Ruhil", response))
             except Exception as e:
-                self.after(0, lambda: self._add_message("Ruhil", f"❌ Error querying AI agent: {e}"))
+                err_msg = str(e)
+                self.after(0, lambda: self._add_message("Ruhil", f"❌ Error querying AI agent: {err_msg}"))
                 
         threading.Thread(target=run_query, daemon=True).start()
