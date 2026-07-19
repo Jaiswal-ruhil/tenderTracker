@@ -820,7 +820,22 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         try:
             err_body = e.read().decode("utf-8")
             logger.log("err", f"LLM API HTTP Error {e.code}: {err_body}")
+            
+            # Try to parse as JSON and extract clean error message
+            try:
+                err_json = json.loads(err_body)
+                if isinstance(err_json, dict) and "error" in err_json:
+                    err_detail = err_json["error"]
+                    if isinstance(err_detail, dict) and "message" in err_detail:
+                        raise ValueError(f"API Error ({e.code}): {err_detail['message']}")
+            except ValueError as val_err:
+                raise val_err
+            except Exception:
+                pass
+                
             raise ValueError(f"API Error ({e.code}): {err_body[:200]}")
+        except ValueError as val_err:
+            raise val_err
         except Exception:
             raise ValueError(f"HTTP Error {e.code}: {e.reason}")
     except Exception as e:
