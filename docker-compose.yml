@@ -15,6 +15,16 @@ services:
       timeout: 5s
       retries: 5
 
+  stirling-pdf:
+    image: stirlingtools/stirling-pdf:latest
+    container_name: tendertracker_pdf
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - DOCKER_ENABLE_SECURITY=false
+      - SYSTEM_DEFAULT_LOCALE=en_US
+
 volumes:
   mongo_data:
     driver: local
