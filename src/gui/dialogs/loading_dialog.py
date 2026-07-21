@@ -22,15 +22,15 @@ class LoadingDialog(tk.Toplevel):
         screen_w = parent.winfo_screenwidth() if hasattr(parent, 'winfo_screenwidth') else 1920
         screen_h = parent.winfo_screenheight() if hasattr(parent, 'winfo_screenheight') else 1080
         if steps:
-            w = min(640, max(520, screen_w - 40))
-            h = min(740, max(560, screen_h - 60))
+            w = min(920, max(720, screen_w - 40))
+            h = min(860, max(680, screen_h - 40))
         else:
-            w = min(560, max(460, screen_w - 40))
-            h = min(520, max(400, screen_h - 60))
+            w = min(720, max(540, screen_w - 40))
+            h = min(640, max(480, screen_h - 40))
         x = parent.winfo_rootx() + (parent.winfo_width() - w) // 2
         y = parent.winfo_rooty() + (parent.winfo_height() - h) // 2
         self.geometry(f"{w}x{h}+{max(0, x)}+{max(0, y)}")
-        self.minsize(500, 440)
+        self.minsize(680, 520)
         
         # Disable close button
         self.protocol("WM_DELETE_WINDOW", lambda: None)
@@ -82,19 +82,19 @@ class LoadingDialog(tk.Toplevel):
                 })
 
             # 1. Logs console packed FIRST at bottom so it is never squished or hidden
-            log_outer = tk.Frame(frame, bg=BG, highlightthickness=1, highlightbackground="#30363D", padx=6, pady=6)
-            log_outer.pack(fill="x", side="bottom", pady=(6, 0))
+            log_outer = tk.Frame(frame, bg=BG, highlightthickness=1, highlightbackground="#30363D", padx=8, pady=8)
+            log_outer.pack(fill="both", expand=True, side="bottom", pady=(6, 0))
             
             # Header frame with Step Filter & Copy button
             log_hdr_fr = tk.Frame(log_outer, bg=BG)
-            log_hdr_fr.pack(fill="x", pady=(0, 2))
+            log_hdr_fr.pack(fill="x", pady=(0, 4))
             
-            tk.Label(log_hdr_fr, text="Detailed Logs", font=("Segoe UI", 8, "bold"), bg=BG, fg=TEXTSUB).pack(side="left")
+            tk.Label(log_hdr_fr, text="Detailed Logs Console", font=("Segoe UI", 9, "bold"), bg=BG, fg=TEXTSUB).pack(side="left")
 
             # Step filter dropdown
             self.step_filter_var = tk.StringVar(value="All Steps")
             step_options = ["All Steps"] + [f"Step {i+1}: {s[:25]}..." if len(s)>25 else f"Step {i+1}: {s}" for i, s in enumerate(steps)]
-            step_combo = ttk.Combobox(log_hdr_fr, textvariable=self.step_filter_var, values=step_options, font=("Segoe UI", 7), width=22, state="readonly")
+            step_combo = ttk.Combobox(log_hdr_fr, textvariable=self.step_filter_var, values=step_options, font=("Segoe UI", 8), width=24, state="readonly")
             step_combo.pack(side="left", padx=(10, 0))
 
             def _on_step_filter_change(e=None):
@@ -113,18 +113,19 @@ class LoadingDialog(tk.Toplevel):
                 log_hdr_fr, 
                 text="Copy Logs", 
                 command=copy_logs, 
-                font=("Segoe UI", 7, "bold"), 
+                font=("Segoe UI", 8, "bold"), 
                 bg=CARD, 
                 fg=TEXTSUB, 
                 relief="flat", 
                 activebackground=PANEL, 
                 activeforeground=TEXT,
-                padx=6,
-                pady=1
+                padx=8,
+                pady=2,
+                cursor="hand2"
             )
             btn_copy.pack(side="right")
             
-            self.chk_txt = tk.Text(log_outer, bg=BG, fg=TEXT, font=("Consolas", 8), wrap="word", relief="flat", highlightthickness=0, height=5)
+            self.chk_txt = tk.Text(log_outer, bg=BG, fg=TEXT, font=("Consolas", 9), wrap="word", relief="flat", highlightthickness=0, height=8)
             self.chk_txt.pack(side="left", fill="both", expand=True)
             
             scroll = ttk.Scrollbar(log_outer, orient="vertical", command=self.chk_txt.yview)
@@ -529,19 +530,19 @@ class LoadingDialog(tk.Toplevel):
             clean_detail = running_detail.strip()
             clean_detail = re.sub(r'^\[[A-Za-z0-9_]+\]\s*', '', clean_detail)
             clean_detail = re.sub(r'^(Step \d+:)?\s*', '', clean_detail).strip()
-            if len(clean_detail) > 35:
-                clean_detail = clean_detail[:32] + "..."
+            if len(clean_detail) > 65:
+                clean_detail = clean_detail[:62] + "..."
         
         if status == "warn" and clean_reason:
-            display_text = f"{orig_text} (Warning: {clean_reason})"
+            display_text = f"{orig_text}\n   ↳ Warning: {clean_reason}"
         elif status == "err" and clean_reason:
-            display_text = f"{orig_text} (Error: {clean_reason})"
+            display_text = f"{orig_text}\n   ↳ Error: {clean_reason}"
         elif status == "running" and clean_detail:
-            display_text = f"{orig_text} ({clean_detail})"
+            display_text = f"{orig_text}\n   ↳ {clean_detail}"
         else:
             display_text = orig_text
             
-        row["text"].configure(text=display_text)
+        row["text"].configure(text=display_text, wraplength=560)
         
         if status == "pending":
             row["icon"].configure(text="  ○  ", fg=MUTED)

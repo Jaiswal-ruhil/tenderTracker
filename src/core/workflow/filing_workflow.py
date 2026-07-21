@@ -440,19 +440,22 @@ class FilingWorkflow(DocumentMatcherMixin):
             self._log('ok', f"Identified category: {self.category}")
             
             # Step 7: Required Documents Extraction with source file mapping
-            if self.progress_cb:
-                self.progress_cb(72, "Step 7: Extracting required document list...")
-            self._log('info', 'Extracting required documents from all documents...')
-            raw_documents = []
-            # Extract requirements from main tender PDF text
+            all_files_to_analyze = []
             if main_pdf_text:
-                main_docs = self._extract_required_documents(main_pdf_text)
-                for doc in main_docs:
-                    doc['source_file'] = 'Tender_Document.pdf'
-                    raw_documents.append(doc)
+                all_files_to_analyze.append(('Tender_Document.pdf', main_pdf_text))
+            for fn, txt in add_files_text.items():
+                all_files_to_analyze.append((fn, txt))
 
-            # Extract requirements from additional files
-            for filename, f_text in add_files_text.items():
+            total_files_count = len(all_files_to_analyze)
+            if self.progress_cb:
+                self.progress_cb(72, f"Step 7: Analyzing document requirements ({total_files_count} file(s) total)...")
+            self._log('info', f'Extracting required documents across {total_files_count} file(s)...')
+            
+            raw_documents = []
+            for file_idx, (filename, f_text) in enumerate(all_files_to_analyze, 1):
+                if self.progress_cb:
+                    self.progress_cb(72, f"Step 7: Analyzing specs (File {file_idx}/{total_files_count}: {filename})...")
+                self._log('info', f"Analyzing file {file_idx}/{total_files_count}: '{filename}' for document requirements...")
                 file_docs = self._extract_required_documents(f_text)
                 for doc in file_docs:
                     doc['source_file'] = filename

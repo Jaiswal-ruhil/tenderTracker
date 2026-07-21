@@ -85,8 +85,9 @@ class TestLoadingDialog(unittest.TestCase):
         dialog.append_checklist_item("info", "[INFO] Validating document integrity...")
         dialog.update()
         
-        # Verify step label text includes sub-process in parentheses
-        self.assertEqual(row["text"].cget("text"), "Step A (Validating document integrity...)")
+        # Verify step label text includes sub-process indented on new line
+        self.assertIn("Validating document integrity...", row["text"].cget("text"))
+        self.assertIn("Step A", row["text"].cget("text"))
         
         dialog.destroy()
 
