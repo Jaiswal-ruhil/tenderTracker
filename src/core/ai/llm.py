@@ -562,21 +562,53 @@ def _build_local_chat_body(style, model_name, prompt, response_json=False, max_t
         body = {
             "model": model_name,
             "input": prompt,
-            "temperature": 0.1,
+            "temperature": 0.0 if response_json else 0.1,
             "store": False,
         }
         if max_tokens:
             body["max_tokens"] = max_tokens
+        elif response_json:
+            body["max_tokens"] = 512
     else:
         body = {
             "model": model_name,
             "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.1,
+            "temperature": 0.0 if response_json else 0.1,
         }
-        if max_tokens:
+        if response_json:
+            body["response_format"] = {"type": "json_object"}
+            if not max_tokens:
+                body["max_tokens"] = 512
+        elif max_tokens:
             body["max_tokens"] = max_tokens
     return body
 
+
+
+def resolve_local_model_name(base_url: str, requested_model: str, api_key: str = None) -> str:
+    """Query /v1/models from local LLM server to find the exact model ID matching requested_model."""
+    if not requested_model or not str(requested_model).strip():
+        return requested_model or "local-model"
+    req_clean = str(requested_model).strip()
+
+    try:
+        response_text, _ = try_local_endpoint(base_url, ["v1/models", "models"], api_key, method="GET", timeout=5)
+        res_json = json.loads(response_text)
+        data = res_json.get("data", [])
+        if isinstance(data, list):
+            available_ids = [m.get("id") for m in data if isinstance(m, dict) and m.get("id")]
+            if req_clean in available_ids:
+                return req_clean
+            req_low = req_clean.lower()
+            for m_id in available_ids:
+                m_low = m_id.lower()
+                if req_low in m_low or m_low.endswith(req_low):
+                    logger.log("info", f"Auto-matched model name '{requested_model}' to LM Studio ID '{m_id}'")
+                    return m_id
+    except Exception:
+        pass
+
+    return req_clean
 
 
 def _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=600, max_tokens=None):
@@ -585,12 +617,14 @@ def _local_chat_request(prompt, base_url, model, api_key, response_json=False, t
     if base_url_key in _failed_local_service_urls:
         raise _failed_local_service_urls[base_url_key]
 
+    resolved_model = resolve_local_model_name(base_url, model, api_key)
+
     try:
-        auto_load_local_model(base_url, model, api_key)
+        auto_load_local_model(base_url, resolved_model, api_key)
     except Exception as e:
         logger.log("warn", f"Auto-loading model failed: {e}")
 
-    model_name = model.strip() if model else "local-model"
+    model_name = resolved_model.strip() if resolved_model else "local-model"
     cached = _chat_route_cache.get(base_url_key)
     if cached:
         body = _build_local_chat_body(cached["style"], model_name, prompt, response_json, max_tokens)
@@ -762,12 +796,13 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
         raise ValueError("LLM provider is disabled.")
 
     if provider == "Google AI Studio (Gemini)":
-        if not api_key:
-            raise ValueError("Google AI Studio API Key is required.")
+        clean_key = (api_key or "").strip()
+        if not clean_key or clean_key == "mock_key":
+            raise ValueError("Google Gemini API Key is not configured. Please enter a valid API key in Settings.")
         
         # Use provided model or default to gemini-1.5-flash
         model_name = model.strip() if model else "gemini-1.5-flash"
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={clean_key}"
         
         body = {
             "contents": [{
@@ -819,23 +854,25 @@ def call_llm(prompt, provider, api_key, base_url, model, response_json=False):
     except urllib.error.HTTPError as e:
         try:
             err_body = e.read().decode("utf-8")
-            logger.log("err", f"LLM API HTTP Error {e.code}: {err_body}")
-            
-            # Try to parse as JSON and extract clean error message
             try:
                 err_json = json.loads(err_body)
                 if isinstance(err_json, dict) and "error" in err_json:
                     err_detail = err_json["error"]
                     if isinstance(err_detail, dict) and "message" in err_detail:
-                        raise ValueError(f"API Error ({e.code}): {err_detail['message']}")
+                        msg = err_detail['message']
+                        if "API key not valid" in msg or "API_KEY_INVALID" in str(err_detail):
+                            raise ValueError("Google Gemini API Key is invalid. Please update your API Key in Settings.")
+                        raise ValueError(f"API Error ({e.code}): {msg}")
             except ValueError as val_err:
                 raise val_err
             except Exception:
                 pass
-                
+            logger.log("err", f"LLM API HTTP Error {e.code}: {err_body[:300]}")
             raise ValueError(f"API Error ({e.code}): {err_body[:200]}")
         except ValueError as val_err:
             raise val_err
+        except Exception as ex:
+            raise ValueError(f"LLM API Call failed: {ex}")
         except Exception:
             raise ValueError(f"HTTP Error {e.code}: {e.reason}")
     except Exception as e:

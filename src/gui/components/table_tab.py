@@ -1142,10 +1142,15 @@ class TableTab(tk.Frame):
         
         settings = db.load_settings()
         firms = settings.get("firms", [])
-        firm_options = ["Auto-detect matching firm"] + [f.get("name") for f in firms]
-        
+        firm_names = []
+        for f in firms:
+            fn = f.get("name", "").strip() if isinstance(f, dict) else str(f).strip()
+            if fn and fn not in firm_names:
+                firm_names.append(fn)
+        firm_options = ["Auto-detect matching firm"] + firm_names
+
         default_firm = tender_record.get("matched_firm", "")
-        if default_firm and default_firm in [f.get("name") for f in firms]:
+        if default_firm and default_firm in firm_names:
             selected_option = default_firm
         else:
             selected_option = "Auto-detect matching firm"

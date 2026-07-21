@@ -60,8 +60,7 @@ def create_server(port: int = 8102) -> FastMCP:
         if bid_obj.get("exp_years") not in (None, "", "N/A", "NA"):
             checklist.append(f"Verify experience evidence: {bid_obj['exp_years']} years")
         if bid_obj.get("mii") == "Yes":
-            checklist.append("Prepare Make in India declaration.")
-        checklist.append(f"Verify delivery feasibility: {bid_obj.get('location', 'N/A')}")
+            checklist.append(f"Verify delivery feasibility: {bid_obj.get('location', 'N/A')}")
         return {"bid_no": bid_obj.get("bid_no"), "checklist": checklist}
 
     @mcp.tool()
@@ -74,6 +73,10 @@ def create_server(port: int = 8102) -> FastMCP:
         category = bid_obj.get("category", "").lower()
         matches = []
         
+        # Instantiate workflow once outside the loop for fast execution
+        from filing_workflow import FilingWorkflow
+        workflow = FilingWorkflow()
+
         # Load products and perform AI-enhanced matching
         products = db.load_all_products()
         for product in products:
@@ -81,16 +84,14 @@ def create_server(port: int = 8102) -> FastMCP:
             description = product.get("description", "").lower()
             
             # Basic keyword matching
-            if name and (name in item_text or name in category or description in item_text):
+            if name and (name in item_text or name in category or (description and description in item_text)):
                 matches.append({
                     "product": product,
                     "match_type": "keyword",
-                    "confidence": 0.8
+                    "confidence": 0.85
                 })
-            else:
+            elif name and item_text:
                 # AI-enhanced similarity scoring
-                from filing_workflow import FilingWorkflow
-                workflow = FilingWorkflow()
                 similarity = workflow._calculate_similarity_score(name, item_text)
                 if similarity > 0.6:
                     matches.append({

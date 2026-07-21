@@ -14,12 +14,16 @@ class FilterRulesDialog(tk.Toplevel):
         self.grab_set()
         self.transient(parent)
         self.title("Filter & Refinement Rules")
-        self.configure(bg=BG)
-        self.resizable(False, False)
-        
-        x = parent.winfo_x() + (parent.winfo_width() - 550) // 2
-        y = parent.winfo_y() + (parent.winfo_height() - 680) // 2
-        self.geometry(f"550x680+{max(0, x)}+{max(0, y)}")
+        self.resizable(True, True)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        init_w = min(620, max(500, screen_w - 40))
+        init_h = min(740, max(520, screen_h - 60))
+        self.minsize(500, 480)
+
+        x = parent.winfo_x() + (parent.winfo_width() - init_w) // 2
+        y = parent.winfo_y() + (parent.winfo_height() - init_h) // 2
+        self.geometry(f"{init_w}x{init_h}+{max(0, x)}+{max(0, y)}")
         
         tk.Label(self, text="Keyword Refinement Rules", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 4))
         

@@ -79,6 +79,19 @@ class TestDb(unittest.TestCase):
         self.assertEqual(scanner_rec["items"], "Scanner")
         self.assertEqual(scanner_rec["location"], "Mumbai")
 
+    def test_ingest_tenders_batch(self):
+        batch_recs = [
+            {"bid_no": f"GEM/2026/B/BATCH-{i}", "items": f"Item {i}", "category": "General"}
+            for i in range(10)
+        ]
+        result = db.ingest_tenders_batch(batch_recs, batch_size=3)
+        self.assertEqual(result["total"], 10)
+        self.assertGreaterEqual(result["processed"], 10)
+
+        all_tenders = db.load_all_tenders()
+        batch_bids = [t for t in all_tenders if "BATCH" in t["bid_no"]]
+        self.assertEqual(len(batch_bids), 10)
+
     def test_delete_tenders(self):
         recs = [
             {"bid_no": "GEM/2026/B/7", "items": "Keyboard"},

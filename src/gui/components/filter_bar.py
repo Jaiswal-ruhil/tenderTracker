@@ -1,71 +1,103 @@
 """
+filter_bar.py
+~~~~~~~~~~~~~
 Filter bar component for tender table filtering.
-Provides search, view filters, and date filtering options.
+Provides search, view filters, status filters, date filtering, and quick reset.
 """
 
 import tkinter as tk
 from tkinter import ttk
 from datetime import datetime, timedelta
 
-from config import PANEL, CARD, ACCENT, ACCENT2, MUTED, TEXT
+from config import PANEL, CARD, ACCENT, ACCENT2, MUTED, TEXT, TEXTSUB, ERR
 from components.base_component import FilterComponent
 from components.date_picker_button import DateRangePicker
 
 
 class FilterBar(FilterComponent):
     """
-    Filter bar with search, view filters, and date filtering.
+    Filter bar with modern search, view filters, date filtering, and quick reset.
     """
     
     def __init__(self, parent, app, table_tab, **kwargs):
         self.table_tab = table_tab
+        self.date_from_var = tk.StringVar(value="")
+        self.date_to_var = tk.StringVar(value="")
         super().__init__(parent, app, bg=PANEL, padx=10, pady=6, 
                        highlightthickness=1, highlightbackground="#30363D", **kwargs)
     
     def _build_ui(self):
-        # Search box
-        self.add_search_box("Search:", width=22, callback=self._on_search_change)
+        # 1. Search Box with Clear Button
+        search_frame = tk.Frame(self, bg=PANEL)
+        search_frame.pack(side="left", padx=(0, 10))
+
+        tk.Label(search_frame, text="🔍 Search:", font=("Segoe UI", 9, "bold"), 
+                 bg=PANEL, fg=MUTED).pack(side="left", padx=(0, 4))
         
-        # Semantic Search Checkbox
+        var = tk.StringVar()
+        var.trace_add("write", lambda *args: self._on_search_change())
+        self.filter_vars['search'] = var
+
+        self.search_entry = tk.Entry(
+            search_frame, textvariable=var, bg=CARD, fg=TEXT,
+            insertbackground=TEXT, relief="flat", font=("Segoe UI", 9), width=22,
+            highlightthickness=1, highlightbackground="#30363D", highlightcolor=ACCENT2
+        )
+        self.search_entry.pack(side="left", padx=(0, 4))
+
+        # Clear search button
+        self.clear_btn = tk.Button(
+            search_frame, text="✖", font=("Segoe UI", 8, "bold"), bg=CARD, fg=MUTED,
+            activebackground="#21262D", activeforeground=ERR, bd=0, cursor="hand2",
+            command=lambda: var.set("")
+        )
+        self.clear_btn.pack(side="left")
+
+        # 2. Semantic Search Checkbox
         self.semantic_search_var = tk.BooleanVar(value=False)
         self.add_checkbox("Semantic Search", default=False, callback=self._on_search_change)
         
-        # View dropdown
+        # 3. View Filter Dropdown
         self.view_var = tk.StringVar(value="Wants (Matches)")
         self.add_dropdown("Filter:", 
                          ["All Tenders", "Wants (Matches)", "Don't Wants (Filtered)"],
-                         "Wants (Matches)", callback=self._on_view_change, width=20)
+                         "Wants (Matches)", callback=self._on_view_change, width=18)
         
-        # Visual separator
         self.add_separator()
         
-        # Status dropdown
+        # 4. Status Filter Dropdown
         self.status_view_var = tk.StringVar(value="All")
         self.add_dropdown("Status:",
                          ["All", "Not Filed", "Filed", "Evaluating", "Awarded"],
-                         "All", callback=self._on_status_change, width=15)
+                         "All", callback=self._on_status_change, width=12)
         
-        # Visual separator
         self.add_separator()
         
-        # Date filter type
+        # 5. Date Filter Controls
         self.date_filter_type_var = tk.StringVar(value="None")
         self.add_dropdown("Date Type:",
                          ["None", "End Date", "Bid Opening", "Start Date"],
-                         "None", callback=self._on_date_type_change, width=15)
+                         "None", callback=self._on_date_type_change, width=12)
         
-        # Date filter preset
         self.date_filter_preset_var = tk.StringVar(value="All Dates")
-        self.add_dropdown("Date Preset:",
+        self.add_dropdown("Preset:",
                          ["All Dates", "Today", "This Week", "This Month", "Next 7 Days", "Next 30 Days"],
-                         "All Dates", callback=self._on_date_preset_change, width=15)
+                         "All Dates", callback=self._on_date_preset_change, width=12)
         
         # Custom date range with date picker buttons
         self.date_range_picker = DateRangePicker(
             self, self.app, self.date_from_var, self.date_to_var,
             on_change=self._on_date_range_change
         )
-        self.date_range_picker.pack(side="left", padx=(8, 0))
+        self.date_range_picker.pack(side="left", padx=(6, 8))
+
+        # 6. Reset Filters Button
+        reset_btn = tk.Button(
+            self, text="🔄 Reset Filters", font=("Segoe UI", 8, "bold"),
+            bg="#21262D", fg=TEXTSUB, activebackground="#30363D", activeforeground=TEXT,
+            bd=0, padx=8, pady=3, cursor="hand2", command=self.reset_filters
+        )
+        reset_btn.pack(side="right", padx=(8, 0))
     
     def _on_search_change(self):
         """Handle search text change."""
@@ -142,6 +174,8 @@ class FilterBar(FilterComponent):
     def reset_filters(self):
         """Reset all filters to default values."""
         super().reset_filters()
+        if 'search' in self.filter_vars:
+            self.filter_vars['search'].set("")
         self.semantic_search_var.set(False)
         self.view_var.set("Wants (Matches)")
         self.status_view_var.set("All")
@@ -150,3 +184,5 @@ class FilterBar(FilterComponent):
         self.date_from_var.set("")
         self.date_to_var.set("")
         self._apply_date_preset()
+        if hasattr(self.table_tab, 'refresh_table_view'):
+            self.table_tab.refresh_table_view()

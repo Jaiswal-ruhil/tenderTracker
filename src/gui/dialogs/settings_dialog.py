@@ -23,19 +23,53 @@ class SettingsDialog(tk.Toplevel):
         self.configure(bg=BG)
         self.resizable(True, True)
         
-        window_height = 900
-        window_width = 1000
-        self.minsize(1000, 700)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        window_width = min(1040, max(750, screen_w - 40))
+        window_height = min(820, max(520, screen_h - 60))
+        self.minsize(740, 480)
 
         x = parent.winfo_x() + (parent.winfo_width() - window_width) // 2
         y = parent.winfo_y() + (parent.winfo_height() - window_height) // 2
         self.geometry(f"{window_width}x{window_height}+{max(0, x)}+{max(0, y)}")
 
-        # Title Label
-        tk.Label(self, text="Application Settings", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 10))
+        # Fixed Header
+        tk.Label(self, text="Application Settings", font=FT, bg=BG, fg=TEXT).pack(pady=(12, 4))
+
+        # Fixed Footer (Action Buttons)
+        btn_fr = tk.Frame(self, bg=PANEL, pady=10, padx=16, highlightthickness=1, highlightbackground="#30363D")
+        btn_fr.pack(fill="x", side="bottom")
+
+        # Scrollable Body Container
+        container = tk.Frame(self, bg=BG)
+        container.pack(fill="both", expand=True, padx=4, pady=4)
+
+        canvas = tk.Canvas(container, bg=BG, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(container, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+
+        scroll_content = tk.Frame(canvas, bg=BG)
+        scroll_win = canvas.create_window((0, 0), window=scroll_content, anchor="nw")
+
+        def _on_scroll_cfg(e):
+            canvas.configure(scrollregion=canvas.bbox("all"))
+        def _on_canvas_cfg(e):
+            canvas.itemconfig(scroll_win, width=e.width)
+
+        scroll_content.bind("<Configure>", _on_scroll_cfg)
+        canvas.bind("<Configure>", _on_canvas_cfg)
+
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        def _bind_mw(w):
+            w.bind("<MouseWheel>", lambda e: canvas.yview_scroll(int(-1 * (e.delta / 120)), "units"))
+            for ch in w.winfo_children():
+                _bind_mw(ch)
+        scroll_content.bind("<Map>", lambda e: _bind_mw(scroll_content))
 
         # DB Frame
-        db_frame = tk.Frame(self, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        db_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         db_frame.pack(fill="x", padx=15, pady=6)
         
         tk.Label(db_frame, text="Local Database Storage Location:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
@@ -56,7 +90,7 @@ class SettingsDialog(tk.Toplevel):
         self._btn(btn_db_row, "Clear Database", lambda: self._clear_db(self), bg=CARD, fg=ERR).pack(side="right")
 
         # Excel Frame
-        ex_frame = tk.Frame(self, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        ex_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         ex_frame.pack(fill="x", padx=15, pady=6)
         
         tk.Label(ex_frame, text="Excel Export Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
@@ -77,7 +111,7 @@ class SettingsDialog(tk.Toplevel):
         self._btn(ex_frame, "Change Folder...", run_ex_change, bg=CARD).pack(side="right")
 
         # Tender PDF Download Frame
-        pdf_frame = tk.Frame(self, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        pdf_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         pdf_frame.pack(fill="x", padx=15, pady=6)
 
         tk.Label(pdf_frame, text="Tender PDF Download Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
@@ -102,7 +136,7 @@ class SettingsDialog(tk.Toplevel):
         self._btn(pdf_frame, "Change Folder...", run_pdf_folder_change, bg=CARD).pack(anchor="w", pady=(4, 0))
 
         # Excel Pattern Frame
-        pat_frame = tk.Frame(self, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        pat_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         pat_frame.pack(fill="x", padx=15, pady=6)
         
         tk.Label(pat_frame, text="Excel Filename Pattern:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).pack(anchor="w")
@@ -120,7 +154,7 @@ class SettingsDialog(tk.Toplevel):
                  font=("Segoe UI", 8), bg=PANEL, fg=TEXTSUB).pack(anchor="w")
 
         # Options Frame
-        opt_frame = tk.Frame(self, bg=PANEL, padx=12, pady=8, highlightthickness=1, highlightbackground="#30363D")
+        opt_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=8, highlightthickness=1, highlightbackground="#30363D")
         opt_frame.pack(fill="x", padx=15, pady=6)
         
         headless_var = tk.BooleanVar(value=db.load_settings().get("selenium_headless", False))
@@ -131,7 +165,7 @@ class SettingsDialog(tk.Toplevel):
         chk.pack(anchor="w")
 
         # LLM Frame
-        llm_frame = tk.Frame(self, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
+        llm_frame = tk.Frame(scroll_content, bg=PANEL, padx=12, pady=10, highlightthickness=1, highlightbackground="#30363D")
         llm_frame.pack(fill="x", padx=15, pady=6)
         
         tk.Label(llm_frame, text="LLM Service Integration:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, columnspan=2, sticky="w", pady=(0, 6))
@@ -388,12 +422,8 @@ class SettingsDialog(tk.Toplevel):
             db.save_setting("llm_use_mapping", use_mapping_var.get())
             db.save_setting("llm_use_agent", use_agent_var.get())
             
-            self._log("info", "Settings saved successfully.")
-            self.destroy()
-            
-        btn_fr = tk.Frame(self, bg=BG)
-        btn_fr.pack(fill="x", side="bottom", pady=12)
-        self._btn(btn_fr, "  Close  ", save_and_close, bg=ACCENT2).pack(anchor="center")
+        self._btn(btn_fr, "  Save & Close Settings  ", save_and_close, bg=ACCENT2).pack(side="right", padx=8)
+        self._btn(btn_fr, "  Cancel  ", self.destroy, bg=CARD).pack(side="right")
         
         self.protocol("WM_DELETE_WINDOW", save_and_close)
 

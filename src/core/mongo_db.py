@@ -23,8 +23,12 @@ separate `settings` collection as { _id: key, value: ... } documents.
 
 import threading
 import json
+import os
+import sys
+import time
+import subprocess
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Callable
 
 try:
     import pymongo
@@ -36,9 +40,17 @@ except ImportError:
 
 # ─── Connection config ────────────────────────────────────────────────────────
 
-MONGO_URI      = "mongodb://localhost:27017/"
-MONGO_DB_NAME  = "tendertracker"
-CONNECT_TIMEOUT_MS = 3000
+MONGO_URI                  = os.getenv("MONGO_URI", "mongodb://localhost:27017/")
+MONGO_DB_NAME              = os.getenv("MONGO_DB_NAME", "tendertracker")
+CONNECT_TIMEOUT_MS         = int(os.getenv("MONGO_CONNECT_TIMEOUT_MS", "3000"))
+
+BIDS_COLLECTION            = os.getenv("MONGO_BIDS_COLLECTION", "bids")
+SETTINGS_COLLECTION        = os.getenv("MONGO_SETTINGS_COLLECTION", "settings")
+PRODUCTS_COLLECTION        = os.getenv("MONGO_PRODUCTS_COLLECTION", "products")
+CACHE_COLLECTION           = os.getenv("MONGO_CACHE_COLLECTION", "cache")
+CLASSIFICATIONS_COLLECTION = os.getenv("MONGO_CLASSIFICATIONS_COLLECTION", "classifications")
+
+INGEST_BATCH_SIZE          = int(os.getenv("MONGO_INGEST_BATCH_SIZE", "500"))
 
 _client: Optional["MongoClient"] = None
 _db_handle = None
@@ -49,37 +61,139 @@ _connected = False
 def get_mongo_client():
     """Return a cached MongoClient, creating it on first call."""
     global _client, _db_handle, _connected
-    if _client is not None:
-        return _client, _db_handle
+    if _client is not None and _connected:
+        try:
+            _client.admin.command("ping")
+            return _client, _db_handle
+        except Exception:
+            _client = None
+            _db_handle = None
+            _connected = False
+
     if not HAS_PYMONGO:
         raise RuntimeError("pymongo is not installed. Run: pip install pymongo")
     with _lock:
-        if _client is None:
-            _client = MongoClient(
-                MONGO_URI,
-                serverSelectionTimeoutMS=CONNECT_TIMEOUT_MS,
-                connectTimeoutMS=CONNECT_TIMEOUT_MS,
-            )
-            # Ping to verify connection
-            _client.admin.command("ping")
-            _db_handle = _client[MONGO_DB_NAME]
-            _init_collections(_db_handle)
-            _connected = True
+        if _client is None or not _connected:
+            try:
+                client = MongoClient(
+                    MONGO_URI,
+                    serverSelectionTimeoutMS=CONNECT_TIMEOUT_MS,
+                    connectTimeoutMS=CONNECT_TIMEOUT_MS,
+                )
+                client.admin.command("ping")
+                db_h = client[MONGO_DB_NAME]
+                _init_collections(db_h)
+                _client = client
+                _db_handle = db_h
+                _connected = True
+            except Exception:
+                _client = None
+                _db_handle = None
+                _connected = False
+                raise
     return _client, _db_handle
 
 
 def is_mongo_available() -> bool:
     """Return True if MongoDB can be reached."""
+    global _client, _db_handle, _connected
     try:
-        get_mongo_client()
+        client, _ = get_mongo_client()
+        client.admin.command("ping")
         return True
     except Exception:
+        _client = None
+        _db_handle = None
+        _connected = False
         return False
+
+
+def ensure_mongo_container_running(max_wait_seconds: int = 35, status_callback: Optional[Callable[[str], None]] = None) -> bool:
+    """Ensure MongoDB is available. If not, attempt to start the Docker container automatically."""
+    def log(msg: str):
+        print(f"[TenderTracker] {msg}")
+        if status_callback:
+            try:
+                status_callback(msg)
+            except Exception:
+                pass
+
+    if is_mongo_available():
+        return True
+
+    log("MongoDB is not running. Attempting to start containers via Docker...")
+
+    # Helper function to run docker compose up -d
+    def run_docker_compose():
+        project_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        compose_file = os.path.join(project_dir, "docker-compose.yml")
+        cwd = project_dir if os.path.exists(compose_file) else os.getcwd()
+
+        kwargs = {
+            "cwd": cwd,
+            "capture_output": True,
+            "text": True,
+            "timeout": 15,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+        for cmd in [
+            ["docker", "compose", "up", "-d"],
+            ["docker-compose", "up", "-d"],
+        ]:
+            try:
+                res = subprocess.run(cmd, **kwargs)
+                if res.returncode == 0:
+                    return "ok", res.stdout
+                err_msg = (res.stderr or res.stdout or "").strip()
+                err_lower = err_msg.lower()
+                if "daemon is not running" in err_lower or "npipe" in err_lower or "connect" in err_lower:
+                    return "daemon_down", err_msg
+            except FileNotFoundError:
+                continue
+            except Exception as e:
+                return "error", str(e)
+        return "error", "Docker CLI not found."
+
+    status, msg = run_docker_compose()
+
+    # If daemon is down, attempt to launch Docker Desktop if on Windows
+    if status == "daemon_down" and os.name == "nt":
+        docker_desktop_path = r"C:\Program Files\Docker\Docker\Docker Desktop.exe"
+        if os.path.exists(docker_desktop_path):
+            log("Docker Desktop is not running. Starting Docker Desktop...")
+            try:
+                os.startfile(docker_desktop_path)
+            except Exception as e:
+                log(f"Failed to start Docker Desktop: {e}")
+
+        log("Waiting for Docker daemon to become ready...")
+        start_daemon_wait = time.time()
+        while time.time() - start_daemon_wait < 30:
+            time.sleep(2)
+            status, msg = run_docker_compose()
+            if status == "ok":
+                break
+
+    if status != "ok":
+        log(f"Docker compose attempt: {msg}")
+
+    # Wait for MongoDB service to respond
+    log("Waiting for MongoDB service to initialize...")
+    start_time = time.time()
+    while time.time() - start_time < max_wait_seconds:
+        if is_mongo_available():
+            log("MongoDB started successfully!")
+            return True
+        time.sleep(1)
+
+    return is_mongo_available()
 
 
 def _init_collections(mdb):
     """Create indexes on first use."""
-    bids = mdb["bids"]
+    bids = mdb[BIDS_COLLECTION]
     # Unique index on bid_no (also the _id)
     bids.create_index([("bid_no", ASCENDING)], unique=True, background=True)
     bids.create_index([("dept", ASCENDING)], background=True)
@@ -107,7 +221,7 @@ def load_settings() -> dict:
     """Load all settings from MongoDB settings collection."""
     try:
         _, mdb = get_mongo_client()
-        doc = mdb["settings"].find_one({"_id": "global"})
+        doc = mdb[SETTINGS_COLLECTION].find_one({"_id": "global"})
         return doc.get("data", {}) if doc else {}
     except Exception:
         return {}
@@ -117,7 +231,7 @@ def save_setting(key: str, value) -> bool:
     """Save a single setting key-value pair."""
     try:
         _, mdb = get_mongo_client()
-        mdb["settings"].update_one(
+        mdb[SETTINGS_COLLECTION].update_one(
             {"_id": "global"},
             {"$set": {f"data.{key}": value}},
             upsert=True,
@@ -185,7 +299,7 @@ def load_all_tenders(limit=None, offset=0, include_embeddings=False) -> list:
     try:
         _, mdb = get_mongo_client()
         projection = {} if include_embeddings else {"embedding": 0}
-        cursor = mdb["bids"].find({}, projection)
+        cursor = mdb[BIDS_COLLECTION].find({}, projection)
         cursor = cursor.skip(offset)
         if limit is not None:
             cursor = cursor.limit(limit)
@@ -200,7 +314,7 @@ def save_all_tenders(records: list) -> bool:
     """Replace ALL tender documents while preserving un-rendered fields like embeddings."""
     try:
         _, mdb = get_mongo_client()
-        col = mdb["bids"]
+        col = mdb[BIDS_COLLECTION]
         
         # Get all new bid_nos to identify deleted ones
         new_bid_nos = [r.get("bid_no") for r in records if r.get("bid_no")]
@@ -224,6 +338,114 @@ def save_all_tenders(records: list) -> bool:
         return False
 
 
+def ingest_tenders_batch(records: list, batch_size: Optional[int] = None, skip_unify: bool = False) -> dict:
+    """
+    High-performance bulk ingestion of tender records into MongoDB.
+    Uses bulk_write with UpdateOne(..., upsert=True) in batches to minimize network roundtrips.
+
+    Args:
+        records: List of tender dictionaries to ingest.
+        batch_size: Max documents per bulk operation batch (default from INGEST_BATCH_SIZE).
+        skip_unify: If True, skips fuzzy organization unification for raw performance.
+
+    Returns:
+        dict with metrics: {"total": int, "processed": int, "upserted": int, "modified": int, "errors": list}
+    """
+    if not records:
+        return {"total": 0, "processed": 0, "upserted": 0, "modified": 0, "errors": []}
+
+    batch_size = batch_size or INGEST_BATCH_SIZE
+    stats = {"total": len(records), "processed": 0, "upserted": 0, "modified": 0, "errors": []}
+
+    try:
+        from pymongo import UpdateOne
+        from pymongo.errors import BulkWriteError
+    except ImportError:
+        import logger
+        logger.log_err("pymongo not available for batch ingestion")
+        # Fallback to sequential upserts if PyMongo bulk_write isn't available
+        for rec in records:
+            upsert_tender(rec)
+        stats["processed"] = len(records)
+        return stats
+
+    try:
+        _, mdb = get_mongo_client()
+        col = mdb[BIDS_COLLECTION]
+
+        for i in range(0, len(records), batch_size):
+            chunk = records[i : i + batch_size]
+            operations = []
+            valid_bid_nos = []
+            chunk_records_by_bid = {}
+
+            for r in chunk:
+                bid_no = r.get("bid_no")
+                if not bid_no:
+                    continue
+                if not skip_unify:
+                    r = unify_organization_names(r)
+                r = apply_value_mappings(r)
+                valid_bid_nos.append(bid_no)
+                chunk_records_by_bid[bid_no] = r
+
+            if not valid_bid_nos:
+                continue
+
+            # Fetch existing records in chunk to preserve 'Filed' filing_status
+            existing_docs = {
+                doc["_id"]: doc
+                for doc in col.find({"_id": {"$in": valid_bid_nos}}, {"filing_status": 1})
+            }
+
+            for bid_no, record in chunk_records_by_bid.items():
+                existing = existing_docs.get(bid_no)
+                update_fields = {}
+                for k, v in record.items():
+                    if v is None or (isinstance(v, str) and not v.strip()):
+                        continue
+                    if k == "filing_status" and existing and existing.get("filing_status") == "Filed":
+                        continue
+                    update_fields[k] = v
+
+                if update_fields:
+                    operations.append(UpdateOne({"_id": bid_no}, {"$set": update_fields}, upsert=True))
+
+            if operations:
+                try:
+                    res = col.bulk_write(operations, ordered=False)
+                    stats["processed"] += len(operations)
+                    stats["upserted"] += getattr(res, "upserted_count", 0)
+                    stats["modified"] += getattr(res, "modified_count", 0)
+                except BulkWriteError as bwe:
+                    stats["processed"] += bwe.details.get("nInserted", 0) + bwe.details.get("nModified", 0)
+                    stats["errors"].append(str(bwe.details))
+                    import logger
+                    logger.log_err(f"mongo bulk_write partial error: {bwe.details}")
+                except Exception as b_err:
+                    # Fallback for mock/test environments (e.g. mongomock) that lack full bulk_write argument support
+                    for op in operations:
+                        try:
+                            filter_doc = getattr(op, "_filter", {})
+                            update_doc = getattr(op, "_doc", {})
+                            upsert_val = getattr(op, "_upsert", True)
+                            res = col.update_one(filter_doc, update_doc, upsert=upsert_val)
+                            if getattr(res, "upserted_id", None):
+                                stats["upserted"] += 1
+                            elif getattr(res, "modified_count", 0):
+                                stats["modified"] += 1
+                            stats["processed"] += 1
+                        except Exception as u_err:
+                            stats["errors"].append(str(u_err))
+
+    except Exception as e:
+        import logger
+        logger.log_err(f"mongo ingest_tenders_batch error: {e}")
+        stats["errors"].append(str(e))
+
+    return stats
+
+
 def upsert_tender(record: dict) -> list:
     """Insert or update a single tender. Returns full tender list."""
     bid_no = record.get("bid_no")
@@ -233,7 +455,7 @@ def upsert_tender(record: dict) -> list:
         record = unify_organization_names(record)
         record = apply_value_mappings(record)
         _, mdb = get_mongo_client()
-        col = mdb["bids"]
+        col = mdb[BIDS_COLLECTION]
         existing = col.find_one({"_id": bid_no})
 
         if existing:
@@ -258,29 +480,9 @@ def upsert_tender(record: dict) -> list:
 
 
 def upsert_tenders(new_records: list) -> list:
-    """Bulk insert/update tender records."""
-    try:
-        _, mdb = get_mongo_client()
-        col = mdb["bids"]
-        for record in new_records:
-            bid_no = record.get("bid_no")
-            if not bid_no:
-                continue
-            record = unify_organization_names(record)
-            record = apply_value_mappings(record)
-            existing = col.find_one({"_id": bid_no}, {"filing_status": 1})
-            update_fields = {}
-            for k, v in record.items():
-                if v is None or (isinstance(v, str) and not v.strip()):
-                    continue
-                if k == "filing_status" and existing and existing.get("filing_status") == "Filed":
-                    continue
-                update_fields[k] = v
-            if update_fields:
-                col.update_one({"_id": bid_no}, {"$set": update_fields}, upsert=True)
-    except Exception as e:
-        import logger
-        logger.log_err(f"mongo upsert_tenders error: {e}")
+    """Bulk insert/update tender records using batch ingestion."""
+    if new_records:
+        ingest_tenders_batch(new_records)
     return load_all_tenders()
 
 
@@ -288,7 +490,7 @@ def upsert_tender_field(bid_no: str, field: str, value) -> bool:
     """Surgically update a single field for a tender."""
     try:
         _, mdb = get_mongo_client()
-        result = mdb["bids"].update_one(
+        result = mdb[BIDS_COLLECTION].update_one(
             {"_id": bid_no},
             {"$set": {field: value}},
         )
@@ -303,7 +505,7 @@ def get_tender(bid_no: str) -> Optional[dict]:
     """Retrieve a single tender by bid_no."""
     try:
         _, mdb = get_mongo_client()
-        doc = mdb["bids"].find_one({"_id": bid_no})
+        doc = mdb[BIDS_COLLECTION].find_one({"_id": bid_no})
         return _doc_to_dict(doc) if doc else None
     except Exception:
         return None
@@ -313,7 +515,7 @@ def delete_tenders(bid_numbers: list) -> list:
     """Delete tenders by bid_no list."""
     try:
         _, mdb = get_mongo_client()
-        mdb["bids"].delete_many({"_id": {"$in": bid_numbers}})
+        mdb[BIDS_COLLECTION].delete_many({"_id": {"$in": bid_numbers}})
     except Exception as e:
         import logger
         logger.log_err(f"mongo delete_tenders error: {e}")

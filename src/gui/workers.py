@@ -544,14 +544,11 @@ class WorkersMixin:
             if existing_rec:
                 # Always sync derived values to the existing record
                 existing_rec["is_want_derived"] = is_want
-                existing_rec["matched_firm"] = rec.get("matched_firm", "")
-                if existing_iid:
-                    self.tv.set(existing_iid, "matched_firm", rec.get("matched_firm", ""))
+                if rec.get("matched_firm"):
+                    existing_rec["matched_firm"] = rec["matched_firm"]
 
                 merged_fields = []
                 for k, v in rec.items():
-                    if k in ("is_want_derived", "matched_firm"):
-                        continue
                     if k == "filing_status" and existing_rec.get("filing_status") == "Filed":
                         continue
                     if v:
@@ -565,12 +562,19 @@ class WorkersMixin:
                         is_diff = str(existing_val).strip() != str(v).strip()
                         if not str(existing_val).strip() or is_diff:
                             existing_rec[k] = v
-                            if existing_iid and k in TV_IDS:
-                                self.tv.set(existing_iid, k, v)
                             merged_fields.append(k)
                 if merged_fields:
                     stats["updated"] += 1
                     if existing_iid:
+                        for cid in TV_IDS:
+                            if cid == "closing_in":
+                                ci, _ = self.table_tab.table_view._compute_closing_in(existing_rec.get("end_date", ""))
+                                self.tv.set(existing_iid, "closing_in", ci)
+                            else:
+                                val = existing_rec.get(cid, "")
+                                if cid == "tags" and isinstance(val, list):
+                                    val = ", ".join(val)
+                                self.tv.set(existing_iid, cid, str(val) if val is not None else "")
                         self.tv.item(existing_iid, tags=("fetched",))
                     self._log("ok", f"Updated {bid_no or bid_url} with {len(merged_fields)} new fields")
                 else:
@@ -651,22 +655,28 @@ class WorkersMixin:
         if existing_rec:
             # Always sync derived values to the existing record
             existing_rec["is_want_derived"] = is_want
-            existing_rec["matched_firm"] = rec.get("matched_firm", "")
-            if existing_iid:
-                self.tv.set(existing_iid, "matched_firm", rec.get("matched_firm", ""))
+            if rec.get("matched_firm"):
+                existing_rec["matched_firm"] = rec["matched_firm"]
 
             merged_fields = []
             for k, v in rec.items():
-                if k in ("is_want_derived", "matched_firm"):
+                if k == "filing_status" and existing_rec.get("filing_status") == "Filed":
                     continue
                 if v and (k not in existing_rec or not str(existing_rec[k]).strip()):
                     existing_rec[k] = v
-                    if existing_iid and k in TV_IDS:
-                        self.tv.set(existing_iid, k, v)
                     merged_fields.append(k)
             if merged_fields:
                 stats["updated"] += 1
                 if existing_iid:
+                    for cid in TV_IDS:
+                        if cid == "closing_in":
+                            ci, _ = self.table_tab.table_view._compute_closing_in(existing_rec.get("end_date", ""))
+                            self.tv.set(existing_iid, "closing_in", ci)
+                        else:
+                            val = existing_rec.get(cid, "")
+                            if cid == "tags" and isinstance(val, list):
+                                val = ", ".join(val)
+                            self.tv.set(existing_iid, cid, str(val) if val is not None else "")
                     self.tv.item(existing_iid, tags=("fetched",))
                 self._log("ok", f"Updated {bid_no or bid_url} with {len(merged_fields)} new fields")
             else:
@@ -821,8 +831,14 @@ class WorkersMixin:
                     def update_tv(i=iid, r=rec, e=extra):
                         if i:
                             for cid in TV_IDS:
-                                if cid in r:
-                                    self.tv.set(i, cid, r[cid])
+                                if cid == "closing_in":
+                                    ci, _ = self.table_tab.table_view._compute_closing_in(r.get("end_date", ""))
+                                    self.tv.set(i, "closing_in", ci)
+                                else:
+                                    val = r.get(cid, "")
+                                    if cid == "tags" and isinstance(val, list):
+                                        val = ", ".join(val)
+                                    self.tv.set(i, cid, str(val) if val is not None else "")
                             self.tv.item(i, tags=("fetched",))
                         db.upsert_tender(r)
                         

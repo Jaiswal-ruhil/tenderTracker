@@ -24,9 +24,11 @@ from parser import convert_pdf_text_to_markdown
 import llm
 from excel import financial_year
 from alert_system import alert_document_issue, alert_filing_issue, alert_network_issue, AlertSeverity
+from document_matcher import DocumentMatcherMixin
+import template_generator
 
 
-class FilingWorkflow:
+class FilingWorkflow(DocumentMatcherMixin):
     """Handles the complete tender filing workflow."""
     
     def __init__(self, log_fn=None, progress_cb=None):
@@ -181,85 +183,6 @@ class FilingWorkflow:
         
         return validation
     
-    def _ai_enhanced_document_matching(self, required_docs: List[Dict], firm_documents: Dict) -> Dict:
-        """
-        Enhanced document matching using AI-powered similarity scoring.
-        
-        Args:
-            required_docs: List of required document dictionaries
-            firm_documents: Dictionary of available firm documents
-            
-        Returns:
-            Enhanced matched documents dictionary with confidence scores
-        """
-        enhanced_matches = {}
-        
-        for req_doc in required_docs:
-            doc_name = req_doc.get('name', '').lower()
-            best_match = None
-            best_score = 0.0
-            
-            for firm_doc_name, firm_doc_path in firm_documents.items():
-                if not isinstance(firm_doc_path, str):
-                    continue
-                firm_name_lower = firm_doc_name.lower()
-                
-                # Exact match
-                if doc_name == firm_name_lower:
-                    best_match = firm_doc_path
-                    best_score = 1.0
-                    break
-                
-                # Calculate similarity score
-                score = self._calculate_similarity_score(doc_name, firm_name_lower)
-                
-                if score > best_score and score > 0.6:  # Threshold for matching
-                    best_match = firm_doc_path
-                    best_score = score
-            
-            if best_match:
-                enhanced_matches[req_doc['name']] = {
-                    'path': best_match,
-                    'confidence': best_score,
-                    'source': 'firm'
-                }
-        
-        return enhanced_matches
-    
-    def _calculate_similarity_score(self, text1: str, text2: str) -> float:
-        """
-        Calculate similarity score between two text strings using multiple methods.
-        
-        Args:
-            text1: First text string
-            text2: Second text string
-            
-        Returns:
-            Similarity score between 0.0 and 1.0
-        """
-        from difflib import SequenceMatcher
-        
-        # Method 1: Sequence matching
-        seq_score = SequenceMatcher(None, text1, text2).ratio()
-        
-        # Method 2: Word overlap
-        words1 = set(text1.split())
-        words2 = set(text2.split())
-        if words1 or words2:
-            overlap_score = len(words1 & words2) / len(words1 | words2)
-        else:
-            overlap_score = 0.0
-        
-        # Method 3: Substring matching
-        substring_score = 0.0
-        if text1 in text2 or text2 in text1:
-            substring_score = 0.8
-        
-        # Combine scores with weights
-        combined_score = (seq_score * 0.4) + (overlap_score * 0.4) + (substring_score * 0.2)
-        
-        return combined_score
-    
     def _validate_copied_documents(self):
         """
         Validate all copied documents for GEM compliance.
@@ -353,6 +276,45 @@ class FilingWorkflow:
     def _log(self, level: str, message: str):
         """Internal logging method."""
         self.log_fn(level, message)
+
+    def _save_step_logs_and_timings(self, step_timings: Dict = None, step_logs: Dict = None) -> str:
+        """
+        Save per-step logs and timing statistics to a dedicated 'step_logs' subfolder
+        in the filing folder for offline debugging and test verification.
+        """
+        if not self.filing_folder or not os.path.exists(self.filing_folder):
+            return ""
+        
+        step_logs_dir = os.path.join(self.filing_folder, "step_logs")
+        try:
+            os.makedirs(step_logs_dir, exist_ok=True)
+        except Exception as e:
+            self._log('warn', f"Failed to create step_logs directory: {e}")
+            return ""
+        
+        # Save step_timings.json
+        timings_path = os.path.join(step_logs_dir, "step_timings.json")
+        try:
+            with open(timings_path, 'w', encoding='utf-8') as f:
+                json.dump(step_timings or self.processing_stats, f, indent=2)
+        except Exception as e:
+            self._log('warn', f"Failed to save step_timings.json: {e}")
+
+        # Save individual step logs if available
+        if step_logs and isinstance(step_logs, dict):
+            for step_key, lines in step_logs.items():
+                clean_name = re.sub(r'[^a-zA-Z0-9_]', '_', str(step_key)).lower()
+                log_file = os.path.join(step_logs_dir, f"{clean_name}.log")
+                try:
+                    with open(log_file, 'w', encoding='utf-8') as f:
+                        if isinstance(lines, list):
+                            f.write("\n".join(lines))
+                        else:
+                            f.write(str(lines))
+                except Exception as e:
+                    self._log('warn', f"Failed to save step log file '{clean_name}.log': {e}")
+                    
+        return step_logs_dir
     
     def start_filing_process(self, tender_record: Dict, firm_name: str = None, category: str = None) -> Dict:
         """
@@ -582,29 +544,44 @@ class FilingWorkflow:
                     severity=AlertSeverity.WARNING
                 )
             
-            # Step 11: Collect missing category-specific documents to return
+            # Step 11: Auto-generate pre-filled compliance declarations (MII, Land Border, Non-Blacklisting, Bidder Undertaking, Bid Securing)
+            if self.progress_cb:
+                self.progress_cb(95, "Step 11: Auto-generating compliance declarations...")
+            self._log('info', 'Auto-generating compliance declarations for active firm...')
+            self._generate_auto_declarations(active_firm, tender_record)
+
+            # Collect missing category-specific documents to return
             missing_category_docs = []
             for doc in self.missing_documents:
                 if self._is_category_specific_doc(doc['name']):
                     missing_category_docs.append(doc)
                     
-            # Generate checklist and summary
+            # Generate checklist, summary, and Excel checklist
             checklist_file = self._generate_checklist(bid_no, tender_record)
             summary_file = self._generate_summary(bid_no, tender_record)
+            excel_checklist_file = self._generate_excel_checklist(bid_no, tender_record)
             
             # Generate validation report
             validation_file = self._generate_validation_report(bid_no)
             
-            self._log('ok', f'Filing process completed successfully!')
+            # Export step logs & timing statistics to step_logs directory
+            step_logs_dir = self._save_step_logs_and_timings()
+
+            # Pre-filing readiness score audit
+            readiness = self._calculate_filing_readiness()
+            self._log('ok', f"Filing process completed! Readiness Score: {readiness['score']}% ({readiness['status_label']})")
             if self.progress_cb:
-                self.progress_cb(100, "Filing process completed successfully!")
+                self.progress_cb(100, f"Filing completed! Readiness Score: {readiness['score']}%")
             
             return {
                 'success': True,
                 'filing_folder': self.filing_folder,
                 'checklist_file': checklist_file,
                 'summary_file': summary_file,
+                'excel_checklist_file': excel_checklist_file,
                 'validation_file': validation_file,
+                'step_logs_dir': step_logs_dir,
+                'readiness': readiness,
                 'required_count': len(self.required_documents),
                 'matched_count': len(self.matched_documents),
                 'missing_count': len(self.missing_documents),
@@ -1262,7 +1239,10 @@ Return ONLY the JSON array, no other text."""
             return documents
             
         except Exception as e:
-            self._log('err', f'LLM document extraction failed: {e}')
+            if "not configured" in str(e) or "disabled" in str(e).lower():
+                self._log('info', f'LLM skipped: {e}')
+            else:
+                self._log('warn', f'LLM document extraction skipped: {e}')
             return []
 
     
@@ -1295,24 +1275,61 @@ Return ONLY the JSON array, no other text."""
         
         return {}
     
+    def _find_category_folder(self, filing_folder: str, category: str, base_dir: str = "") -> Optional[str]:
+        """Find matching category subfolder (e.g. 'Cable', 'Cables', 'Cable Documents')."""
+        if not category or category in ('General', 'N/A'):
+            return None
+
+        cat_clean = category.strip().lower()
+        search_dirs = []
+        if filing_folder:
+            search_dirs.append(os.path.normpath(os.path.join(filing_folder, '..')))
+            search_dirs.append(os.path.normpath(os.path.join(filing_folder, '..', '..')))
+            search_dirs.append(os.path.normpath(os.path.join(filing_folder, '..', 'COMMON')))
+        if base_dir:
+            search_dirs.append(os.path.normpath(base_dir))
+            search_dirs.append(os.path.normpath(os.path.join(base_dir, 'COMMON')))
+
+        seen = set()
+        # 1. Exact or plural match
+        for p_dir in search_dirs:
+            if not p_dir or p_dir in seen or not os.path.exists(p_dir) or not os.path.isdir(p_dir):
+                continue
+            seen.add(p_dir)
+            try:
+                for item in os.listdir(p_dir):
+                    item_path = os.path.join(p_dir, item)
+                    if os.path.isdir(item_path):
+                        item_clean = item.strip().lower()
+                        if (item_clean == cat_clean or
+                            item_clean == cat_clean + 's' or
+                            cat_clean == item_clean + 's'):
+                            return item_path
+            except Exception:
+                pass
+
+        # 2. Substring match
+        seen.clear()
+        for p_dir in search_dirs:
+            if not p_dir or p_dir in seen or not os.path.exists(p_dir) or not os.path.isdir(p_dir):
+                continue
+            seen.add(p_dir)
+            try:
+                for item in os.listdir(p_dir):
+                    item_path = os.path.join(p_dir, item)
+                    if os.path.isdir(item_path) and item.upper() != "COMMON":
+                        item_clean = item.strip().lower()
+                        if cat_clean in item_clean or item_clean in cat_clean:
+                            return item_path
+            except Exception:
+                pass
+
+        return None
+
     def _match_documents(self, firm_documents: Dict):
         """
         Match required documents with available firm documents, COMMON folder files,
         and category-specific folder files.
-        
-        This method performs intelligent document matching using:
-        1. Exact name matching between required and available documents
-        2. Fuzzy matching based on document type keywords (GST, PAN, MSME, etc.)
-        3. Integration with COMMON folder for shared firm documents
-        4. Integration with Category-specific folder under the firm base folder
-        
-        Args:
-            firm_documents: Dictionary mapping document names to their file paths
-            
-        Side effects:
-            - Populates self.matched_documents with successfully matched documents
-            - Populates self.missing_documents with unmatched required documents
-            - Logs information about COMMON and Category folder usage
         """
         self.matched_documents = {}
         self.missing_documents = []
@@ -1340,19 +1357,12 @@ Return ONLY the JSON array, no other text."""
                     common_documents[item] = item_path
             if common_documents:
                 self._log('info', f'Using {len(common_documents)} COMMON folder files for document matching')
-        
+
         # Add Category subfolder files to available documents
         category_documents = {}
         category = getattr(self, 'category', '')
         if category and category != 'General':
-            base_folder = os.path.join(self.filing_folder, '..')
-            category_folder_path = ""
-            if os.path.exists(base_folder) and os.path.isdir(base_folder):
-                for item in os.listdir(base_folder):
-                    item_path = os.path.join(base_folder, item)
-                    if os.path.isdir(item_path) and item.lower() == category.lower():
-                        category_folder_path = item_path
-                        break
+            category_folder_path = self._find_category_folder(self.filing_folder, category)
             if category_folder_path and os.path.exists(category_folder_path) and os.path.isdir(category_folder_path):
                 for item in os.listdir(category_folder_path):
                     item_path = os.path.join(category_folder_path, item)
@@ -1360,7 +1370,7 @@ Return ONLY the JSON array, no other text."""
                         category_documents[item] = item_path
                 if category_documents:
                     self._log('info', f"Using {len(category_documents)} category-specific files from '{os.path.basename(category_folder_path)}' folder")
-        
+
         # Merge firm documents, COMMON folder documents, and Category folder documents
         all_documents = {**firm_documents, **common_documents, **category_documents}
         
@@ -1596,6 +1606,17 @@ Return ONLY the JSON array, no other text."""
         
         os.makedirs(folder_path, exist_ok=True)
         
+        # Look for Category subfolder for category-specific documents
+        category_files = []
+        cat_folder = self._find_category_folder(folder_path, category, base_dir)
+        if cat_folder and os.path.exists(cat_folder) and os.path.isdir(cat_folder):
+            for item in os.listdir(cat_folder):
+                item_path = os.path.join(cat_folder, item)
+                if os.path.isfile(item_path):
+                    category_files.append(item_path)
+            if category_files:
+                self._log('info', f"Found {len(category_files)} file(s) in Category folder '{os.path.basename(cat_folder)}'")
+
         # Copy common files from base folder to new subfolder
         if common_files:
             copied_count = 0
@@ -1611,7 +1632,23 @@ Return ONLY the JSON array, no other text."""
             
             if copied_count > 0:
                 self._log('ok', f'Copied {copied_count} common file(s) to new folder')
-        
+
+        # Copy category-specific files from Category folder to new subfolder
+        if category_files:
+            copied_cat_count = 0
+            for cat_file in category_files:
+                try:
+                    filename = os.path.basename(cat_file)
+                    dest_path = os.path.join(folder_path, filename)
+                    if not os.path.exists(dest_path):
+                        shutil.copy2(cat_file, dest_path)
+                        copied_cat_count += 1
+                except Exception as copy_err:
+                    self._log('warn', f'Failed to copy category file {os.path.basename(cat_file)}: {copy_err}')
+            
+            if copied_cat_count > 0:
+                self._log('ok', f"Copied {copied_cat_count} category file(s) from '{os.path.basename(cat_folder)}' folder to new folder")
+
         return folder_path
     
     def _copy_documents_to_folder(self):
@@ -1879,11 +1916,29 @@ Return ONLY the JSON array, no other text."""
                 if isinstance(doc_info, dict):
                     src_path = doc_info.get('path', 'N/A')
                     source = doc_info.get('source', 'N/A')
+                    is_expired = doc_info.get('is_expired', False)
+                    expiring_soon = doc_info.get('expiring_soon', False)
+                    expiry_date = doc_info.get('expiry_date')
+                    days_rem = doc_info.get('days_remaining')
                 else:
                     src_path = doc_info
                     source = 'N/A'
+                    is_expired = False
+                    expiring_soon = False
+                    expiry_date = None
+                    days_rem = None
                 
-                f.write(f"✓ {doc_name}\n")
+                if is_expired:
+                    f.write(f"⚠️ {doc_name} [EXPIRED - REPLACEMENT REQUIRED!]\n")
+                    f.write(f"  Expiry Date: {expiry_date} (EXPIRED)\n")
+                elif expiring_soon:
+                    f.write(f"⚡ {doc_name} [EXPIRING SOON]\n")
+                    f.write(f"  Expiry Date: {expiry_date} ({days_rem} days remaining)\n")
+                else:
+                    f.write(f"✓ {doc_name}\n")
+                    if expiry_date:
+                        f.write(f"  Expiry Date: {expiry_date} (Valid)\n")
+
                 f.write(f"  Source Path: {src_path}\n")
                 f.write(f"  Firm Association: {source}\n")
                 f.write(f"  Category: {doc_category}\n")
@@ -2039,3 +2094,193 @@ Text:
                 self._log('warn', f'LLM GeM requirements extraction failed: {e}')
 
         return []
+
+    def _generate_auto_declarations(self, active_firm: str, tender_record: Dict) -> List[str]:
+        """
+        Auto-generate compliance declarations (MII, Land Border, Non-Blacklisting, Bidder Undertaking, Bid Securing).
+        Saves generated files into '02_Generated_Declarations' subfolder.
+        """
+        if not self.filing_folder or not os.path.exists(self.filing_folder):
+            return []
+
+        decl_folder = os.path.join(self.filing_folder, "02_Generated_Declarations")
+        try:
+            os.makedirs(decl_folder, exist_ok=True)
+        except Exception as e:
+            self._log('warn', f"Failed to create 02_Generated_Declarations folder: {e}")
+            return []
+
+        settings = db.load_settings()
+        firms = settings.get('firms', [])
+        firm_info = next((f for f in firms if f.get('name') == active_firm), {})
+        if not firm_info and firms:
+            firm_info = firms[0]
+
+        context = {
+            "bid_no": tender_record.get('bid_no', 'N/A'),
+            "category": getattr(self, 'category', 'General'),
+            "firm_name": active_firm or "Unnamed Firm",
+            "firm_address": firm_info.get('address', 'N/A'),
+            "department": tender_record.get('dept', 'Government of India (GeM Portal)'),
+            "date": datetime.now().strftime("%d-%m-%Y"),
+            "signatory_name": firm_info.get('signatory_name', 'Authorized Representative'),
+            "signatory_designation": firm_info.get('signatory_designation', 'Proprietor / Authorized Signatory'),
+            "local_content_percentage": "50",
+            "local_content_location": firm_info.get('address', 'Works Premises')
+        }
+
+        template_types = [
+            "bidder_undertaking",
+            "declaration",
+            "affidavit",
+            "mii_certificate",
+            "land_border_declaration",
+            "bid_securing_declaration"
+        ]
+
+        generated_files = []
+        for t_type in template_types:
+            try:
+                ok, path_out, warn = template_generator.generate_document(decl_folder, t_type, context)
+                if ok and path_out:
+                    generated_files.append(path_out)
+                    self._log('ok', f"Generated compliance declaration: {os.path.basename(path_out)}")
+            except Exception as e:
+                self._log('warn', f"Failed to generate template declaration '{t_type}': {e}")
+
+        return generated_files
+
+    def _calculate_filing_readiness(self) -> Dict:
+        """
+        Calculate pre-filing readiness score (0-100%) and disqualification risk audit.
+        """
+        total_req = len(self.required_documents)
+        matched_req = len(self.matched_documents)
+        missing_req = len(self.missing_documents)
+
+        # Check for expired matched documents
+        expired_count = 0
+        expiring_soon_count = 0
+        for doc_info in self.matched_documents.values():
+            if isinstance(doc_info, dict):
+                if doc_info.get('is_expired'):
+                    expired_count += 1
+                elif doc_info.get('expiring_soon'):
+                    expiring_soon_count += 1
+
+        # Check for oversized documents
+        oversized_count = 0
+        for v in self.validation_results.values():
+            if isinstance(v, dict) and v.get('warnings'):
+                if any('exceeds GEM limit' in w for w in v['warnings']):
+                    oversized_count += 1
+
+        # Match score (60% weight)
+        match_score = (matched_req / total_req * 60.0) if total_req > 0 else 60.0
+
+        # Expiry penalty (up to -30%)
+        expiry_penalty = expired_count * 15.0
+
+        # Oversized penalty (up to -10%)
+        oversized_penalty = oversized_count * 5.0
+
+        # Final score
+        raw_score = max(0.0, min(100.0, match_score + 40.0 - expiry_penalty - oversized_penalty))
+        score = round(raw_score, 1)
+
+        status_label = "READY TO FILE" if score >= 85 and expired_count == 0 else ("ACTION REQUIRED" if score < 60 or expired_count > 0 else "PARTIALLY READY")
+
+        return {
+            "score": score,
+            "status_label": status_label,
+            "matched_count": matched_req,
+            "missing_count": missing_req,
+            "expired_count": expired_count,
+            "expiring_soon_count": expiring_soon_count,
+            "oversized_count": oversized_count,
+        }
+
+    def _generate_excel_checklist(self, bid_no: str, tender_record: Dict) -> str:
+        """Export Filing_Checklist.xlsx with formatting, status badges, and details."""
+        if not self.filing_folder or not os.path.exists(self.filing_folder):
+            return ""
+
+        excel_path = os.path.join(self.filing_folder, "Filing_Checklist.xlsx")
+        try:
+            import openpyxl
+            from openpyxl.styles import Font, PatternFill, Alignment
+
+            wb = openpyxl.Workbook()
+            ws = wb.active
+            ws.title = "Filing Checklist"
+
+            # Header info
+            ws.append(["TENDER FILING CHECKLIST & READINESS REPORT"])
+            ws.append(["Bid Number", bid_no, "End Date", tender_record.get('end_date', 'N/A')])
+            ws.append(["Category", getattr(self, 'category', 'General'), "Department", tender_record.get('dept', 'N/A')])
+            ws.append([])
+
+            headers = ["Status", "Document Name", "Category", "Source Path", "Expiry Date", "Requested In", "Description"]
+            ws.append(headers)
+
+            # Style header row
+            header_fill = PatternFill(start_color="1F6FEB", end_color="1F6FEB", fill_type="solid")
+            header_font = Font(name="Segoe UI", size=10, bold=True, color="FFFFFF")
+
+            for col_idx in range(1, len(headers) + 1):
+                cell = ws.cell(row=5, column=col_idx)
+                cell.fill = header_fill
+                cell.font = header_font
+                cell.alignment = Alignment(horizontal="center", vertical="center")
+
+            # Matched documents
+            valid_fill = PatternFill(start_color="D4EDDA", end_color="D4EDDA", fill_type="solid")
+            expired_fill = PatternFill(start_color="F8D7DA", end_color="F8D7DA", fill_type="solid")
+            warn_fill = PatternFill(start_color="FFF3CD", end_color="FFF3CD", fill_type="solid")
+
+            row_idx = 6
+            for doc_name, doc_info in self.matched_documents.items():
+                req_doc = next((d for d in self.required_documents if d['name'] == doc_name), None)
+                cat = req_doc.get('category', 'General') if req_doc else 'General'
+                src_file = req_doc.get('source_file', 'Tender_Document.pdf') if req_doc else 'Tender_Document.pdf'
+                desc = req_doc.get('description', '') if req_doc else ''
+
+                if isinstance(doc_info, dict):
+                    src_path = doc_info.get('path', 'N/A')
+                    is_exp = doc_info.get('is_expired', False)
+                    exp_soon = doc_info.get('expiring_soon', False)
+                    exp_date = doc_info.get('expiry_date') or 'N/A'
+                else:
+                    src_path = str(doc_info)
+                    is_exp, exp_soon, exp_date = False, False, 'N/A'
+
+                if is_exp:
+                    status = "[EXPIRED]"
+                    fill = expired_fill
+                elif exp_soon:
+                    status = "[EXPIRING SOON]"
+                    fill = warn_fill
+                else:
+                    status = "[VALID]"
+                    fill = valid_fill
+
+                ws.append([status, doc_name, cat, src_path, exp_date, src_file, desc])
+                for col_idx in range(1, 8):
+                    ws.cell(row=row_idx, column=col_idx).fill = fill
+                row_idx += 1
+
+            # Missing documents
+            for doc in self.missing_documents:
+                ws.append(["[MISSING]", doc['name'], doc.get('category', 'General'), "N/A", "N/A", doc.get('source_file', 'Tender_Document.pdf'), doc.get('description', '')])
+                for col_idx in range(1, 8):
+                    ws.cell(row=row_idx, column=col_idx).fill = expired_fill
+                row_idx += 1
+
+            wb.save(excel_path)
+            self._log('ok', f"Generated Excel checklist: {excel_path}")
+            return excel_path
+
+        except Exception as e:
+            self._log('warn', f"Failed to generate Filing_Checklist.xlsx: {e}")
+            return ""
+

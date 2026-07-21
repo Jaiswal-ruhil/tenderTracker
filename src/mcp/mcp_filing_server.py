@@ -32,7 +32,7 @@ def create_server(port: int = 8103) -> FastMCP:
         - matched_documents: AI-enhanced document matches with confidence scores
         - missing_documents: List of required documents that couldn't be matched
         """
-        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        tender = db.get_tender(bid_no)
         if not tender:
             return {"success": False, "error": f"Tender not found: {bid_no}"}
         
@@ -71,7 +71,7 @@ def create_server(port: int = 8103) -> FastMCP:
         Get the GEM portal document requirements mapping for a tender.
         Returns the mapping of required documents to upload fields.
         """
-        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        tender = db.get_tender(bid_no)
         if not tender:
             return {"success": False, "error": f"Tender not found: {bid_no}"}
         
@@ -100,7 +100,7 @@ def create_server(port: int = 8103) -> FastMCP:
         from datetime import datetime
         import template_generator
         
-        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        tender = db.get_tender(bid_no)
         if not tender:
             return {"success": False, "error": f"Tender not found: {bid_no}"}
         
@@ -199,7 +199,7 @@ def create_server(port: int = 8103) -> FastMCP:
         """
         from form_filling_agent import FormFillingAgent
         
-        tender = next((item for item in db.load_all_tenders() if item.get("bid_no") == bid_no), None)
+        tender = db.get_tender(bid_no)
         if not tender:
             return {"success": False, "error": f"Tender not found: {bid_no}"}
             

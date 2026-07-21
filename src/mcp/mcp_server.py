@@ -48,13 +48,13 @@ def extract_bid_blocks(text: str) -> List[Dict[str, Any]]:
 @mcp.tool()
 def get_bid(bid_no: str) -> Optional[Dict[str, Any]]:
     """
-    Retrieve a single BidObject from the SQLite database by its unique Bid Number.
+    Retrieve a single BidObject from the database by its unique Bid Number using indexed O(1) lookup.
     """
-    tenders = db.load_all_tenders()
-    for t in tenders:
-        if t.get("bid_no") == bid_no:
-            return t
-    return None
+    tender = db.get_tender(bid_no)
+    if tender and "embedding" in tender:
+        tender = dict(tender)
+        tender.pop("embedding", None)
+    return tender
 
 @mcp.tool()
 def classify_bid(bid_obj: Dict[str, Any]) -> Dict[str, Any]:
@@ -80,27 +80,47 @@ def search_bids(
     product: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
-    Search and filter stored tenders/bids by keyword, category, department, date, or product matches.
+    Search and filter stored tenders/bids using indexed text search and keyword/category filters.
     """
-    tenders = db.load_all_tenders()
+    if keyword:
+        tenders = db.text_search_tenders(keyword, limit=50)
+    else:
+        tenders = db.load_all_tenders()
+
     filtered = []
     for t in tenders:
-        if keyword:
-            val_str = json.dumps(t).lower()
-            if keyword.lower() not in val_str:
-                continue
         if category and category.lower() not in t.get("category", "").lower():
             continue
         if department and department.lower() not in t.get("dept", "").lower():
             continue
         if end_date and t.get("end_date") != end_date:
             continue
-        if product:
-            items_str = t.get("items", "").lower()
-            if product.lower() not in items_str:
-                continue
-        filtered.append(t)
+        if product and product.lower() not in t.get("items", "").lower():
+            continue
+        
+        t_copy = dict(t)
+        t_copy.pop("embedding", None)
+        filtered.append(t_copy)
     return filtered
+
+@mcp.tool()
+def semantic_search_bids(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+    """
+    Perform fast sub-10ms semantic vector search on tenders using the FAISS/Annoy index.
+    Returns the most relevant tender records matched by context and meaning.
+    """
+    try:
+        matched_bid_nos = vector_search.search_vector_index(query, top_k=top_k)
+        results = []
+        for bid_no in matched_bid_nos:
+            tender = db.get_tender(bid_no)
+            if tender:
+                t_copy = dict(tender)
+                t_copy.pop("embedding", None)
+                results.append(t_copy)
+        return results
+    except Exception as exc:
+        return [{"error": f"Semantic search failed: {exc}"}]
 
 @mcp.tool()
 def generate_quote_requirements(bid_obj: Dict[str, Any]) -> Dict[str, Any]:

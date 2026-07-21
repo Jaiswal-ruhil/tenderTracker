@@ -256,3 +256,50 @@ Bid Number: GEM/2026/B/12345
              matched_info = workflow.matched_documents['Comparison Chart']
              self.assertEqual(matched_info['source'], 'Category (motor)')
              self.assertEqual(os.path.normpath(matched_info['path']), os.path.normpath(os.path.join(expected_cat_folder, 'Comparison chart MACER.pdf')))
+
+    def test_matches_gem_standard_document_names(self):
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        workflow.category = "general"
+        workflow.filing_folder = os.path.join("dummy_base", "filing_folder")
+        workflow.required_documents = [
+            {'name': 'Experience Criteria', 'category': 'Technical', 'required': True},
+            {'name': 'Past Performance', 'category': 'Technical', 'required': True},
+            {'name': 'Bidder Turnover', 'category': 'Financial', 'required': True},
+            {'name': 'Additional Doc 1 (Requested in ATC)', 'category': 'Compliance', 'required': True},
+        ]
+        
+        firm_docs = {
+            'experience': 'work_experience_certificate.pdf',
+            'turnover_cert': 'ca_turnover_proof.pdf',
+        }
+        
+        expected_common_folder = os.path.normpath(os.path.join("dummy_base", "COMMON"))
+        
+        def mock_exists(p):
+            p_norm = os.path.normpath(p)
+            return p_norm in [
+                os.path.normpath("dummy_base"),
+                expected_common_folder,
+                os.path.normpath(os.path.join(expected_common_folder, 'Past_Performance_Record.pdf')),
+                os.path.normpath(os.path.join(expected_common_folder, 'MII_Declaration_ATC.pdf')),
+                'work_experience_certificate.pdf',
+                'ca_turnover_proof.pdf'
+            ]
+                              
+        def mock_listdir(p):
+            p_norm = os.path.normpath(p)
+            if p_norm == expected_common_folder:
+                return ['Past_Performance_Record.pdf', 'MII_Declaration_ATC.pdf']
+            return []
+            
+        with patch('document_matcher.os.path.exists', side_effect=mock_exists), \
+             patch('document_matcher.os.path.isdir', return_value=True), \
+             patch('document_matcher.os.listdir', side_effect=mock_listdir), \
+             patch('document_matcher.os.path.isfile', return_value=True):
+             
+             matches = workflow._ai_enhanced_document_matching(workflow.required_documents, firm_docs)
+             
+             self.assertIn('Experience Criteria', matches)
+             self.assertIn('Past Performance', matches)
+             self.assertIn('Bidder Turnover', matches)
+             self.assertIn('Additional Doc 1 (Requested in ATC)', matches)

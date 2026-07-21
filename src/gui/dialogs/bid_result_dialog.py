@@ -140,9 +140,12 @@ class BidResultDialog(tk.Toplevel):
 
         self.title(f"📊 Bid Result — {bid_no}")
         self.configure(bg=BG)
-        self.resizable(True, True)
-        self.geometry("940x680")
-        self.minsize(800, 580)
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        init_w = min(1000, max(750, screen_w - 40))
+        init_h = min(740, max(500, screen_h - 60))
+        self.geometry(f"{init_w}x{init_h}")
+        self.minsize(750, 480)
 
         # Data state
         self._competitors = []       # list of dicts

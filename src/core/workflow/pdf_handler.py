@@ -184,7 +184,7 @@ class PdfHandlerMixin:
         # 3. Extract plain text URLs using regex from extracted text
         try:
             text = pdf_extractor.extract_text(pdf_bytes)
-            text_urls = re.findall(r'https?://[^\s)\]"\'',]+', text, re.IGNORECASE)
+            text_urls = re.findall(r'https?://[^\s)\]"\']+', text, re.IGNORECASE)
             for u in text_urls:
                 if "gem.gov.in" in u.lower():
                     urls.add(u.strip())

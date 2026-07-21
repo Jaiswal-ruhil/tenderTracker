@@ -37,9 +37,21 @@ class TenderApp(tk.Tk, WorkersMixin):
     def __init__(self):
         super().__init__()
         self.title("GEM Tender Logger  v4")
-        self.configure(bg=BG)
-        self.geometry("1600x900")
-        self.minsize(900, 600)
+        # Configure high-DPI scaling dynamically
+        try:
+            dpi = self.winfo_fpixels('1i')
+            if dpi > 0:
+                scaling = max(1.0, dpi / 72.0)
+                self.tk.call('tk', 'scaling', scaling)
+        except Exception:
+            pass
+
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        init_w = min(1600, max(1100, screen_w - 60))
+        init_h = min(950, max(700, screen_h - 80))
+        self.geometry(f"{init_w}x{init_h}")
+        self.minsize(960, 640)
         self.state('zoomed')
 
         # UI Path & Breadcrumbs Setup

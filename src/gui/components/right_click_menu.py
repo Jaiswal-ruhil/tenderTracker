@@ -1,10 +1,19 @@
+"""
+right_click_menu.py
+~~~~~~~~~~~~~~~~~~~
+Unified context menu for table rows and table header columns in TenderTracker.
+"""
+
 import tkinter as tk
 from tkinter import messagebox
 
-# Local imports
-from config import PANEL, TEXT, SEL_BG, FL, TV_COLS, ACCENT
+from config import PANEL, TEXT, SEL_BG, FL, TV_COLS, ACCENT, ACCENT2, ERR
+
 
 class TenderContextMenu:
+    """
+    Context menu for table rows and column headers.
+    """
     def __init__(self, parent, app, table_tab):
         self.app = app
         self.table_tab = table_tab
@@ -15,44 +24,44 @@ class TenderContextMenu:
                                 activebackground=SEL_BG, activeforeground=TEXT, font=FL)
         
         self.row_menu.add_command(label="📋 Start Filing Process", command=self.table_tab.start_filing_process)
-        self.row_menu.add_command(label="📄 Open Tender URL", command=self.table_tab.open_tender_url)
-        self.row_menu.add_command(label="📋 Copy Bid Number", command=self.table_tab.copy_bid_number)
+        self.row_menu.add_command(label="🌐 Open Tender URL", command=self.table_tab.open_tender_url)
+        self.row_menu.add_command(label="📝 Copy Bid Number", command=self.table_tab.copy_bid_number)
         self.row_menu.add_separator()
         
-        self.row_menu.add_command(label="Mark as Want (Keep)", command=self.table_tab.mark_selected_want)
+        self.row_menu.add_command(label="✅ Mark as Want (Keep)", command=self.table_tab.mark_selected_want)
         self.row_menu.add_command(label="✨ Mark as Want + Learn Keyword", command=self.table_tab.mark_want_and_learn)
-        self.row_menu.add_command(label="Mark as Don't Want (Ignore)", command=self.table_tab.mark_selected_dont_want)
-        self.row_menu.add_command(label="Reset Manual Tag", command=self.table_tab.reset_selected_tag)
-        self.row_menu.add_command(label="Manage Tags...", command=self.table_tab.show_tags_dialog)
-        self.row_menu.add_command(label="📝 Add/Edit Comments...", command=self.table_tab.show_comments_dialog)
+        self.row_menu.add_command(label="🚫 Mark as Don't Want (Ignore)", command=self.table_tab.mark_selected_dont_want)
+        self.row_menu.add_command(label="🔄 Reset Manual Tag", command=self.table_tab.reset_selected_tag)
+        self.row_menu.add_command(label="🏷️ Manage Tags...", command=self.table_tab.show_tags_dialog)
+        self.row_menu.add_command(label="💬 Add/Edit Comments...", command=self.table_tab.show_comments_dialog)
         
         # Batch operations submenu
         self.batch_menu = tk.Menu(self.row_menu, tearoff=0, bg=PANEL, fg=TEXT,
                                    activebackground=SEL_BG, activeforeground=TEXT, font=FL)
-        self.batch_menu.add_command(label="Batch Mark as Want", command=lambda: self.table_tab.batch_mark_want())
-        self.batch_menu.add_command(label="Batch Mark as Don't Want", command=lambda: self.table_tab.batch_mark_dont_want())
-        self.batch_menu.add_command(label="Batch Set Status: To Be Filed", command=lambda: self.table_tab.batch_set_status("To Be Filed"))
-        self.batch_menu.add_command(label="Batch Set Status: Evaluating", command=lambda: self.table_tab.batch_set_status("Evaluating"))
-        self.batch_menu.add_command(label="Batch Set Status: Filed", command=lambda: self.table_tab.batch_set_status("Filed"))
-        self.batch_menu.add_command(label="Batch Delete Selected", command=lambda: self.table_tab.batch_delete())
-        self.row_menu.add_cascade(label="Batch Operations", menu=self.batch_menu)
+        self.batch_menu.add_command(label="✅ Batch Mark as Want", command=lambda: self.table_tab.batch_mark_want())
+        self.batch_menu.add_command(label="🚫 Batch Mark as Don't Want", command=lambda: self.table_tab.batch_mark_dont_want())
+        self.batch_menu.add_command(label="⏳ Batch Set Status: To Be Filed", command=lambda: self.table_tab.batch_set_status("To Be Filed"))
+        self.batch_menu.add_command(label="🔍 Batch Set Status: Evaluating", command=lambda: self.table_tab.batch_set_status("Evaluating"))
+        self.batch_menu.add_command(label="🎯 Batch Set Status: Filed", command=lambda: self.table_tab.batch_set_status("Filed"))
+        self.batch_menu.add_command(label="🗑️ Batch Delete Selected", command=lambda: self.table_tab.batch_delete())
+        self.row_menu.add_cascade(label="⚡ Batch Operations", menu=self.batch_menu)
 
         # Submenu for Filing Status
         self.status_menu = tk.Menu(self.row_menu, tearoff=0, bg=PANEL, fg=TEXT,
                                    activebackground=SEL_BG, activeforeground=TEXT, font=FL)
-        self.status_menu.add_command(label="To Be Filed", command=lambda: self.table_tab.set_selected_filing_status("To Be Filed"))
-        self.status_menu.add_command(label="Evaluating", command=lambda: self.table_tab.set_selected_filing_status("Evaluating"))
-        self.status_menu.add_command(label="Filed", command=lambda: self.table_tab.set_selected_filing_status("Filed"))
-        self.row_menu.add_cascade(label="Set Filing Status", menu=self.status_menu)
+        self.status_menu.add_command(label="⏳ To Be Filed", command=lambda: self.table_tab.set_selected_filing_status("To Be Filed"))
+        self.status_menu.add_command(label="🔍 Evaluating", command=lambda: self.table_tab.set_selected_filing_status("Evaluating"))
+        self.status_menu.add_command(label="🎯 Filed", command=lambda: self.table_tab.set_selected_filing_status("Filed"))
+        self.row_menu.add_cascade(label="📂 Set Filing Status", menu=self.status_menu)
 
         self.row_menu.add_separator()
-        self.row_menu.add_command(label="Link PDF File...", command=self.table_tab.link_associated_pdf)
-        self.row_menu.add_command(label="Open Associated PDF", command=self.table_tab.open_associated_pdf)
-        self.row_menu.add_command(label="Unlink PDF File", command=self.table_tab.unlink_associated_pdf)
+        self.row_menu.add_command(label="🔗 Link PDF File...", command=self.table_tab.link_associated_pdf)
+        self.row_menu.add_command(label="📖 Open Associated PDF", command=self.table_tab.open_associated_pdf)
+        self.row_menu.add_command(label="❌ Unlink PDF File", command=self.table_tab.unlink_associated_pdf)
         self.row_menu.add_separator()
-        self.row_menu.add_command(label="Delete Selected", command=self.table_tab.del_sel)
-        self.row_menu.add_command(label="Fetch Details (Selenium)", command=self.table_tab.do_fetch_sel)
-        self.row_menu.add_command(label="Save Selected to Excel", command=self.table_tab.save_selected)
+        self.row_menu.add_command(label="🗑️ Delete Selected", command=self.table_tab.del_sel)
+        self.row_menu.add_command(label="🌐 Fetch Details (Selenium)", command=self.table_tab.do_fetch_sel)
+        self.row_menu.add_command(label="📊 Save Selected to Excel", command=self.table_tab.save_selected)
 
     def show(self, event):
         region = self.tv.identify_region(event.x, event.y)
@@ -75,7 +84,7 @@ class TenderContextMenu:
                 if 0 <= col_index < len(display_cols):
                     target_col = display_cols[col_index]
                     
-                    hdr_menu = tk.Menu(self.tv, tearoff=0, bg=PANEL, fg=TEXT, activebackground=ACCENT, activeforeground=TEXT)
+                    hdr_menu = tk.Menu(self.tv, tearoff=0, bg=PANEL, fg=TEXT, activebackground=ACCENT, activeforeground=TEXT, font=FL)
                     
                     # Move Left
                     if col_index > 0:
@@ -135,10 +144,10 @@ class TenderContextMenu:
             
             pdf_path = rec.get("pdf_path", "") if rec else ""
             if pdf_path:
-                self.row_menu.entryconfigure("Open Associated PDF", state="normal")
-                self.row_menu.entryconfigure("Unlink PDF File", state="normal")
+                self.row_menu.entryconfigure("📖 Open Associated PDF", state="normal")
+                self.row_menu.entryconfigure("❌ Unlink PDF File", state="normal")
             else:
-                self.row_menu.entryconfigure("Open Associated PDF", state="disabled")
-                self.row_menu.entryconfigure("Unlink PDF File", state="disabled")
+                self.row_menu.entryconfigure("📖 Open Associated PDF", state="disabled")
+                self.row_menu.entryconfigure("❌ Unlink PDF File", state="disabled")
                 
             self.row_menu.post(event.x_root, event.y_root)

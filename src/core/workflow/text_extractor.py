@@ -307,7 +307,10 @@ Return ONLY the JSON array, no other text."""
             return documents
 
         except Exception as e:
-            self._log('err', f'LLM document extraction failed: {e}')
+            if "not configured" in str(e) or "disabled" in str(e).lower():
+                self._log('info', f'LLM skipped: {e}')
+            else:
+                self._log('warn', f'LLM document extraction skipped: {e}')
             return []
 
     # ------------------------------------------------------------------ #

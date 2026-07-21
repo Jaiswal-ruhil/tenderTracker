@@ -33,15 +33,20 @@ class InterventionDialog:
         """
         self.window = tk.Toplevel(self.parent)
         self.window.title(f"⚠️ Intervention Required: {self.alert.title}")
-        self.window.geometry("600x500")
-        self.window.resizable(False, False)
         self.window.configure(bg=BG)
-        self.window.grab_set()  # Make modal
+        self.window.resizable(True, True)
         
-        # Center the window
-        x = self.parent.winfo_x() + (self.parent.winfo_width() - 600) // 2
-        y = self.parent.winfo_y() + (self.parent.winfo_height() - 500) // 2
-        self.window.geometry(f"+{max(0, x)}+{max(0, y)}")
+        screen_w = self.window.winfo_screenwidth()
+        screen_h = self.window.winfo_screenheight()
+        init_w = min(660, max(520, screen_w - 40))
+        init_h = min(580, max(420, screen_h - 60))
+        self.window.minsize(520, 420)
+        
+        parent_h = self.parent.winfo_height() if hasattr(self.parent, 'winfo_height') else 600
+        x = self.parent.winfo_x() + (self.parent.winfo_width() - init_w) // 2
+        y = self.parent.winfo_y() + (parent_h - init_h) // 2
+        self.window.geometry(f"{init_w}x{init_h}+{max(0, x)}+{max(0, y)}")
+        self.window.grab_set()  # Make modal
         
         self._build_ui()
         

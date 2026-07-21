@@ -1,3 +1,4 @@
+import os
 import asyncio
 import hashlib
 import json
@@ -41,10 +42,10 @@ class LMStudioClient:
     """
     def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None):
         settings = db.load_settings()
-        # Fallback to local default LM Studio URL if not set
-        self.base_url = (base_url or settings.get("llm_base_url") or "http://localhost:1234/v1").rstrip("/")
-        self.model = model or settings.get("llm_model") or "google/gemma-4-12b-qat"
-        self.api_key = settings.get("llm_api_key") or "lm-studio"
+        # Environment variables take precedence, followed by settings, then default fallback
+        self.base_url = (base_url or os.getenv("LLM_BASE_URL") or settings.get("llm_base_url") or "http://localhost:1234/v1").rstrip("/")
+        self.model = model or os.getenv("LLM_MODEL") or settings.get("llm_model") or "google/gemma-4-12b-qat"
+        self.api_key = os.getenv("LLM_API_KEY") or settings.get("llm_api_key") or "lm-studio"
         
         # Build limits: pooled connection limits to prevent socket exhaustion
         limits = httpx.Limits(max_keepalive_connections=20, max_connections=50)

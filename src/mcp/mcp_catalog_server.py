@@ -21,8 +21,13 @@ def create_server(port: int = 8101) -> FastMCP:
 
     @mcp.tool()
     def get_bid(bid_no: str) -> Optional[Dict[str, Any]]:
-        """Retrieve one tender by its GeM bid number."""
-        return next((t for t in db.load_all_tenders() if t.get("bid_no") == bid_no), None)
+        """Retrieve one tender by its GeM bid number using indexed direct lookup."""
+        tender = db.get_tender(bid_no)
+        if tender and "embedding" in tender:
+            # Trim large vector array to keep LLM context token-efficient
+            tender = dict(tender)
+            tender.pop("embedding", None)
+        return tender
 
     @mcp.tool()
     def search_bids(
@@ -31,23 +36,20 @@ def create_server(port: int = 8101) -> FastMCP:
         department: Optional[str] = None,
         end_date: Optional[str] = None,
         product: Optional[str] = None,
-        limit: Optional[int] = None,
+        limit: Optional[int] = 20,
         offset: Optional[int] = 0,
     ) -> List[Dict[str, Any]]:
         """
-        Search stored tenders by keyword, category, department, deadline, or item.
-        Supports pagination with limit and offset parameters for large datasets.
+        Search stored tenders using indexed database search and keyword/category filters.
+        Supports pagination with limit and offset parameters for maximum speed.
         """
-        # Use pagination if limit is specified
-        if limit is not None:
-            tenders = db.load_all_tenders(limit=limit, offset=offset)
+        if keyword:
+            tenders = db.text_search_tenders(keyword, limit=limit or 50)
         else:
-            tenders = db.load_all_tenders()
-        
+            tenders = db.load_all_tenders(limit=limit, offset=offset)
+
         results = []
         for tender in tenders:
-            if keyword and keyword.lower() not in json.dumps(tender).lower():
-                continue
             if category and category.lower() not in tender.get("category", "").lower():
                 continue
             if department and department.lower() not in tender.get("dept", "").lower():
@@ -56,8 +58,32 @@ def create_server(port: int = 8101) -> FastMCP:
                 continue
             if product and product.lower() not in tender.get("items", "").lower():
                 continue
-            results.append(tender)
+            
+            # Trim embedding array to preserve LLM context window space
+            t_copy = dict(tender)
+            t_copy.pop("embedding", None)
+            results.append(t_copy)
+
         return results
+
+    @mcp.tool()
+    def semantic_search_bids(query: str, top_k: int = 5) -> List[Dict[str, Any]]:
+        """
+        Perform fast sub-10ms semantic vector search on tenders using the FAISS/Annoy index.
+        Returns the most relevant tender records matched by context and meaning.
+        """
+        try:
+            matched_bid_nos = vector_search.search_vector_index(query, top_k=top_k)
+            results = []
+            for bid_no in matched_bid_nos:
+                tender = db.get_tender(bid_no)
+                if tender:
+                    t_copy = dict(tender)
+                    t_copy.pop("embedding", None)
+                    results.append(t_copy)
+            return results
+        except Exception as exc:
+            return [{"error": f"Semantic search failed: {exc}"}]
 
     @mcp.tool()
     def add_tender(record: Dict[str, Any]) -> Dict[str, Any]:

@@ -235,11 +235,115 @@ MII_CERTIFICATE_TEMPLATE = """<!DOCTYPE html>
 </html>
 """
 
+# 5. Land Border Sharing Declaration (Rule 144(xi) GFR 2017)
+LAND_BORDER_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+    h1 { text-align: center; text-transform: uppercase; font-size: 18px; margin-bottom: 30px; color: #111; }
+    .content { text-align: justify; margin-top: 20px; font-size: 14px; }
+    .content ol { padding-left: 20px; }
+    .content li { margin-bottom: 12px; }
+    .signature-section { margin-top: 60px; float: right; width: 300px; text-align: left; }
+    .signature-line { margin-top: 50px; border-top: 1px solid #000; }
+</style>
+</head>
+<body>
+    <h1>Land Border Sharing Declaration</h1>
+    <p style="text-align: center; font-style: italic; margin-bottom: 20px;">(In terms of Rule 144(xi) of General Financial Rules, 2017)</p>
+    
+    <p>To,</p>
+    <p><strong>The Buyer / Department</strong><br>
+    {department}</p>
+    
+    <p><strong>Subject:</strong> Undertaking regarding Land Border Sharing Compliance for Tender No: <strong>{bid_no}</strong></p>
+    
+    <div class="content">
+        <p>Dear Sir/Madam,</p>
+        <p>I/We, <strong>{signatory_name}</strong>, in my/our capacity as {signatory_designation} of <strong>{firm_name}</strong>, hereby certify and declare that:</p>
+        
+        <ol>
+            <li>We have read the clause regarding restrictions on procurement from a bidder of a country which shares a land border with India.</li>
+            <li>We certify that <strong>{firm_name}</strong> is not from such a country, OR if from such a country, has been registered with the Competent Authority (Registration Certificate attached if applicable).</li>
+            <li>We hereby certify that we fulfill all requirements in this regard and are eligible to be considered for Tender No. <strong>{bid_no}</strong>.</li>
+            <li>We understand that any false declaration or misrepresentation in this regard will be ground for immediate disqualification or cancellation of contract along with legal action.</li>
+        </ol>
+    </div>
+    
+    <div class="signature-section">
+        <p>For and on behalf of:<br>
+        <strong>{firm_name}</strong></p>
+        <div class="signature-line"></div>
+        <p><strong>Authorized Signatory</strong><br>
+        Name: {signatory_name}<br>
+        Designation: {signatory_designation}<br>
+        Date: {date}</p>
+    </div>
+</body>
+</html>
+"""
+
+# 6. Bid Securing Declaration Template
+BID_SECURING_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+    body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; color: #333; }
+    h1 { text-align: center; text-transform: uppercase; font-size: 18px; margin-bottom: 30px; color: #111; }
+    .content { text-align: justify; margin-top: 20px; font-size: 14px; }
+    .content ol { padding-left: 20px; }
+    .content li { margin-bottom: 12px; }
+    .signature-section { margin-top: 60px; float: right; width: 300px; text-align: left; }
+    .signature-line { margin-top: 50px; border-top: 1px solid #000; }
+</style>
+</head>
+<body>
+    <h1>Bid Securing Declaration</h1>
+    <p style="text-align: center; font-style: italic; margin-bottom: 20px;">(In lieu of Earnest Money Deposit as per GeM terms)</p>
+    
+    <p>To,</p>
+    <p><strong>The Buyer / Department</strong><br>
+    {department}</p>
+    
+    <p><strong>Tender/Bid Number:</strong> <strong>{bid_no}</strong></p>
+    
+    <div class="content">
+        <p>Dear Sir/Madam,</p>
+        <p>I/We, <strong>{signatory_name}</strong>, Authorized Representative of <strong>{firm_name}</strong>, do hereby declare that:</p>
+        
+        <ol>
+            <li>We understand that, according to your conditions, bids must be supported by a Bid Securing Declaration.</li>
+            <li>We accept that we may be disqualified or suspended from bidding for any contract with your department / GeM portal for a period of 2 (two) years from the date of notification if we are in breach of any obligation under the bid conditions, including:
+                <br>a) Withdrawing or modifying our Bid during the period of bid validity specified in the bid data sheet; or
+                <br>b) Having been notified of acceptance of our Bid, failing or refusing to execute the contract, or failing to submit Performance Bank Guarantee (PBG) if required.
+            </li>
+            <li>We understand this Bid Securing Declaration shall expire if we are not the successful Bidder, upon the earlier of (i) our receipt of your notification to us of the name of the successful Bidder; or (ii) 30 days after the expiration of our Bid.</li>
+        </ol>
+    </div>
+    
+    <div class="signature-section">
+        <p>For and on behalf of:<br>
+        <strong>{firm_name}</strong></p>
+        <div class="signature-line"></div>
+        <p><strong>Authorized Signatory</strong><br>
+        Name: {signatory_name}<br>
+        Designation: {signatory_designation}<br>
+        Date: {date}</p>
+    </div>
+</body>
+</html>
+"""
+
 TEMPLATE_MAP = {
     "bidder_undertaking": UNDERTAKING_TEMPLATE,
     "declaration": DECLARATION_TEMPLATE,
     "affidavit": AFFIDAVIT_TEMPLATE,
-    "mii_certificate": MII_CERTIFICATE_TEMPLATE
+    "mii_certificate": MII_CERTIFICATE_TEMPLATE,
+    "land_border_declaration": LAND_BORDER_TEMPLATE,
+    "bid_securing_declaration": BID_SECURING_TEMPLATE
 }
 
 def render_template(template_str: str, context: Dict[str, Any]) -> str:
