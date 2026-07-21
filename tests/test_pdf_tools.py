@@ -14,6 +14,10 @@ class TestPdfTools(unittest.TestCase):
         status = pdf_tools.is_stirling_pdf_online()
         self.assertIsInstance(status, bool)
 
+    def test_stirling_pdf_session_context(self):
+        with pdf_tools.stirling_pdf_session(auto_stop=False) as online:
+            self.assertIsInstance(online, bool)
+
     def test_merge_and_split_pdf(self):
         import fitz
         tmp_dir = os.path.join(os.path.dirname(__file__), 'tmp_pdf_test')
@@ -37,7 +41,7 @@ class TestPdfTools(unittest.TestCase):
         d2.close()
 
         # Test merge
-        success, out_path = pdf_tools.merge_pdfs([pdf1, pdf2], merged)
+        success, out_path = pdf_tools.merge_pdfs([pdf1, pdf2], merged, auto_start_container=False)
         self.assertTrue(success)
         self.assertTrue(os.path.exists(out_path))
 
