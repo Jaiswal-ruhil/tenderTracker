@@ -664,6 +664,12 @@ def _local_chat_request(prompt, base_url, model, api_key, response_json=False, t
                 return content
             last_error = ValueError(f"Unexpected local chat response from {used_url}: {res_json}")
         except Exception as e:
+            err_str = str(e)
+            if response_json and ("400" in err_str or "response_format" in err_str):
+                try:
+                    return _local_chat_request(prompt, base_url, model, api_key, response_json=False, timeout=timeout, max_tokens=max_tokens)
+                except Exception:
+                    pass
             last_error = e
             continue
     if last_error:

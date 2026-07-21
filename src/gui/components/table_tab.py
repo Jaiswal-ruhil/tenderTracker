@@ -1304,23 +1304,29 @@ class TableTab(tk.Frame):
         scrollbar.pack(side="right", fill="y")
         
         # Title
-        title_lbl = tk.Label(scrollable_frame, text="✅ Filing Process Complete", font=("Segoe UI", 14, "bold"), bg=BG, fg=SUCCESS)
-        title_lbl.pack(pady=20)
-        
+        # Title & Readiness Score Badge
+        readiness = result.get('readiness', {})
+        score = readiness.get('score', 70.0)
+        status_label = readiness.get('status_label', 'PARTIALLY READY')
+        score_color = SUCCESS if score >= 85 else (WARN if score >= 60 else ERR)
+
+        title_lbl = tk.Label(scrollable_frame, text=f"✅ Filing Process Complete — Readiness Score: {score}% ({status_label})", font=("Segoe UI", 13, "bold"), bg=BG, fg=score_color)
+        title_lbl.pack(pady=15)
+
         # Summary section
         summary_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
         summary_frame.pack(fill="x", padx=20, pady=10)
-        
-        tk.Label(summary_frame, text="Filing Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w", pady=5)
-        tk.Label(summary_frame, text=folder_path, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB, wraplength=550, justify="left").grid(row=0, column=1, sticky="w", pady=5, padx=(10, 0))
-        
-        tk.Label(summary_frame, text="Document Status:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=1, column=0, sticky="w", pady=5)
-        status_text = f"Required: {required} | Matched: {matched} | Missing: {missing}"
-        tk.Label(summary_frame, text=status_text, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).grid(row=1, column=1, sticky="w", pady=5, padx=(10, 0))
-        
+
+        tk.Label(summary_frame, text="Filing Package Folder:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=0, column=0, sticky="w", pady=4)
+        tk.Label(summary_frame, text=folder_path, font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB, wraplength=550, justify="left").grid(row=0, column=1, sticky="w", pady=4, padx=(10, 0))
+
+        tk.Label(summary_frame, text="Compliance Readiness:", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=MUTED).grid(row=1, column=0, sticky="w", pady=4)
+        status_text = f"Required: {required}  |  Matched: {matched}  |  Missing: {missing}  |  Readiness: {score}% ({status_label})"
+        tk.Label(summary_frame, text=status_text, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=score_color).grid(row=1, column=1, sticky="w", pady=4, padx=(10, 0))
+
         # Missing documents section
         if missing > 0 and missing_docs:
-            tk.Label(scrollable_frame, text="⚠️ Missing Documents", font=("Segoe UI", 12, "bold"), bg=BG, fg=WARN).pack(pady=(20, 10))
+            tk.Label(scrollable_frame, text="⚠️ Missing Documents (Action Required)", font=("Segoe UI", 11, "bold"), bg=BG, fg=WARN).pack(pady=(15, 5))
             
             missing_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
             missing_frame.pack(fill="x", padx=20, pady=10)
@@ -1330,7 +1336,7 @@ class TableTab(tk.Frame):
                 doc_row.pack(fill="x", pady=5)
                 
                 doc_name = doc.get('name', 'Unknown')
-                tk.Label(doc_row, text=f"• {doc_name}", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(side="left")
+                tk.Label(doc_row, text=f"• {doc_name}", font=("Segoe UI", 9, "bold"), bg=PANEL, fg=TEXTSUB).pack(side="left")
                 
                 # Browse and link button for each missing document
                 def make_link_button(doc_info=doc):
@@ -1341,14 +1347,12 @@ class TableTab(tk.Frame):
                             filetypes=[("All Files", "*.*"), ("PDF Files", "*.pdf"), ("Documents", "*.doc;*.docx")]
                         )
                         if file_paths:
-                            # Copy files to filing folder
                             import shutil
                             linked_count = 0
                             errors = []
                             for file_path in file_paths:
                                 try:
                                     filename = os.path.basename(file_path)
-                                    # Handle duplicate filenames
                                     counter = 1
                                     dest_path = os.path.join(folder_path, filename)
                                     while os.path.exists(dest_path):
@@ -1369,7 +1373,6 @@ class TableTab(tk.Frame):
                                 if errors:
                                     msg += f"\nFailed to link:\n" + "\n".join(errors)
                                 messagebox.showinfo("Success", msg, parent=result_dialog)
-                                # Update the button to show linked status
                                 link_btn.config(text=f"✅ Linked ({linked_count})", bg=SUCCESS, state="disabled")
                             else:
                                 messagebox.showerror("Error", f"Failed to link any files:\n" + "\n".join(errors), parent=result_dialog)
@@ -1381,74 +1384,83 @@ class TableTab(tk.Frame):
                     return link_btn
                 
                 link_btn = make_link_button(doc)
-        
+
         # Files generated section
-        tk.Label(scrollable_frame, text="📄 Files Generated", font=("Segoe UI", 12, "bold"), bg=BG, fg=TEXT).pack(pady=(20, 10))
+        tk.Label(scrollable_frame, text="📄 Compliance Package Files Generated", font=("Segoe UI", 11, "bold"), bg=BG, fg=TEXT).pack(pady=(15, 5))
         
         files_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
         files_frame.pack(fill="x", padx=20, pady=10)
         
-        tk.Label(files_frame, text="• Document_Checklist.txt", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=3)
-        tk.Label(files_frame, text="• Filing_Summary.txt", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=3)
-        
+        tk.Label(files_frame, text="• 02_Generated_Declarations / (MII, Rule 144, Non-Blacklisting, Bid Securing)", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=2)
+        tk.Label(files_frame, text="• 03_Firm_Standard_Docs / & 04_Category_and_ATC_Docs / (Renamed & Merged PDFs)", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=2)
+        tk.Label(files_frame, text="• Document_Checklist.txt & Filing_Checklist.xlsx", font=("Segoe UI", 9), bg=PANEL, fg=TEXTSUB).pack(anchor="w", pady=2)
+
         # GEM Portal Document Requirements section
-        tk.Label(scrollable_frame, text="🌐 GEM Portal Document Requirements", font=("Segoe UI", 12, "bold"), bg=BG, fg=ACCENT).pack(pady=(20, 10))
+        tk.Label(scrollable_frame, text="🌐 GEM Portal Upload Requirements", font=("Segoe UI", 11, "bold"), bg=BG, fg=ACCENT).pack(pady=(15, 5))
         
         gem_frame = tk.Frame(scrollable_frame, bg=PANEL, padx=15, pady=15)
         gem_frame.pack(fill="x", padx=20, pady=10)
         
-        # Get dynamic GeM requirements from result
-        raw_gem_reqs = result.get('gem_requirements', [])
-        if not raw_gem_reqs:
-            # Fallback to defaults
-            raw_gem_reqs = [
-                "Experience Criteria",
-                "Past Performance",
-                "Bidder Turnover",
-                "Additional Doc 1 (Requested in ATC)",
-                "Additional Doc 2 (Requested in ATC)",
-                "Certificate (Requested in ATC)",
-                "Compliance of BoQ specification",
-                "Financial document",
-            ]
-            
+        # Get dynamic GeM requirements and matched items
+        req_docs = result.get('required_documents', [])
+        matched_docs = result.get('matched_documents', {})
+        
         gem_requirements = []
-        for req_name in raw_gem_reqs:
-            is_required = True
-            # In GeM, "Certificate (Requested in ATC)" is optional/not strictly marked with asterisk
-            if "Certificate (Requested in ATC)" in req_name or "Certificate (requested in ATC)" in req_name:
-                is_required = False
-                
-            clean_name = req_name.replace("*", "").strip()
-            gem_requirements.append({
-                "name": clean_name + ("*" if is_required else ""),
-                "required": is_required,
-                "max_size": "10MB",
-                "max_pages": 100,
-                "note": "Merge all ATC docs into single file" if "Certificate (Requested in ATC)" in clean_name else None
-            })
-        
-        gem_mappings = {}  # Store mappings for saving
-        
+        if req_docs:
+            for req in req_docs:
+                doc_name = req.get('name', '') if isinstance(req, dict) else str(req)
+                is_req = req.get('required', True) if isinstance(req, dict) else True
+                gem_requirements.append({
+                    "name": doc_name,
+                    "required": is_req,
+                    "max_size": "10MB",
+                    "max_pages": 100,
+                    "note": "Merge all ATC docs into single file" if "Certificate" in doc_name else None
+                })
+        else:
+            raw_gem_reqs = result.get('gem_requirements', ["Experience Criteria", "Past Performance", "Bidder Turnover", "Additional Doc 1 (Requested in ATC)", "Additional Doc 2 (Requested in ATC)", "Certificate (Requested in ATC)"])
+            for r in raw_gem_reqs:
+                gem_requirements.append({
+                    "name": r,
+                    "required": True if "Certificate" not in r else False,
+                    "max_size": "10MB",
+                    "max_pages": 100
+                })
+
+        gem_mappings = {}
+
         for i, req in enumerate(gem_requirements):
             req_row = tk.Frame(gem_frame, bg=PANEL)
             req_row.pack(fill="x", pady=8)
-            
-            # Requirement name with asterisk for required
-            name_text = req["name"]
-            label_color = TEXTSUB
-            if req.get("required"):
-                label_color = ERR
-            tk.Label(req_row, text=name_text, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=label_color).pack(anchor="w")
-            
-            # Note if present
-            if req.get("note"):
-                tk.Label(req_row, text=f"Note: {req['note']}", font=("Segoe UI", 8), bg=PANEL, fg=MUTED).pack(anchor="w")
-            
-            # Constraints
+
+            req_name = req["name"]
+
+            # Match check for badge
+            matched_file = None
+            for m_k, m_v in matched_docs.items():
+                if req_name.lower() in m_k.lower() or m_k.lower() in req_name.lower():
+                    if isinstance(m_v, dict):
+                        matched_file = m_v.get('path')
+                    elif isinstance(m_v, str):
+                        matched_file = m_v
+                    break
+
+            label_color = ERR if req.get("required") and not matched_file else (SUCCESS if matched_file else TEXTSUB)
+            status_badge = " [✅ READY TO UPLOAD]" if matched_file else " [⚠️ MISSING]"
+
+            header_frame = tk.Frame(req_row, bg=PANEL)
+            header_frame.pack(fill="x", anchor="w")
+
+            tk.Label(header_frame, text=req_name, font=("Segoe UI", 9, "bold"), bg=PANEL, fg=label_color).pack(side="left")
+            tk.Label(header_frame, text=status_badge, font=("Segoe UI", 8, "bold"), bg=PANEL, fg=SUCCESS if matched_file else WARN).pack(side="left", padx=6)
+
+            if matched_file:
+                fn = os.path.basename(matched_file) if isinstance(matched_file, str) else "Matched PDF Document"
+                tk.Label(req_row, text=f"📄 Prepared File: {fn}", font=("Segoe UI", 8), bg=PANEL, fg=SUCCESS).pack(anchor="w", pady=1)
+
             constraints = f"Max: {req['max_size']}, {req['max_pages']} pages"
             tk.Label(req_row, text=constraints, font=("Segoe UI", 8), bg=PANEL, fg=MUTED).pack(anchor="w")
-            
+
             # File linking button
             def make_gem_link_button(req_info=req, idx=i):
                 def browse_and_link():
@@ -1465,7 +1477,6 @@ class TableTab(tk.Frame):
                         for file_path in file_paths:
                             try:
                                 filename = os.path.basename(file_path)
-                                # Handle duplicate filenames
                                 counter = 1
                                 dest_path = os.path.join(folder_path, filename)
                                 while os.path.exists(dest_path):
@@ -1491,11 +1502,14 @@ class TableTab(tk.Frame):
                         else:
                             messagebox.showerror("Error", f"Failed to link any files:\n" + "\n".join(errors), parent=result_dialog)
                 
-                gem_link_btn = tk.Button(req_row, text="📎 Link File(s)", command=browse_and_link,
+                btn_txt = "✅ Re-Link / Replace File" if matched_file else "📎 Link File(s)"
+                gem_link_btn = tk.Button(req_row, text=btn_txt, command=browse_and_link,
                                          bg=CARD, fg=TEXT, relief="flat", font=("Segoe UI", 8),
                                          padx=8, pady=2, cursor="hand2")
-                gem_link_btn.pack(side="right", pady=5)
+                gem_link_btn.pack(side="right", pady=2)
                 return gem_link_btn
+
+            gem_link_btn = make_gem_link_button(req)
             
             gem_link_btn = make_gem_link_button(req)
         
