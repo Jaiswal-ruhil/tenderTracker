@@ -1664,58 +1664,102 @@ Return ONLY the JSON array, no other text."""
         return folder_path
     
     def _copy_documents_to_folder(self):
-        """Copy matched documents to filing folder."""
+        """
+        Copy and merge matched documents into filing subfolders.
+        Renames copied files cleanly to match the GeM portal upload requirement name,
+        merges multi-file requirements into a single combined PDF, and compresses PDFs exceeding 10MB.
+        """
+        import pdf_tools
+
         for doc_name, doc_info in self.matched_documents.items():
             try:
-                # Handle both dict (AI matching) and string (original matching) formats
+                paths = []
                 if isinstance(doc_info, dict):
-                    src_path = doc_info.get('path')
-                else:
-                    src_path = doc_info
-                
-                if not src_path or not os.path.exists(src_path):
-                    self._log('warn', f'Source path not found for {doc_name}')
+                    p = doc_info.get('path')
+                    if isinstance(p, list):
+                        paths = [item for item in p if item and os.path.exists(item)]
+                    elif p and os.path.exists(p):
+                        paths = [p]
+                elif isinstance(doc_info, list):
+                    paths = [item for item in doc_info if item and os.path.exists(item)]
+                elif isinstance(doc_info, str) and os.path.exists(doc_info):
+                    paths = [doc_info]
+
+                if not paths:
+                    self._log('warn', f'No valid source path found for {doc_name}')
                     continue
-                
-                # Generate safe filename
-                safe_name = re.sub(r'[<>:"/\\|?*]', '_', doc_name)
-                ext = os.path.splitext(src_path)[1]
-                dest_path = os.path.join(self.filing_folder, f"{safe_name}{ext}")
-                
-                # Handle duplicate filenames
+
+                # 1. Clean & format filename according to upload requirement name
+                clean_title = re.sub(r'\(Requested in ATC\)', '', doc_name, flags=re.IGNORECASE)
+                clean_title = clean_title.replace(':', '_').replace('-', '_').strip()
+                safe_name = re.sub(r'[<>:"/\\|?*]', '_', clean_title)
+                safe_name = re.sub(r'\s+', '_', safe_name).strip('_')
+                if len(safe_name) > 80:
+                    safe_name = safe_name[:80]
+
+                # Target standardized package subfolders
+                subfolder = "04_Category_and_ATC_Docs" if any(k in doc_name.lower() for k in ['atc', 'doc 1', 'doc 2', 'doc 3', 'doc 4', 'category']) else "03_Firm_Standard_Docs"
+                dest_dir = os.path.join(self.filing_folder, subfolder)
+                if not os.path.exists(dest_dir):
+                    dest_dir = self.filing_folder
+                os.makedirs(dest_dir, exist_ok=True)
+
+                ext = os.path.splitext(paths[0])[1].lower() or '.pdf'
+                dest_path = os.path.join(dest_dir, f"{safe_name}{ext}")
+
+                # Avoid duplicate file collisions
                 counter = 1
                 while os.path.exists(dest_path):
-                    dest_path = os.path.join(self.filing_folder, f"{safe_name}_{counter}{ext}")
+                    dest_path = os.path.join(dest_dir, f"{safe_name}_{counter}{ext}")
                     counter += 1
-                
-                shutil.copy2(src_path, dest_path)
-                self._log('ok', f'Copied {doc_name} to filing folder')
+
+                # 2. Merge if multiple files are matched for this single upload requirement
+                if len(paths) > 1 and all(p.lower().endswith('.pdf') for p in paths):
+                    self._log('info', f"Merging {len(paths)} files into single PDF for '{doc_name}'...")
+                    success, _ = pdf_tools.merge_pdfs(paths, dest_path, auto_start_container=False)
+                    if not success:
+                        shutil.copy2(paths[0], dest_path)
+                else:
+                    shutil.copy2(paths[0], dest_path)
+
+                # 3. Compress PDF if size exceeds 10MB upload limit
+                if dest_path.lower().endswith('.pdf') and os.path.exists(dest_path):
+                    size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+                    if size_mb > 10.0:
+                        self._log('info', f"Compressing upload file '{safe_name}{ext}' ({size_mb:.1f}MB > 10MB limit)...")
+                        pdf_tools.compress_pdf(dest_path, dest_path, target_max_mb=10.0, auto_start_container=False)
+
+                self._log('ok', f"Prepared upload document: '{os.path.basename(dest_path)}' (Requirement: {doc_name})")
                     
             except Exception as e:
-                self._log('err', f'Failed to copy {doc_name}: {e}')
+                self._log('err', f"Failed to prepare upload document '{doc_name}': {e}")
 
     def _copy_tender_pdf(self, pdf_path: str):
         """Copy the source tender PDF into the filing folder for reference."""
         try:
             ext = os.path.splitext(pdf_path)[1] or '.pdf'
-            dest_path = os.path.join(self.filing_folder, f'Tender_Document{ext}')
+            dest_dir = os.path.join(self.filing_folder, "01_Tender_and_Corrigendums")
+            if not os.path.exists(dest_dir):
+                dest_dir = self.filing_folder
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, f'Main_Tender_Document{ext}')
             shutil.copy2(pdf_path, dest_path)
             self._log('ok', 'Copied tender PDF to filing folder')
         except Exception as e:
-            # The checklist can still be useful even if the source copy fails.
             self._log('warn', f'Failed to copy tender PDF: {e}')
 
     def _copy_common_firm_documents(self, firm_documents: Dict):
-        """Copy all uploaded firm documents to a common subfolder."""
+        """Copy all uploaded firm documents to common subfolder and generate merged booklets."""
         if not firm_documents:
             return
             
-        common_folder = os.path.join(self.filing_folder, "Common_Firm_Documents")
+        common_folder = os.path.join(self.filing_folder, "03_Firm_Standard_Docs")
+        if not os.path.exists(common_folder):
+            common_folder = os.path.join(self.filing_folder, "Common_Firm_Documents")
         try:
             os.makedirs(common_folder, exist_ok=True)
             for doc_key, doc_path in firm_documents.items():
                 if doc_path and isinstance(doc_path, str) and os.path.exists(doc_path):
-                    # Mapping from database key to readable name
                     name_mappings = {
                         "gst": "GST_Certificate",
                         "pan": "PAN_Card",
@@ -1735,7 +1779,23 @@ Return ONLY the JSON array, no other text."""
                     dest_path = os.path.join(common_folder, f"{safe_name}{ext}")
                     
                     shutil.copy2(doc_path, dest_path)
-                    self._log('ok', f"Copied firm document '{display_name}' to Common_Firm_Documents")
+                    self._log('ok', f"Copied firm document '{display_name}' to {os.path.basename(common_folder)}")
+
+            # Auto-merge 3-year ITRs into a single combined PDF booklet
+            import pdf_tools
+            itr_paths = [p for k, p in firm_documents.items() if k.startswith('itr_') and p and isinstance(p, str) and os.path.exists(p)]
+            if len(itr_paths) > 1:
+                combined_itr = os.path.join(common_folder, "Combined_3_Years_ITR.pdf")
+                pdf_tools.merge_pdfs(itr_paths, combined_itr, auto_start_container=False)
+                self._log('ok', "Generated 'Combined_3_Years_ITR.pdf' booklet")
+
+            # Auto-merge 3-year Balance Sheets into a single combined PDF booklet
+            bs_paths = [p for k, p in firm_documents.items() if k.startswith('bs_') and p and isinstance(p, str) and os.path.exists(p)]
+            if len(bs_paths) > 1:
+                combined_bs = os.path.join(common_folder, "Combined_3_Years_Balance_Sheet.pdf")
+                pdf_tools.merge_pdfs(bs_paths, combined_bs, auto_start_container=False)
+                self._log('ok', "Generated 'Combined_3_Years_Balance_Sheet.pdf' booklet")
+
         except Exception as e:
             self._log('warn', f"Failed to copy common firm documents: {e}")
     
