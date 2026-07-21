@@ -1665,74 +1665,25 @@ Return ONLY the JSON array, no other text."""
     
     def _copy_documents_to_folder(self):
         """
-        Copy and merge matched documents into filing subfolders.
+        Copy and merge matched documents into filing subfolders using AI Document Collector Agent.
         Renames copied files cleanly to match the GeM portal upload requirement name,
         merges multi-file requirements into a single combined PDF, and compresses PDFs exceeding 10MB.
         """
-        import pdf_tools
+        try:
+            from document_verification_agent import DocumentVerificationAgent
+            agent = DocumentVerificationAgent()
+            active_firm = getattr(self, 'active_firm', '')
+            firm_docs = self._get_firm_documents(active_firm) if hasattr(self, '_get_firm_documents') else {}
 
-        for doc_name, doc_info in self.matched_documents.items():
-            try:
-                paths = []
-                if isinstance(doc_info, dict):
-                    p = doc_info.get('path')
-                    if isinstance(p, list):
-                        paths = [item for item in p if item and os.path.exists(item)]
-                    elif p and os.path.exists(p):
-                        paths = [p]
-                elif isinstance(doc_info, list):
-                    paths = [item for item in doc_info if item and os.path.exists(item)]
-                elif isinstance(doc_info, str) and os.path.exists(doc_info):
-                    paths = [doc_info]
-
-                if not paths:
-                    self._log('warn', f'No valid source path found for {doc_name}')
-                    continue
-
-                # 1. Clean & format filename according to upload requirement name
-                clean_title = re.sub(r'\(Requested in ATC\)', '', doc_name, flags=re.IGNORECASE)
-                clean_title = clean_title.replace(':', '_').replace('-', '_').strip()
-                safe_name = re.sub(r'[<>:"/\\|?*]', '_', clean_title)
-                safe_name = re.sub(r'\s+', '_', safe_name).strip('_')
-                if len(safe_name) > 80:
-                    safe_name = safe_name[:80]
-
-                # Target standardized package subfolders
-                subfolder = "04_Category_and_ATC_Docs" if any(k in doc_name.lower() for k in ['atc', 'doc 1', 'doc 2', 'doc 3', 'doc 4', 'category']) else "03_Firm_Standard_Docs"
-                dest_dir = os.path.join(self.filing_folder, subfolder)
-                if not os.path.exists(dest_dir):
-                    dest_dir = self.filing_folder
-                os.makedirs(dest_dir, exist_ok=True)
-
-                ext = os.path.splitext(paths[0])[1].lower() or '.pdf'
-                dest_path = os.path.join(dest_dir, f"{safe_name}{ext}")
-
-                # Avoid duplicate file collisions
-                counter = 1
-                while os.path.exists(dest_path):
-                    dest_path = os.path.join(dest_dir, f"{safe_name}_{counter}{ext}")
-                    counter += 1
-
-                # 2. Merge if multiple files are matched for this single upload requirement
-                if len(paths) > 1 and all(p.lower().endswith('.pdf') for p in paths):
-                    self._log('info', f"Merging {len(paths)} files into single PDF for '{doc_name}'...")
-                    success, _ = pdf_tools.merge_pdfs(paths, dest_path, auto_start_container=False)
-                    if not success:
-                        shutil.copy2(paths[0], dest_path)
-                else:
-                    shutil.copy2(paths[0], dest_path)
-
-                # 3. Compress PDF if size exceeds 10MB upload limit
-                if dest_path.lower().endswith('.pdf') and os.path.exists(dest_path):
-                    size_mb = os.path.getsize(dest_path) / (1024 * 1024)
-                    if size_mb > 10.0:
-                        self._log('info', f"Compressing upload file '{safe_name}{ext}' ({size_mb:.1f}MB > 10MB limit)...")
-                        pdf_tools.compress_pdf(dest_path, dest_path, target_max_mb=10.0, auto_start_container=False)
-
-                self._log('ok', f"Prepared upload document: '{os.path.basename(dest_path)}' (Requirement: {doc_name})")
-                    
-            except Exception as e:
-                self._log('err', f"Failed to prepare upload document '{doc_name}': {e}")
+            agent.collect_and_prepare_upload_package(
+                required_documents=self.required_documents,
+                matched_documents=self.matched_documents,
+                firm_documents=firm_docs,
+                filing_folder=self.filing_folder,
+                log_fn=self._log
+            )
+        except Exception as e:
+            self._log('err', f"Document Collector Agent failed: {e}")
 
     def _copy_tender_pdf(self, pdf_path: str):
         """Copy the source tender PDF into the filing folder for reference."""

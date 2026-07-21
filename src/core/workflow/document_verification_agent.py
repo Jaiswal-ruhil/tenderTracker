@@ -285,3 +285,110 @@ class DocumentVerificationAgent:
             from filing_workflow import FilingWorkflow
             workflow = FilingWorkflow()
             return workflow._validate_document_integrity(file_path)
+
+    def collect_and_prepare_upload_package(
+        self,
+        required_documents: List[Dict],
+        matched_documents: Dict[str, Any],
+        firm_documents: Dict[str, Any],
+        filing_folder: str,
+        log_fn: Optional[Any] = None
+    ) -> Dict[str, Any]:
+        """
+        AI Document Collector Agent:
+        1. Analyzes required document slots (e.g. Additional Doc 1, Experience Criteria, ITR, etc.)
+        2. Renames matched files cleanly to match the exact GeM portal upload requirement name.
+        3. Intelligently groups & merges multi-file requirements (e.g. 3-year ITRs, multi-page experience certs) into combined PDFs.
+        4. Validates and compresses any output PDF exceeding the 10MB GeM upload limit.
+        """
+        import shutil
+        import pdf_tools
+
+        def _log(tag, msg):
+            if log_fn:
+                log_fn(tag, msg)
+            else:
+                print(f"[{tag.upper()}] {msg}")
+
+        _log("info", "[Document Collector Agent] Analyzing upload requirements and firm files...")
+
+        collected_results = []
+        os.makedirs(filing_folder, exist_ok=True)
+
+        for req in required_documents:
+            doc_name = req.get('name', '')
+            if not doc_name:
+                continue
+
+            doc_info = matched_documents.get(doc_name)
+            if not doc_info:
+                continue
+
+            paths = []
+            if isinstance(doc_info, dict):
+                p = doc_info.get('path')
+                if isinstance(p, list):
+                    paths = [item for item in p if item and os.path.exists(item)]
+                elif p and isinstance(p, str) and os.path.exists(p):
+                    paths = [p]
+            elif isinstance(doc_info, list):
+                paths = [item for item in doc_info if item and isinstance(item, str) and os.path.exists(item)]
+            elif isinstance(doc_info, str) and os.path.exists(doc_info):
+                paths = [doc_info]
+
+            if not paths:
+                continue
+
+            # 1. Clean & format filename according to upload requirement slot title
+            clean_title = re.sub(r'\(Requested in ATC\)', '', doc_name, flags=re.IGNORECASE)
+            clean_title = clean_title.replace(':', '_').replace('-', '_').strip()
+            safe_name = re.sub(r'[<>:"/\\|?*]', '_', clean_title)
+            safe_name = re.sub(r'\s+', '_', safe_name).strip('_')
+            if len(safe_name) > 80:
+                safe_name = safe_name[:80]
+
+            # Determine destination subfolder
+            is_atc = any(k in doc_name.lower() for k in ['atc', 'doc 1', 'doc 2', 'doc 3', 'doc 4', 'category'])
+            subfolder = "04_Category_and_ATC_Docs" if is_atc else "03_Firm_Standard_Docs"
+            dest_dir = os.path.join(filing_folder, subfolder)
+            if not os.path.exists(dest_dir):
+                dest_dir = filing_folder
+            os.makedirs(dest_dir, exist_ok=True)
+
+            ext = os.path.splitext(paths[0])[1].lower() or '.pdf'
+            dest_path = os.path.join(dest_dir, f"{safe_name}{ext}")
+
+            counter = 1
+            while os.path.exists(dest_path):
+                dest_path = os.path.join(dest_dir, f"{safe_name}_{counter}{ext}")
+                counter += 1
+
+            # 2. Merge multi-file requirements into a single PDF
+            if len(paths) > 1 and all(p.lower().endswith('.pdf') for p in paths):
+                _log('info', f"[Document Collector Agent] Merging {len(paths)} files for requirement '{doc_name}'...")
+                success, _ = pdf_tools.merge_pdfs(paths, dest_path, auto_start_container=False)
+                if not success:
+                    shutil.copy2(paths[0], dest_path)
+            else:
+                shutil.copy2(paths[0], dest_path)
+
+            # 3. Compress PDF if size exceeds 10MB limit
+            if dest_path.lower().endswith('.pdf') and os.path.exists(dest_path):
+                size_mb = os.path.getsize(dest_path) / (1024 * 1024)
+                if size_mb > 10.0:
+                    _log('info', f"[Document Collector Agent] Compress file '{safe_name}{ext}' ({size_mb:.1f}MB > 10MB limit)...")
+                    pdf_tools.compress_pdf(dest_path, dest_path, target_max_mb=10.0, auto_start_container=False)
+
+            _log('ok', f"[Document Collector Agent] Prepared upload document: '{os.path.basename(dest_path)}' (Req: {doc_name})")
+            collected_results.append({
+                'requirement': doc_name,
+                'output_file': os.path.basename(dest_path),
+                'output_path': dest_path,
+                'source_files': paths
+            })
+
+        return {
+            'success': True,
+            'collected_count': len(collected_results),
+            'results': collected_results
+        }

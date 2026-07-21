@@ -95,3 +95,21 @@ class TestDocumentVerificationAgent(unittest.TestCase):
     def test_mcp_tool_integration(self):
         mcp = mcp_filing_server.create_server()
         self.assertIn("verify_compliance_document", mcp._tool_manager._tools)
+
+    def test_collect_and_prepare_upload_package(self):
+        import fitz, tempfile, shutil
+        tmp_dir = tempfile.mkdtemp()
+        try:
+            pdf1 = os.path.join(tmp_dir, 'exp1.pdf')
+            pdf2 = os.path.join(tmp_dir, 'exp2.pdf')
+            d1 = fitz.open(); p1 = d1.new_page(); p1.insert_text((50,50), "Exp 1"); d1.save(pdf1); d1.close()
+            d2 = fitz.open(); p2 = d2.new_page(); p2.insert_text((50,50), "Exp 2"); d2.save(pdf2); d2.close()
+
+            req_docs = [{'name': 'Additional Doc 1 (Requested in ATC): Proof of 3 Years Experience'}]
+            matched_docs = {'Additional Doc 1 (Requested in ATC): Proof of 3 Years Experience': [pdf1, pdf2]}
+            
+            res = self.agent.collect_and_prepare_upload_package(req_docs, matched_docs, {}, tmp_dir)
+            self.assertTrue(res['success'])
+            self.assertEqual(res['collected_count'], 1)
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
