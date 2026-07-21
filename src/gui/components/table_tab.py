@@ -1242,17 +1242,17 @@ class TableTab(tk.Frame):
             task_fn=run_filing_task,
             on_done=_on_filing_done,
             steps=[
-                "Initialize filing process",
-                "Download & verify tender PDF",
-                "Setup folders & copy tender PDF",
-                "Scan PDF for embedded links",
-                "Extract & parse document text",
-                "Identify tender item category",
-                "Analyze required document list",
-                "Extract EMD & security requirements",
-                "Match required docs with firm records",
-                "Copy & validate matched documents",
-                "Generate reports & complete filing"
+                "Step 1: Download & verify tender PDF",
+                "Step 2 & 3: Setup folders & copy tender PDF",
+                "Step 4: Scan PDF for embedded document links",
+                "Step 5: Extract & parse document text",
+                "Step 6: Identify tender item category",
+                "Step 7: Analyze required document list",
+                "Step 8: Extract EMD & security deposit requirements",
+                "Step 9: Match required docs with firm records",
+                "Step 10: Copy & validate matched upload package",
+                "Step 11: Auto-generate compliance declarations",
+                "Filing Complete: Audit readiness score & reports"
             ]
         )
         dlg_ref[0] = loading_dlg
