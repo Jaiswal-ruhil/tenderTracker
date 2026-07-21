@@ -444,8 +444,16 @@ class FilingWorkflow(DocumentMatcherMixin):
                 self.progress_cb(72, "Step 7: Extracting required document list...")
             self._log('info', 'Extracting required documents from all documents...')
             raw_documents = []
-            for filename, text in files_text.items():
-                file_docs = self._extract_required_documents(text)
+            # Extract requirements from main tender PDF text
+            if main_pdf_text:
+                main_docs = self._extract_required_documents(main_pdf_text)
+                for doc in main_docs:
+                    doc['source_file'] = 'Tender_Document.pdf'
+                    raw_documents.append(doc)
+
+            # Extract requirements from additional files
+            for filename, f_text in add_files_text.items():
+                file_docs = self._extract_required_documents(f_text)
                 for doc in file_docs:
                     doc['source_file'] = filename
                     raw_documents.append(doc)
@@ -465,6 +473,10 @@ class FilingWorkflow(DocumentMatcherMixin):
             
             self._log('ok', f'Found {len(self.required_documents)} required document types across all files')
             
+            # Step 7.5: Resolve generic ATC document placeholders ("Additional Doc 1", "Additional Doc 2", etc.) using downloaded ATC documents
+            self._log('info', 'Resolving generic ATC document definitions from downloaded documents...')
+            self.required_documents = self._resolve_additional_doc_definitions(self.required_documents, add_files_text, main_pdf_text)
+
             # Alert if no required documents found
             if len(self.required_documents) == 0:
                 alert_document_issue(
@@ -2094,6 +2106,126 @@ Text:
                 self._log('warn', f'LLM GeM requirements extraction failed: {e}')
 
         return []
+
+    def _resolve_additional_doc_definitions(self, required_docs: List[Dict], files_text: Dict[str, str], pdf_text: str) -> List[Dict]:
+        """
+        Resolve generic placeholders like 'Additional Doc 1 (Requested in ATC)', 'Additional Doc 2 (Requested in ATC)',
+        'Certificate (Requested in ATC)' into specific document titles by parsing downloaded additional files (ATC, BOQ, Corrigendum)
+        and main PDF text.
+        """
+        if not required_docs:
+            return required_docs
+
+        # Identify generic placeholders that require resolution
+        generic_docs = []
+        for doc in required_docs:
+            doc_name = doc['name']
+            doc_lower = doc_name.lower()
+            if any(term in doc_lower for term in ['additional doc', 'certificate (requested in atc)', 'doc 1', 'doc 2', 'doc 3', 'doc 4', 'requested in atc']):
+                generic_docs.append(doc)
+
+        if not generic_docs:
+            return required_docs
+
+        # Combine text from downloaded additional documents & main PDF
+        combined_additional_text = "\n\n".join([f"=== File: {fname} ===\n{txt}" for fname, txt in files_text.items()])
+        full_context_text = combined_additional_text + "\n\n" + (pdf_text[:8000] if pdf_text else "")
+
+        if not full_context_text.strip():
+            return required_docs
+
+        resolved_map = {}
+
+        # 1. Regex pattern matching for explicit document definitions
+        # e.g., "Additional Doc 1: Land Border Sharing Declaration" or "Doc 1 (Requested in ATC) - Non Blacklisting Undertaking"
+        patterns = [
+            r'(?:Additional\s*)?(?:Doc|Document)\s*(\d+)[\s\(\)RequestedinATC]*[:\-–=]+\s*([^\n.,;]{3,80})',
+            r'(?:Doc|Document)\s*(\d+)[\s\(\)RequestedinATC]*\s*[:\-–=]+\s*([^\n.,;]{3,80})',
+            r'Certificate\s*\([^)]*ATC[^)]*\)[:\-–=]+\s*([^\n.,;]{3,80})'
+        ]
+
+        for pat in patterns:
+            for match in re.finditer(pat, full_context_text, re.IGNORECASE):
+                groups = match.groups()
+                if len(groups) == 2:
+                    doc_num, doc_def = groups
+                    key = f"additional doc {doc_num}"
+                else:
+                    doc_def = groups[0]
+                    key = "certificate (requested in atc)"
+                
+                doc_def_clean = re.sub(r'\s+', ' ', doc_def.strip())
+                if doc_def_clean and len(doc_def_clean) > 3 and not doc_def_clean.lower().startswith('requested'):
+                    if key not in resolved_map:
+                        resolved_map[key] = doc_def_clean
+
+        # 2. LLM Resolution if provider is enabled
+        settings = db.load_settings()
+        provider = settings.get('llm_provider', 'Disabled')
+        if provider not in ('', 'Disabled', None) and len(generic_docs) > 0:
+            try:
+                gen_names = [d['name'] for d in generic_docs]
+                prompt = f"""You are a GeM Tender Specialist. Below is text from downloaded Additional ATC Tender Documents.
+The seller is asked to upload the following generic document placeholders:
+{json.dumps(gen_names)}
+
+Examine the ATC text below and extract the ACTUAL specific document title required for each placeholder.
+Examples:
+- "Additional Doc 1 (Requested in ATC)" -> "Land Border Sharing Declaration"
+- "Additional Doc 2 (Requested in ATC)" -> "Non-Blacklisting Affidavit"
+- "Additional Doc 3 (Requested in ATC)" -> "NABL Test Report for Cable"
+- "Certificate (Requested in ATC)" -> "ISO 9001 Quality Certificate"
+
+Text Excerpt:
+{full_context_text[:12000]}
+
+Return ONLY a JSON object mapping each placeholder name to its specific document title. If not found in text, omit that key or use the generic name.
+JSON format:
+{{
+  "Additional Doc 1 (Requested in ATC)": "Land Border Sharing Declaration",
+  "Additional Doc 2 (Requested in ATC)": "Non-Blacklisting Affidavit"
+}}"""
+                if provider == 'Local LLM (LM Studio / Ollama)':
+                    self._local_llm_used = True
+                res_str = llm.call_llm(prompt, provider, settings.get('llm_api_key', ''), settings.get('llm_base_url', ''), settings.get('llm_model', ''), response_json=True)
+                if "</think>" in res_str:
+                    res_str = res_str.split("</think>")[-1].strip()
+                cleaned_json = llm.clean_json_response(res_str)
+                llm_map = json.loads(cleaned_json)
+                if isinstance(llm_map, dict):
+                    for orig_k, resolved_v in llm_map.items():
+                        if resolved_v and isinstance(resolved_v, str) and resolved_v.strip() and len(resolved_v) < 100:
+                            for doc in generic_docs:
+                                if orig_k.lower() in doc['name'].lower() or doc['name'].lower() in orig_k.lower():
+                                    resolved_map[doc['name'].lower()] = resolved_v.strip()
+            except Exception as e:
+                self._log('warn', f"LLM additional doc resolution failed: {e}")
+
+        # Apply resolved titles to required_docs
+        resolved_docs = []
+        for doc in required_docs:
+            doc_copy = dict(doc)
+            name_lower = doc_copy['name'].lower()
+            
+            resolved_title = None
+            if name_lower in resolved_map:
+                resolved_title = resolved_map[name_lower]
+            else:
+                for k, v in resolved_map.items():
+                    if k in name_lower or name_lower in k:
+                        resolved_title = v
+                        break
+
+            if resolved_title and resolved_title.lower() != doc_copy['name'].lower():
+                old_name = doc_copy['name']
+                doc_copy['resolved_title'] = resolved_title
+                doc_copy['name'] = f"{old_name}: {resolved_title}"
+                doc_copy['description'] = f"{resolved_title} (Resolved from ATC document)"
+                self._log('ok', f"[ATC Resolution] Resolved '{old_name}' ➔ '{doc_copy['name']}'")
+
+            resolved_docs.append(doc_copy)
+
+        return resolved_docs
 
     def _generate_auto_declarations(self, active_firm: str, tender_record: Dict) -> List[str]:
         """
