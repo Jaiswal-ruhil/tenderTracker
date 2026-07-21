@@ -2107,6 +2107,41 @@ Text:
 
         return []
 
+    def _extract_atc_bullet_requirements(self, text: str) -> List[str]:
+        """
+        Extract specific document requirements listed as bullets or numbered items in ATC text.
+        e.g., '1. GST Invoice', '2. Test Certificate', '3. 03 years Experience of Sugar Mills will be necessary'.
+        """
+        if not text:
+            return []
+
+        found_reqs = []
+        lines = text.splitlines()
+
+        keywords = ['certificate', 'proof', 'experience', 'turnover', 'invoice', 'report', 'declaration', 'undertaking', 'affidavit', 'compliance', 'authorization', 'gst', 'pan', 'msme', 'atc', 'necessary', 'uploaded', 'submitted', 'required', 'shall be', 'must be']
+
+        for line in lines:
+            line_str = line.strip()
+            if not line_str or len(line_str) < 5 or len(line_str) > 120:
+                continue
+            if line_str.startswith('===') or line_str.startswith('---'):
+                continue
+
+            # Matches numbered items or bullet points
+            is_bullet = bool(re.match(r'^(?:\d+[\.\)]|\(\d+\)|[•\*\-\>]|[a-zA-Z][\.\)])\s+', line_str))
+            line_lower = line_str.lower()
+
+            if is_bullet or any(kw in line_lower for kw in keywords):
+                clean_line = re.sub(r'^(?:\d+[\.\)]|\(\d+\)|[•\*\-\>]|[a-zA-Z][\.\)])\s*', '', line_str).strip()
+                clean_line = clean_line.strip('"\'*`>#').strip()
+
+                if len(clean_line) >= 5 and any(kw in clean_line.lower() for kw in keywords):
+                    if not any(header in clean_line.lower() for header in ['buyer added bid specific atc', 'terms and conditions', 'document required from seller', 'important note', 'following terms']):
+                        if clean_line not in found_reqs:
+                            found_reqs.append(clean_line)
+
+        return found_reqs
+
     def _resolve_additional_doc_definitions(self, required_docs: List[Dict], files_text: Dict[str, str], pdf_text: str) -> List[Dict]:
         """
         Resolve generic placeholders like 'Additional Doc 1 (Requested in ATC)', 'Additional Doc 2 (Requested in ATC)',
@@ -2137,7 +2172,6 @@ Text:
         resolved_map = {}
 
         # 1. Regex pattern matching for explicit document definitions
-        # e.g., "Additional Doc 1: Land Border Sharing Declaration" or "Doc 1 (Requested in ATC) - Non Blacklisting Undertaking"
         patterns = [
             r'(?:Additional\s*)?(?:Doc|Document)\s*(\d+)[\s\(\)RequestedinATC]*[:\-–=]+\s*([^\n.,;]{3,80})',
             r'(?:Doc|Document)\s*(\d+)[\s\(\)RequestedinATC]*\s*[:\-–=]+\s*([^\n.,;]{3,80})',
@@ -2149,7 +2183,7 @@ Text:
                 groups = match.groups()
                 if len(groups) == 2:
                     doc_num, doc_def = groups
-                    key = f"additional doc {doc_num}"
+                    key = f"doc_{doc_num}"
                 else:
                     doc_def = groups[0]
                     key = "certificate (requested in atc)"
@@ -2197,9 +2231,29 @@ JSON format:
                         if resolved_v and isinstance(resolved_v, str) and resolved_v.strip() and len(resolved_v) < 100:
                             for doc in generic_docs:
                                 if orig_k.lower() in doc['name'].lower() or doc['name'].lower() in orig_k.lower():
-                                    resolved_map[doc['name'].lower()] = resolved_v.strip()
+                                    num_match = re.search(r'(?:doc|document)\s*(\d+)', doc['name'].lower())
+                                    if num_match:
+                                        resolved_map[f"doc_{num_match.group(1)}"] = resolved_v.strip()
+                                    else:
+                                        resolved_map[doc['name'].lower()] = resolved_v.strip()
             except Exception as e:
                 self._log('warn', f"LLM additional doc resolution failed: {e}")
+
+        # 3. Fallback: Sequential mapping of ATC bulleted/numbered requirements
+        atc_bullet_reqs = self._extract_atc_bullet_requirements(full_context_text)
+        if atc_bullet_reqs:
+            for doc in generic_docs:
+                doc_name_lower = doc['name'].lower()
+                num_match = re.search(r'(?:doc|document)\s*(\d+)', doc_name_lower)
+                if num_match:
+                    num = num_match.group(1)
+                    canonical_key = f"doc_{num}"
+                    idx = int(num) - 1
+                    if 0 <= idx < len(atc_bullet_reqs):
+                        if canonical_key not in resolved_map:
+                            resolved_map[canonical_key] = atc_bullet_reqs[idx]
+                elif 'certificate' in doc_name_lower and 'certificate (requested in atc)' not in resolved_map:
+                    resolved_map['certificate (requested in atc)'] = atc_bullet_reqs[0]
 
         # Apply resolved titles to required_docs
         resolved_docs = []
@@ -2207,16 +2261,17 @@ JSON format:
             doc_copy = dict(doc)
             name_lower = doc_copy['name'].lower()
             
-            resolved_title = None
-            if name_lower in resolved_map:
-                resolved_title = resolved_map[name_lower]
-            else:
+            num_match = re.search(r'(?:doc|document)\s*(\d+)', name_lower)
+            canonical_key = f"doc_{num_match.group(1)}" if num_match else name_lower
+
+            resolved_title = resolved_map.get(canonical_key) or resolved_map.get(name_lower)
+            if not resolved_title:
                 for k, v in resolved_map.items():
                     if k in name_lower or name_lower in k:
                         resolved_title = v
                         break
 
-            if resolved_title and resolved_title.lower() != doc_copy['name'].lower():
+            if resolved_title and resolved_title.lower() not in name_lower:
                 old_name = doc_copy['name']
                 doc_copy['resolved_title'] = resolved_title
                 doc_copy['name'] = f"{old_name}: {resolved_title}"

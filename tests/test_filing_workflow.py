@@ -85,6 +85,27 @@ class TestFilingWorkflow(unittest.TestCase):
         self.assertIn('Additional Doc 3 (Requested in ATC): NABL Test Report for Cables', resolved_names)
         self.assertIn('Additional Doc 4 (Requested in ATC): Make in India (MII) Local Content Certificate', resolved_names)
 
+    def test_resolve_additional_doc_definitions_from_numbered_bullets(self):
+        required_docs = [
+            {'name': 'Additional Doc 1 (Requested in ATC)', 'category': 'ATC'},
+            {'name': 'Additional Doc 2 (Requested in ATC)', 'category': 'ATC'},
+            {'name': 'Additional Doc 3 (Requested in ATC)', 'category': 'ATC'},
+        ]
+        files_text = {
+            'ATC.pdf': (
+                'Terms and Conditions:\n'
+                '1. GST Invoice must be submitted by supplier.\n'
+                '2. Test Certificate with Every Consignment is mandatory.\n'
+                '3. 03 years Experience of Sugar Mills will be necessary. Proof will be uploaded by Tenderer.\n'
+            )
+        }
+        workflow = filing_workflow.FilingWorkflow(log_fn=lambda *_: None)
+        resolved = workflow._resolve_additional_doc_definitions(required_docs, files_text, "")
+        resolved_names = [d['name'] for d in resolved]
+        self.assertTrue(any('GST Invoice' in name for name in resolved_names))
+        self.assertTrue(any('Test Certificate' in name for name in resolved_names))
+        self.assertTrue(any('Sugar Mills' in name for name in resolved_names))
+
     def test_matches_documents_and_creates_self_contained_filing_folder(self):
         settings = {'firms': [{
             'name': 'Preferred Firm',
